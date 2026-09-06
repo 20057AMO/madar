@@ -596,40 +596,44 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   return (
     <div class="canvas-wrap">
+      <h2 class="panel-title" style="display:flex;align-items:center;gap:6px">
+        Planning canvas
+        {!readOnly && <span class="dim" style="font-weight:400;font-size:0.7rem">— drag nodes, double-click to edit, Ctrl+Z to undo</span>}
+      </h2>
       {/* Top toolbar: view controls + mode + save status */}
       <div class="cn-toolbar">
         <div class="cn-tb-group">
-          <button class="cn-tb-btn" title="Zoom out (scroll to zoom)" onClick={() => zoomBy(1 / 1.2)}>
+          <button class="cn-tb-btn" title="Zoom out (scroll to zoom)" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)}>
             <ZoomOut width={15} height={15} />
           </button>
-          <button class="cn-tb-btn" title="Zoom in" onClick={() => zoomBy(1.2)}>
+          <button class="cn-tb-btn" title="Zoom in" aria-label="Zoom in" onClick={() => zoomBy(1.2)}>
             <ZoomIn width={15} height={15} />
           </button>
-          <button class="cn-tb-btn" title="Fit all nodes" onClick={fitView}>
+          <button class="cn-tb-btn" title="Fit all nodes" aria-label="Fit all nodes" onClick={fitView}>
             <Maximize width={14} height={14} />
           </button>
         </div>
         <div class="cn-tb-group">
-          <button class="cn-tb-btn" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
+          <button class="cn-tb-btn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!canUndo} onClick={undo}>
             <Undo2 width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>
+          <button class="cn-tb-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={!canRedo} onClick={redo}>
             <Redo2 width={14} height={14} />
           </button>
         </div>
         <div class="cn-tb-group">
-          <button class={`cn-tb-btn ${connectFrom ? 'cn-active' : ''}`} title="Connect nodes (select source, then target)" disabled={readOnly || !selNode} onClick={() => setConnectFrom(connectFrom ? null : selNode)}>
+          <button class={`cn-tb-btn ${connectFrom ? 'cn-active' : ''}`} title="Connect nodes (select source, then target)" aria-label="Connect nodes" aria-pressed={!!connectFrom} disabled={readOnly || !selNode} onClick={() => setConnectFrom(connectFrom ? null : selNode)}>
             <Link2 width={15} height={15} />
             {connectFrom ? <span class="cn-tb-hint">pick target</span> : null}
           </button>
           {readOnly && (
-            <span class="cn-ro-chip" title="Your role can only view this canvas">
+            <span class="cn-ro-chip" title="Your role can only view this canvas" role="status">
               <Lock width={11} height={11} /> Read-only
             </span>
           )}
         </div>
         <div class="cn-tb-spacer" />
-        <div class="cn-save-state">
+        <div class="cn-save-state" role="status">
           {saveState === 'saving' && <span class="dim">Saving…</span>}
           {saveState === 'dirty' && <span class="dim">Unsaved changes</span>}
           {saveState === 'saved' && savedAt && <span class="dim">Saved {savedAt}</span>}
@@ -645,17 +649,19 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               key={c}
               class={`cn-dot c-${c} ${selected.color === c ? 'cn-dot-active' : ''}`}
               title={`${c} color`}
+              aria-label={`${c} color`}
+              aria-pressed={selected.color === c}
               onClick={() => setColor(selected.id, c)}
             />
           ))}
           <span class="cn-sel-sep" />
-          <button class="cn-tb-btn" title="Delete (Del)" onClick={removeSelected}>
+          <button class="cn-tb-btn" title="Delete (Del)" aria-label="Delete selected node" onClick={removeSelected}>
             <Trash2 width={14} height={14} />
           </button>
         </div>
       )}
       {connectFrom && (
-        <div class="cn-connecting">
+        <div class="cn-connecting" role="status">
           <MousePointer2 width={12} height={12} /> Click the target node to connect
         </div>
       )}
@@ -664,27 +670,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       {!readOnly && (
         <div class="cn-add-wrap">
           <div class={`cn-add-menu ${menuOpen ? 'open' : ''}`}>
-            <button class="cn-add-item" onClick={() => addNode('note')}>
+            <button class="cn-add-item" aria-label="Add sticky note" onClick={() => addNode('note')}>
               <StickyNote width={15} height={15} /> Sticky note <span class="dim">N</span>
             </button>
-            <button class="cn-add-item" onClick={() => addNode('card')}>
+            <button class="cn-add-item" aria-label="Add task card" onClick={() => addNode('card')}>
               <CheckSquare width={15} height={15} /> Task card <span class="dim">C</span>
             </button>
-            <button class="cn-add-item" onClick={() => { if (selNode) { setConnectFrom(selNode); setMenuOpen(false); } else setMenuOpen(false); }}>
+            <button class="cn-add-item" aria-label="Add arrow" onClick={() => { if (selNode) { setConnectFrom(selNode); setMenuOpen(false); } else setMenuOpen(false); }}>
               <Link2 width={15} height={15} /> Arrow <span class="dim">L</span>
             </button>
-            <button class="cn-add-item" onClick={() => { seedFromNotes(); setMenuOpen(false); }}>
+            <button class="cn-add-item" aria-label="Seed canvas from notes" onClick={() => { seedFromNotes(); setMenuOpen(false); }}>
               <Sparkles width={15} height={15} /> Seed from notes
             </button>
           </div>
-          <button class="cn-add-fab" title="Add to canvas" onClick={() => setMenuOpen((o) => !o)}>
+          <button class="cn-add-fab" title="Add to canvas" aria-label="Add to canvas" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>
             <Plus width={18} height={18} />
           </button>
         </div>
       )}
 
       {/* Notice toast */}
-      {notice && <div class="cn-notice">{notice}</div>}
+      {notice && <div class="cn-notice" role="status">{notice}</div>}
 
       {/* The canvas */}
       <div
@@ -712,9 +718,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 onDblClick={() => { if (!readOnly) startEdit(n.id); }}
               >
                 {n.type === 'card' && !isEditing && (
-                  <span
+                  <button
                     class={`cn-check ${n.done ? 'done' : ''}`}
+                    type="button"
                     title={n.done ? 'Mark not done' : 'Mark done'}
+                    aria-label={n.done ? 'Mark not done' : 'Mark done'}
+                    aria-pressed={n.done}
                     onPointerDown={(e: any) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -722,7 +731,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                     }}
                   >
                     {n.done ? '✓' : ''}
-                  </span>
+                  </button>
                 )}
                 {isEditing ? (
                   <textarea
@@ -743,15 +752,17 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 {!isEditing && !readOnly && (
                   <div class="cn-node-colors">
                     {COLORS.map((c) => (
-                      <span
+                      <button
                         key={c}
+                        type="button"
                         class={`cn-dot s c-${c} ${n.color === c ? 'cn-dot-active' : ''}`}
+                        aria-label={`Set ${c} color`}
+                        aria-pressed={n.color === c}
                         onPointerDown={(e: any) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation();
                           setColor(n.id, c);
                         }}
-                        title={`${c} color`}
                       />
                     ))}
                   </div>

@@ -1173,6 +1173,12 @@ textarea.agent-prompt-input {
   .script-card { min-height: 56px; padding: 14px; }
   .scripts-panel { padding: 14px 16px; }
 
+  /* Canvas: roomier toolbar + add targets on touch */
+  .cn-toolbar { padding: 10px; }
+  .cn-tb-btn { min-height: 40px; }
+  .cn-add-wrap .cn-add-fab { width: 48px; height: 48px; }
+  .cn-selbar .cn-dot { width: 20px; height: 20px; }
+
   /* Files: stack toolbar, wrap rows */
   .files-toolbar { flex-direction: column; align-items: stretch; }
   .files-newfile-row { flex-wrap: wrap; }
@@ -2555,6 +2561,7 @@ input[type="file"].modern-file::file-selector-button {
   opacity: 0.4;
   font-size: 12px;
   line-height: 12px;
+  padding: 0;
 }
 .cn-check:hover { opacity: 1; }
 .cn-check.done {
