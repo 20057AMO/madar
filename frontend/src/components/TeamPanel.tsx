@@ -118,21 +118,21 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   };
 
   if (loading) {
-    return <div class="panel-muted">Loading team...</div>;
+    return <div class="panel-muted" role="status">Loading team...</div>;
   }
 
   return (
     <div class="team-panel">
-      {error && <div class="notice error">{error}</div>}
+      {error && <div class="notice error" role="alert">{error}</div>}
 
       <div class="team-header">
-        <div class="team-title">
+        <h2 class="team-title">
           <Users class="icon" />
           <span>Project Team</span>
           <span class="badge">{members.length}</span>
-        </div>
+        </h2>
         {nonMembers.length > 0 && (
-          <button class="btn btn-sm btn-primary" onClick={() => setShowAdd(!showAdd)}>
+          <button class="btn-primary sm" aria-expanded={showAdd} onClick={() => setShowAdd(!showAdd)}>
             <UserPlus class="icon" />
             {showAdd ? 'Cancel' : 'Add Member'}
           </button>
@@ -143,6 +143,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
         <div class="add-member-form">
           <select
             class="select-dark"
+            aria-label="User to add"
             value={selectedUserId}
             onChange={(e) => setSelectedUserId((e.target as HTMLSelectElement).value)}
           >
@@ -153,6 +154,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
           </select>
           <select
             class="select-dark"
+            aria-label="Role for the new member"
             value={selectedRole}
             onChange={(e) => setSelectedRole((e.target as HTMLSelectElement).value as UserRole)}
           >
@@ -161,7 +163,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
             <option value="admin">Admin</option>
           </select>
           <button
-            class="btn btn-sm btn-primary"
+            class="btn-primary sm"
             disabled={!selectedUserId || adding}
             onClick={handleAdd}
           >
@@ -172,7 +174,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
 
       <div class="member-list">
         {members.length === 0 ? (
-          <div class="panel-muted">No team members yet.</div>
+          <div class="panel-muted" role="status">No team members yet.</div>
         ) : (
           members
             .sort((a, b) => (ROLE_HIERARCHY[b.role] || 0) - (ROLE_HIERARCHY[a.role] || 0))
@@ -196,6 +198,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                   <div class="member-actions">
                     <select
                       class="select-dark select-sm"
+                      aria-label={`Role for ${m.username}`}
                       value={m.role}
                       onChange={(e) => handleRoleChange(m, (e.target as HTMLSelectElement).value as UserRole)}
                     >
@@ -206,15 +209,17 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                     {!isOwner && (
                       <>
                         <button
-                          class="btn btn-xs btn-ghost"
+                          class="btn-ghost sm"
                           title="Transfer ownership"
+                          aria-label={`Transfer ownership to ${m.username}`}
                           onClick={() => setTransferTarget(m)}
                         >
                           <Crown class="icon icon-sm" />
                         </button>
                         <button
-                          class="btn btn-xs btn-ghost btn-danger"
+                          class="btn-danger sm"
                           title="Remove member"
+                          aria-label={`Remove ${m.username}`}
                           onClick={() => setRemoveTarget(m)}
                         >
                           <Trash2 class="icon icon-sm" />
