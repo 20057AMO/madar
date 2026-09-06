@@ -80,8 +80,37 @@ export function Projects() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   type PageTab = 'projects' | 'trash';
+  const PAGE_TABS: readonly PageTab[] = ['projects', 'trash'];
   const [pageTab, setPageTab] = useState<PageTab>('projects');
   const [trashCount, setTrashCount] = useState<number | null>(null);
+
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  const pendingTabFocus = useRef<PageTab | null>(null);
+  useEffect(() => {
+    const bar = tabsRef.current;
+    if (!bar) return;
+    if (pendingTabFocus.current === pageTab) {
+      pendingTabFocus.current = null;
+      bar.querySelector<HTMLElement>(`.tab-btn[data-tab="${pageTab}"]`)?.focus();
+    }
+    if (window.innerWidth > 700) return;
+    const active = bar.querySelector<HTMLElement>('.tab-btn.active');
+    if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [pageTab]);
+
+  const onPageTabsKeyDown = (e: any) => {
+    const idx = PAGE_TABS.indexOf(pageTab);
+    let next: number | null = null;
+    if (e.key === 'ArrowRight') next = (idx + 1) % PAGE_TABS.length;
+    else if (e.key === 'ArrowLeft') next = (idx - 1 + PAGE_TABS.length) % PAGE_TABS.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = PAGE_TABS.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    const t = PAGE_TABS[next];
+    pendingTabFocus.current = t;
+    setPageTab(t);
+  };
 
   const [createOpen, setCreateOpen] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -567,15 +596,16 @@ export function Projects() {
 
   return (
     <div class="view">
-      <div class="detail-tabs" style="margin-bottom:16px">
-        <button class={`tab-btn ${pageTab === 'projects' ? 'active' : ''}`} onClick={() => setPageTab('projects')}>
+      <div class="detail-tabs" style="margin-bottom:16px" ref={tabsRef} role="tablist" aria-label="Projects views" onKeyDown={onPageTabsKeyDown}>
+        <button class={`tab-btn ${pageTab === 'projects' ? 'active' : ''}`} type="button" id="ptab-projects" role="tab" aria-selected={pageTab === 'projects'} tabIndex={pageTab === 'projects' ? 0 : -1} aria-controls="pane-projects" data-tab="projects" onClick={() => setPageTab('projects')}>
           Projects
         </button>
-        <button class={`tab-btn ${pageTab === 'trash' ? 'active' : ''}`} onClick={() => setPageTab('trash')}>
+        <button class={`tab-btn ${pageTab === 'trash' ? 'active' : ''}`} type="button" id="ptab-trash" role="tab" aria-selected={pageTab === 'trash'} tabIndex={pageTab === 'trash' ? 0 : -1} aria-controls="pane-trash" data-tab="trash" onClick={() => setPageTab('trash')}>
           <Trash2 width={13} height={13} class="icon" /> Trash{trashCount != null ? ` (${trashCount})` : ''}
         </button>
       </div>
 
+      <div id={`pane-${pageTab}`} role="tabpanel" aria-labelledby={`ptab-${pageTab}`} tabIndex={0}>
       {pageTab === 'projects' && (<>
       <div class="proj-header">
         <div>
@@ -946,6 +976,7 @@ export function Projects() {
       {pageTab === 'trash' && (
         <TrashPanel onRestored={handleTrashRestored} onTrashCountChange={handleTrashCountChange} />
       )}
+      </div>
     </div>
   );
 }
