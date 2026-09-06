@@ -106,6 +106,8 @@ select.modern-input { appearance: none; cursor: pointer; }
 }
 .btn-ghost:hover { border-color: var(--text-3); color: var(--text); }
 .btn-ghost.sm { padding: 6px 12px; font-size: 0.75rem; }
+.btn-ghost.danger-icon { color: var(--red); border-color: rgba(248,81,73,0.35); }
+.btn-ghost.danger-icon:hover { background: rgba(248,81,73,0.1); color: var(--red); }
 .btn-danger {
   background: rgba(248,81,73,0.1);
   border: 1px solid rgba(248,81,73,0.3);
@@ -1154,6 +1156,10 @@ textarea.agent-prompt-input {
 
   /* Notes: roomier kind/filter buttons on touch */
   .notes-track .btn-ghost, .notes-filterbar .btn-ghost, .notes-filterbar .btn-primary { min-height: 40px; }
+
+  /* Snapshots: rows wrap, actions full height on touch */
+  .snapshot-row { flex-wrap: wrap; }
+  .snapshot-row .btn-ghost { min-height: 40px; }
 
   /* Files: stack toolbar, wrap rows */
   .files-toolbar { flex-direction: column; align-items: stretch; }

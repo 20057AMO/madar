@@ -241,30 +241,30 @@ export function SnapshotsPanel({ slug }: { slug: string }) {
         </button>
 
         {error && (
-          <div style="font-size:0.72rem;color:#fecaca;background:#7f1d1d;border-radius:8px;padding:6px 10px">
+          <div style="font-size:0.72rem;color:#fecaca;background:#7f1d1d;border-radius:8px;padding:6px 10px" role="alert">
             {error}
           </div>
         )}
         {notice && (
-          <div style="font-size:0.72rem;color:#d1fae5;background:#064e3b;border-radius:8px;padding:6px 10px">
+          <div style="font-size:0.72rem;color:#d1fae5;background:#064e3b;border-radius:8px;padding:6px 10px" role="status">
             {notice}
           </div>
         )}
       </div>
 
       {/* Stored versions */}
-      <div class="panel-title" style="display:flex;align-items:center;gap:6px">
+      <h2 class="panel-title" style="display:flex;align-items:center;gap:6px;margin:0">
         <Archive width={13} height={13} class="icon" /> Stored versions
         <span style="flex:1" />
         {snapshots.length > 0 && (
           <span style="font-size:0.68rem;color:var(--text-3)">{snapshots.length} stored</span>
         )}
-      </div>
+      </h2>
 
       {loading ? (
-        <p style="color:var(--text-3);font-size:0.78rem">Loading snapshots…</p>
+        <p style="color:var(--text-3);font-size:0.78rem" role="status">Loading snapshots…</p>
       ) : snapshots.length === 0 ? (
-        <div class="empty-state" style="text-align:center;padding:28px 0">
+        <div class="empty-state" style="text-align:center;padding:28px 0" role="status">
           <div class="big-icon"><Archive width={30} height={30} class="icon" /></div>
           <p style="color:var(--text-3);font-size:0.78rem;margin:8px 0 0">
             No snapshots stored yet — capture one with the button above, or enable
@@ -275,6 +275,7 @@ export function SnapshotsPanel({ slug }: { slug: string }) {
         snapshots.map((s) => (
           <div
             key={s.file}
+            class="snapshot-row"
             style="display:flex;gap:10px;align-items:center;background:rgba(255,255,255,.03);border:1px solid var(--border,#333);border-radius:12px;padding:10px 12px"
           >
             <History width={15} height={15} class="icon" style="flex:none;opacity:.6" />
@@ -285,13 +286,13 @@ export function SnapshotsPanel({ slug }: { slug: string }) {
                 <span style="font-size:0.64rem;color:var(--text-3)">{fmtSize(s.size)}</span>
               </div>
             </div>
-            <button class="btn-ghost sm" title="Download" onClick={() => download(s)}>
+            <button class="btn-ghost sm" title="Download" aria-label={`Download ${s.file} (${fmtSize(s.size)})`} onClick={() => download(s)}>
               <Download width={13} height={13} class="icon" />
             </button>
-            <button class="btn-ghost sm" title="Restore as a new project" onClick={() => setConfirmRestore(s)}>
+            <button class="btn-ghost sm" title="Restore as a new project" aria-label={`Restore ${s.file} as a new project`} onClick={() => setConfirmRestore(s)}>
               <History width={13} height={13} class="icon" /> Restore
             </button>
-            <button class="btn-ghost sm danger-icon" title="Delete snapshot" onClick={() => setConfirmDelete(s)}>
+            <button class="btn-ghost sm danger-icon" title="Delete snapshot" aria-label={`Delete snapshot ${s.file}`} onClick={() => setConfirmDelete(s)}>
               <Trash2 width={13} height={13} class="icon" />
             </button>
           </div>
