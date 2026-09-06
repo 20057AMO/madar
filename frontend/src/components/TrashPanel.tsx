@@ -126,7 +126,7 @@ export function TrashPanel({ onRestored, onTrashCountChange }: TrashPanelProps) 
 
   if (loading) {
     return (
-      <div class="dash-loading">
+      <div class="dash-loading" role="status">
         <Loader2 width={24} height={24} class="icon spin" /> Loading trash…
       </div>
     );
@@ -134,7 +134,7 @@ export function TrashPanel({ onRestored, onTrashCountChange }: TrashPanelProps) 
 
   return (
     <div>
-      {error && <div class="login-error" style="margin-bottom:12px">{error}</div>}
+      {error && <div class="login-error" style="margin-bottom:12px" role="alert">{error}</div>}
 
       {/* Stats + empty action */}
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
@@ -186,6 +186,7 @@ export function TrashPanel({ onRestored, onTrashCountChange }: TrashPanelProps) 
                         <button
                           class="btn-ghost sm"
                           title="Delete permanently"
+                          aria-label={`Delete ${a.name} permanently`}
                           onClick={() => setDeleteTarget(a)}
                         >
                           <Trash2 width={12} height={12} class="icon" />

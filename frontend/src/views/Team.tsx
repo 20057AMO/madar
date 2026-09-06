@@ -122,7 +122,7 @@ export function Team() {
       </div>
 
       {error && (
-        <div style={{
+        <div role="alert" style={{
           background: 'rgba(239,68,68,0.1)',
           border: '1px solid rgba(239,68,68,0.3)',
           borderRadius: 8,
@@ -165,6 +165,9 @@ export function Team() {
                 return (
                   <button
                     key={r}
+                    type="button"
+                    role="radio"
+                    aria-checked={newRole === r}
                     onClick={() => setNewRole(r)}
                     style={{
                       padding: '0.375rem 0.75rem',
@@ -264,6 +267,7 @@ export function Team() {
                     class="btn-icon"
                     onClick={() => setConfirmDelete(u)}
                     title="Remove user"
+                    aria-label={`Remove user ${u.username}`}
                     style={{ color: '#ef4444' }}
                   >
                     <Trash2 size={16} />
