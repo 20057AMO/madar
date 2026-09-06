@@ -86,7 +86,7 @@ export function Planner() {
       {error ? (
         <div class="panel" style="margin-top: 16px">
           <div class="empty-state">
-            <div style="color: var(--danger); margin-bottom: 8px">Could not load projects</div>
+            <div style="color: var(--danger); margin-bottom: 8px" role="alert">Could not load projects</div>
             <div class="dim">{error}</div>
           </div>
         </div>
@@ -94,7 +94,7 @@ export function Planner() {
         <div class="panel" style="margin-top: 16px">
           <div class="empty-state">
             <div class="big">…</div>
-            <div class="dim">Loading projects…</div>
+            <div class="dim" role="status">Loading projects…</div>
           </div>
         </div>
       ) : visible.length === 0 ? (
@@ -115,11 +115,18 @@ export function Planner() {
         <div class="projects-grid planner-grid">
           {visible.map((p) => {
             const edited = relTime(p.canvasEditedAt);
-            return (
+const handleCardKeyDown = (path: string) => (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLocation(path); }
+  };
+
+  return (
               <div
                 class="project-card planner-card"
                 key={p.slug}
+                role="button"
+                tabIndex={0}
                 onClick={() => setLocation(`/project/${p.slug}?tab=canvas`)}
+                onKeyDown={handleCardKeyDown(`/project/${p.slug}?tab=canvas`)}
               >
                 <div class="project-card-header">
                   <h3>{p.name}</h3>
@@ -145,7 +152,7 @@ export function Planner() {
                   <span class={`plan-edit ${edited ? '' : 'plan-new'}`}>
                     {edited ? `Canvas edited ${edited} ago` : 'Canvas not started'}
                   </span>
-                  <button class="btn-ghost sm">
+                  <button class="btn-ghost sm" onClick={(e) => { e.stopPropagation(); setLocation(`/project/${p.slug}?tab=canvas`); }}>
                     Open board <ArrowUpRight width={13} height={13} class="icon" />
                   </button>
                 </div>
