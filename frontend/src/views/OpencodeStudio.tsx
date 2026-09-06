@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { ArrowLeft, Bot, Sparkles, SlidersHorizontal, RefreshCw, CheckCircle2, ArrowUpCircle, Lock, Trash2, Plus, Save, Terminal, BookOpen, Search, Copy, Check, AlertTriangle } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -75,9 +75,35 @@ $ARGUMENTS
 State the expected output format and any constraints here.
 `;
 
+const TAB_ORDER: readonly Tab[] = ['agents', 'skills', 'commands', 'config', 'guide'];
+
 export function OpencodeStudio() {
   const [, setLocation] = useHashLocation();
   const [tab, setTab] = useState<Tab>('agents');
+
+  const tabsRef = useRef<HTMLSpanElement | null>(null);
+  const pendingTabFocus = useRef<Tab | null>(null);
+  useEffect(() => {
+    if (pendingTabFocus.current === tab) {
+      pendingTabFocus.current = null;
+      tabsRef.current?.querySelector<HTMLElement>(`[data-tab="${tab}"]`)?.focus();
+    }
+  }, [tab]);
+
+  const onTabsKeyDown = (e: any) => {
+    const idx = TAB_ORDER.indexOf(tab);
+    if (idx < 0) return;
+    let next: number | null = null;
+    if (e.key === 'ArrowRight') next = (idx + 1) % TAB_ORDER.length;
+    else if (e.key === 'ArrowLeft') next = (idx - 1 + TAB_ORDER.length) % TAB_ORDER.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = TAB_ORDER.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    const t = TAB_ORDER[next];
+    pendingTabFocus.current = t;
+    setTab(t);
+  };
 
   // Shared editor state (agents & skills)
   const [items, setItems] = useState<StudioItem[]>([]);
@@ -248,12 +274,12 @@ export function OpencodeStudio() {
     <div class="opencode-page">
       <div class="opencode-toolbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/')}><ArrowLeft width={13} height={13} class="icon" /> Dashboard</button>
-        <span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px">
-          <button class={`btn-ghost sm${tab === 'agents' ? ' active' : ''}`} onClick={() => setTab('agents')}><Bot width={13} height={13} class="icon" /> Subagents</button>
-          <button class={`btn-ghost sm${tab === 'skills' ? ' active' : ''}`} onClick={() => setTab('skills')}><Sparkles width={13} height={13} class="icon" /> Skills</button>
-          <button class={`btn-ghost sm${tab === 'commands' ? ' active' : ''}`} onClick={() => setTab('commands')}><Terminal width={13} height={13} class="icon" /> Commands</button>
-          <button class={`btn-ghost sm${tab === 'config' ? ' active' : ''}`} onClick={() => setTab('config')}><SlidersHorizontal width={13} height={13} class="icon" /> Config</button>
-          <button class={`btn-ghost sm${tab === 'guide' ? ' active' : ''}`} onClick={() => setTab('guide')}><BookOpen width={13} height={13} class="icon" /> Guide</button>
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px" ref={tabsRef} role="tablist" aria-label="Studio sections" onKeyDown={onTabsKeyDown}>
+          <button type="button" role="tab" id="ptab-agents" aria-selected={tab === 'agents'} tabIndex={tab === 'agents' ? 0 : -1} aria-controls="studio-pane-agents" data-tab="agents" class={`btn-ghost sm${tab === 'agents' ? ' active' : ''}`} onClick={() => setTab('agents')}><Bot width={13} height={13} class="icon" /> Subagents</button>
+          <button type="button" role="tab" id="ptab-skills" aria-selected={tab === 'skills'} tabIndex={tab === 'skills' ? 0 : -1} aria-controls="studio-pane-skills" data-tab="skills" class={`btn-ghost sm${tab === 'skills' ? ' active' : ''}`} onClick={() => setTab('skills')}><Sparkles width={13} height={13} class="icon" /> Skills</button>
+          <button type="button" role="tab" id="ptab-commands" aria-selected={tab === 'commands'} tabIndex={tab === 'commands' ? 0 : -1} aria-controls="studio-pane-commands" data-tab="commands" class={`btn-ghost sm${tab === 'commands' ? ' active' : ''}`} onClick={() => setTab('commands')}><Terminal width={13} height={13} class="icon" /> Commands</button>
+          <button type="button" role="tab" id="ptab-config" aria-selected={tab === 'config'} tabIndex={tab === 'config' ? 0 : -1} aria-controls="studio-pane-config" data-tab="config" class={`btn-ghost sm${tab === 'config' ? ' active' : ''}`} onClick={() => setTab('config')}><SlidersHorizontal width={13} height={13} class="icon" /> Config</button>
+          <button type="button" role="tab" id="ptab-guide" aria-selected={tab === 'guide'} tabIndex={tab === 'guide' ? 0 : -1} aria-controls="studio-pane-guide" data-tab="guide" class={`btn-ghost sm${tab === 'guide' ? ' active' : ''}`} onClick={() => setTab('guide')}><BookOpen width={13} height={13} class="icon" /> Guide</button>
         </span>
         <span style="flex:1" />
         {tab !== 'config' && tab !== 'guide' && (
@@ -292,6 +318,7 @@ export function OpencodeStudio() {
         </div>
       )}
 
+      <div id={`studio-pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
       {tab === 'guide' ? (
         <div style="flex:1;overflow:hidden">
           <StudioGuide />
@@ -454,6 +481,7 @@ export function OpencodeStudio() {
           </div>
         </div>
       )}
+      </div>
 
       <ConfirmModal
         open={confirmDelete != null}
