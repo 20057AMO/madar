@@ -14,7 +14,7 @@ services:
       # (bind sources resolve on the Docker Desktop VM, not inside this container).
       # REQUIRED — a relative path would resolve against the daemon host's CWD and
       # silently mount the wrong directory, so compose fails fast when it is unset.
-      WSD_WORKSPACES_HOST_DIR: "${WSD_WORKSPACES_HOST_DIR:?Set WSD_WORKSPACES_HOST_DIR in .env to the host-side absolute path of ./workspaces}"
+      WSD_WORKSPACES_HOST_DIR: "${WSD_WORKSPACES_HOST_DIR:-${PWD}/workspaces}"
       WSD_WORKSPACE_IMAGE: wsd/workspace:latest
       WSD_IDE_PORT: ${WSD_IDE_PORT:-8100}
       WSD_CHAT_MODEL: ${WSD_CHAT_MODEL:-qwen3:30b}
