@@ -358,7 +358,7 @@ export function Project({ params }: { params: { slug: string } }) {
             </h1>
             <div class="detail-meta-line">
               <span class="detail-slug">{slug}</span>
-              <button class="btn-ghost sm" style="padding: 1px 8px" onClick={() => copy(slug)}>copy</button>
+              <button class="btn-ghost sm" style="padding: 4px 8px" onClick={() => copy(slug)}>copy</button>
               <span class={`status-badge ${project?.status || 'missing'}`}>{project?.status || '…'}</span>
               {project?.crash && <CrashBadge crash={project.crash} />}
               {wsConnected && <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" />}
@@ -895,6 +895,44 @@ function OverviewPanel({
 
   return (
     <div class="overview-stack overview">
+      {/* ── At a glance ── */}
+      <div class="glance-strip" role="group" aria-label="Project at a glance">
+        <div class="glance-item">
+          <span class="glance-k">Status</span>
+          <span class="glance-v">
+            <span class={`glance-dot ${project?.status || 'unknown'}`} />
+            {(project?.status || '…').toUpperCase()}
+            {effectiveStats?.running ? ` · up ${fmtUptime(effectiveStats.startedAt)}` : ''}
+          </span>
+        </div>
+        <div class="glance-item">
+          <span class="glance-k">Ports</span>
+          <span class="glance-v mono">{project?.ports?.length ? project.ports.join(', ') : 'none'}</span>
+        </div>
+        {effectiveStats?.running && (
+          <div class="glance-item">
+            <span class="glance-k">CPU</span>
+            <span class="glance-v">{effectiveStats.cpuPct}%</span>
+          </div>
+        )}
+        {effectiveStats?.running && (
+          <div class="glance-item">
+            <span class="glance-k">Memory</span>
+            <span class="glance-v">{fmtBytes(effectiveStats.memBytes)} / {fmtBytes(effectiveStats.memLimit)}</span>
+          </div>
+        )}
+        <div class="glance-item">
+          <span class="glance-k">Static site</span>
+          <span class="glance-v">
+            {project?.serve?.active
+              ? <span class="glance-serve on">Active · :{project.serve.port}</span>
+              : project?.serve?.enabled
+                ? 'Configured'
+                : 'Off'}
+          </span>
+        </div>
+      </div>
+
       {/* ── Links & health ── */}
       <div class="panel" id="ov-links">
         <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">

@@ -495,6 +495,24 @@ select:focus-visible {
 .header-menu button:disabled { opacity: 0.45; }
 .header-menu-sep { height: 1px; background: var(--border); margin: 3px 2px; }
 
+.glance-strip {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 4px;
+  padding: 9px 6px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--panel-2);
+}
+.glance-item { display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 2px 14px; border-right: 1px solid var(--border); }
+.glance-item:last-child { border-right: none; }
+.glance-k { font-size: 0.62rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.glance-v { font-size: 0.8rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.glance-v.mono { font-family: var(--mono); font-weight: 500; }
+.glance-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-3); }
+.glance-dot.running { background: var(--green); box-shadow: 0 0 6px rgba(63,185,80,0.6); }
+.glance-dot.stopped, .glance-dot.exited { background: var(--text-3); }
+.glance-dot.paused, .glance-dot.creating, .glance-dot.restarting { background: #eab308; }
+.glance-dot.error, .glance-dot.dead { background: var(--red); }
+.glance-dot.unknown { background: var(--text-3); }
+.glance-serve.on { color: var(--green); }
+
 .detail-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
 .tab-btn {
   padding: 9px 16px; font-size: 0.8rem; font-weight: 500;
@@ -1126,6 +1144,8 @@ textarea.agent-prompt-input {
   .detail-actions .header-more { width: auto; min-width: 44px; min-height: 44px; padding: 10px; justify-content: center; }
   .detail-actions .restart-btn { grid-column: 1 / -1; }
   .header-menu { top: calc(100% + 4px); right: 0; min-width: 176px; }
+  .glance-item { border-right: none; padding: 2px 10px; }
+  .glance-strip { gap: 6px 0; }
 }
 
 
