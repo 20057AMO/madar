@@ -55,7 +55,7 @@ export function Terminals({ slug }: { slug?: string }) {
         <button class="btn-ghost sm" onClick={() => setLocation('/')}>
           <ArrowLeft width={13} height={13} class="icon" /> Dashboard
         </button>
-        <span style="font-weight:600;font-size:0.9rem;margin-left:8px">Terminals</span>
+        <h1 style="font-weight:600;font-size:0.9rem;margin:0;margin-left:8px">Terminals</h1>
         <span style="flex:1" />
       </div>
 
@@ -76,22 +76,25 @@ export function Terminals({ slug }: { slug?: string }) {
             />
           </div>
           {loading ? (
-            <p style="color:var(--text-3);font-size:0.75rem">Loading…</p>
+            <p style="color:var(--text-3);font-size:0.75rem" role="status">Loading…</p>
           ) : visible.length === 0 ? (
-            <p style="color:var(--text-3);font-size:0.75rem">No projects match.</p>
+            <p style="color:var(--text-3);font-size:0.75rem" role="status">No projects match.</p>
           ) : (
             visible.map((p) => {
               const active = selected === p.slug;
               return (
-                <div
+                <button
+                  type="button"
                   key={p.slug}
                   onClick={() => setSelected(p.slug)}
-                  style={`padding:8px 10px;border-radius:8px;cursor:pointer;border:1px solid ${active ? 'var(--accent,#818cf8)' : 'var(--border,#333)'};background:${active ? 'var(--accent-bg,rgba(99,102,241,.15))' : 'transparent'}`}
+                  aria-pressed={active}
+                  style={`text-align:inherit;width:100%;color:inherit;font:inherit;padding:8px 10px;border-radius:8px;cursor:pointer;border:1px solid ${active ? 'var(--accent,#818cf8)' : 'var(--border,#333)'};background:${active ? 'var(--accent-bg,rgba(99,102,241,.15))' : 'transparent'}`}
                 >
                   <div style="display:flex;align-items:center;gap:7px">
                     <span
                       style={`width:8px;height:8px;border-radius:999px;background:${statusColor(p.status)};flex:none`}
                       title={p.status}
+                      aria-hidden="true"
                     />
                     <strong style="font-size:0.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                       {p.name}
@@ -100,7 +103,7 @@ export function Terminals({ slug }: { slug?: string }) {
                   <div class="mono" style="font-size:0.66rem;color:var(--text-3);margin-top:2px">
                     {p.slug} · {p.status}
                   </div>
-                </div>
+                </button>
               );
             })
           )}
