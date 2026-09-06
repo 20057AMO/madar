@@ -151,9 +151,9 @@ export function EmbeddedIDE() {
     <div class="opencode-page">
       <div class="opencode-toolbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/')}><ArrowLeft width={13} height={13} class="icon" /> Dashboard</button>
-        <span style="display:inline-flex;align-items:center;gap:6px;margin-left:8px;font-weight:600;font-size:0.9rem">
+        <h1 style="display:inline-flex;align-items:center;gap:6px;margin-left:8px;font-weight:600;font-size:0.9rem">
           <VSCodeIcon width={15} height={15} /> VS Code
-        </span>
+        </h1>
         <a class="btn-ghost sm" href={ideUrl} target="_blank" rel="noreferrer">Open in new tab</a>
         <span style="display:inline-flex;align-items:center;gap:6px;margin-left:12px" title="Opens the project folder in the IDE">
           <FolderOpen width={13} height={13} class="icon" />
@@ -170,17 +170,17 @@ export function EmbeddedIDE() {
           </select>
         </span>
         <span style="flex: 1" />
-        <span style="font-size: 0.68rem; color: var(--text-3); margin-left: 12px">
+        <span style="font-size: 0.68rem; color: var(--text-3); margin-left: 12px" role="status">
           {running === false ? 'VS Code offline' : running ? 'VS Code running' : ''}
       </span>
       </div>
       {loading ? (
-        <div class="empty-state" style="margin: 60px auto; max-width: 480px">
+        <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="status">
           <div class="big-icon"><VSCodeIcon width={30} height={30} /></div>
           Loading VS Code status...
         </div>
       ) : running === false ? (
-        <div class="empty-state" style="margin: 60px auto; max-width: 480px">
+        <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="status">
           <div class="big-icon"><VSCodeIcon width={30} height={30} /></div>
           VS Code is not running. Start a project first.
           <code class="mono" style="display:block;margin-top:8px">docker compose logs app</code>
@@ -196,7 +196,7 @@ export function EmbeddedIDE() {
             onLoad={() => setFrameReady(true)}
           />
           {!frameReady && (
-            <div class="ide-loading">
+            <div class="ide-loading" role="status">
               <RefreshCw width={16} height={16} class="icon spin" />
               Loading VS Code…
             </div>

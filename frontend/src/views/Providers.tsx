@@ -320,7 +320,7 @@ export function Providers() {
             </div>
           ))}
         </div>
-        <div class="inline-loading" style="justify-content:center; margin-top:18px;">
+<div class="inline-loading" style="justify-content:center; margin-top:18px;" role="status">
           <Loader2 width={14} height={14} class="icon spin" /> Checking providers…
         </div>
       </div>
@@ -359,7 +359,7 @@ export function Providers() {
               value={unlockPw}
               onInput={(e: any) => setUnlockPw(e.target.value)}
             />
-            {unlockErr && <div class="login-error" style="text-align:center">{unlockErr}</div>}
+            {unlockErr && <div class="login-error" style="text-align:center" role="alert">{unlockErr}</div>}
             <button class="btn-primary sm" type="submit" disabled={unlockLoading || !unlockPw} style="width:100%;">
               {unlockLoading ? (
                 <span style="display:inline-flex;align-items:center;gap:6px;">
@@ -379,7 +379,7 @@ export function Providers() {
           </form>
         </div>
         {relockWarn && (
-          <div class="login-error" style="max-width: 360px; text-align: center; margin-top: 12px;">
+          <div class="login-error" style="max-width: 360px; text-align: center; margin-top: 12px;" role="alert">
             {relockWarn}
           </div>
         )}
@@ -419,12 +419,12 @@ export function Providers() {
       </div>
 
       {unlockNotice && (
-        <div class={`chat-save-msg${unlockNotice.type === 'info' ? ' unlock-info-note' : ''}`} style="margin-bottom: 12px">
+        <div class={`chat-save-msg${unlockNotice.type === 'info' ? ' unlock-info-note' : ''}`} style="margin-bottom: 12px" role="status">
           {unlockNotice.text}
         </div>
       )}
 
-      {error && <div class="chat-save-msg" style="margin-bottom: 12px">{error}</div>}
+      {error && <div class="chat-save-msg" style="margin-bottom: 12px" role="alert">{error}</div>}
 
       <div class="providers-grid">
         {providers.map((p) => (
@@ -610,8 +610,8 @@ function ProviderCard({
         />
       )}
 
-      {error && <div class="login-error">{error}</div>}
-      {saved && <div class="chat-save-msg">Saved ✓</div>}
+{error && <div class="login-error" role="alert">{error}</div>}
+      {saved && <div class="chat-save-msg" role="status">Saved ✓</div>}
 
       <div class="provider-actions">
         <button class="btn-ghost sm" onClick={test} disabled={testing}>
@@ -626,7 +626,7 @@ function ProviderCard({
       </div>
 
       {testResult && (
-        <div class={`terminal-line ${testResult.ok ? 't-ok' : 'login-error'}`} style="margin-top: 8px">{testResult.msg}</div>
+        <div class={`terminal-line ${testResult.ok ? 't-ok' : 'login-error'}`} style="margin-top: 8px" role={testResult.ok ? 'status' : 'alert'}>{testResult.msg}</div>
       )}
 
       <ConfirmModal

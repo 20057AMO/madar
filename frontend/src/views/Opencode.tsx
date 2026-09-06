@@ -177,12 +177,12 @@ export function Opencode() {
             ))}
           </select>
         </span>
-        <span class="term-title" style="flex: 1; text-align: right; font-size: 0.7rem">
+        <span class="term-title" style="flex: 1; text-align: right; font-size: 0.7rem" role="status">
           {openErr ? openErr : running === false ? 'opencode: offline' : opening ? 'opening…' : running ? 'opencode: running' : 'opencode: …'}
         </span>
       </div>
       {running === false ? (
-        <div class="empty-state" style="margin: 60px auto; max-width: 480px">
+        <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="alert">
           <div class="big-icon"><SquareTerminal width={30} height={30} class="icon" /></div>
           opencode is not available right now. Check the container log:
           <code class="mono" style="display:block;margin-top:8px">docker compose logs app</code>
@@ -198,7 +198,7 @@ export function Opencode() {
             onLoad={() => setFrameReady(true)}
           />
           {!frameReady && (
-            <div class="ide-loading">
+            <div class="ide-loading" role="status">
               <RefreshCw width={16} height={16} class="icon spin" />
               Loading opencode…
             </div>
