@@ -458,7 +458,7 @@ export function Project({ params }: { params: { slug: string } }) {
       {tab === 'chat' && <ProjectChat slug={slug} />}
       {tab === 'files' && <FilesPanel slug={slug} />}
       {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
-      {tab === 'notes' && <NotesPanel slug={slug} />}
+      {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
       {tab === 'scripts' && <ScriptsPanel slug={slug} />}
       {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}
       {tab === 'snapshots' && <SnapshotsPanel slug={slug} />}

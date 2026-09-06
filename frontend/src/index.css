@@ -1152,6 +1152,9 @@ textarea.agent-prompt-input {
   /* Chat: roomier session chips on touch */
   .session-chip { min-height: 44px; box-sizing: border-box; }
 
+  /* Notes: roomier kind/filter buttons on touch */
+  .notes-track .btn-ghost, .notes-filterbar .btn-ghost, .notes-filterbar .btn-primary { min-height: 40px; }
+
   /* Files: stack toolbar, wrap rows */
   .files-toolbar { flex-direction: column; align-items: stretch; }
   .files-newfile-row { flex-wrap: wrap; }
