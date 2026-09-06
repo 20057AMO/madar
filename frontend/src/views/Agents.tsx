@@ -331,13 +331,13 @@ export function Agents() {
   return (
     <div class="agents-page">
       {loading && (
-        <div class="empty-state" style="margin:60px auto">
+        <div class="empty-state" style="margin:60px auto" role="status">
           <div class="big">⏳</div>
           Loading…
         </div>
       )}
       {loadError && !loading && (
-        <div class="empty-state" style="margin:60px auto">
+        <div class="empty-state" style="margin:60px auto" role="alert">
           <div class="big">⚠️</div>
           {loadError}
         </div>
@@ -346,7 +346,7 @@ export function Agents() {
       <>
       <div class="agents-toolbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/')}>← Dashboard</button>
-        <span class="agents-toolbar-title">Agents</span>
+        <h1 class="agents-toolbar-title">Agents</h1>
       </div>
 
       <div class="agents-body">
@@ -415,7 +415,7 @@ export function Agents() {
                       ))}
                     </select>
                   </label>
-                  <button class="btn-ghost sm" onClick={() => { setEditingAgent(activeAgent); setSettingsOpen(true); }}>⚙</button>
+                  <button class="btn-ghost sm" onClick={() => { setEditingAgent(activeAgent); setSettingsOpen(true); }} aria-label={`Settings for ${activeAgent.name}`} title="Agent settings">⚙</button>
                 </div>
               </div>
 
@@ -455,8 +455,8 @@ export function Agents() {
                       </button>
                     )}
                     <span class="session-chip-actions">
-                      <button class="session-chip-act" type="button" title="Rename" onClick={() => handleRenameSession(s)}>✎</button>
-                      <button class="session-chip-act" type="button" title="Delete" onClick={() => handleDeleteSession(s)}>×</button>
+                      <button class="session-chip-act" type="button" title="Rename" aria-label="Rename session" onClick={() => handleRenameSession(s)}>✎</button>
+                      <button class="session-chip-act" type="button" title="Delete" aria-label="Delete session" onClick={() => handleDeleteSession(s)}>×</button>
                     </span>
                   </div>
                 ))}
@@ -487,7 +487,7 @@ export function Agents() {
                       {status === 'connected' ? 'connected' : status === 'connecting' ? 'connecting…' : status === 'disconnected' ? 'offline' : 'error'}
                       {running && ' · typing…'}
                       {(status === 'disconnected' || status === 'error') && (
-                        <button class="term-reconnect-btn" type="button" onClick={reconnect} title="Reconnect">↻</button>
+                        <button class="term-reconnect-btn" type="button" onClick={reconnect} title="Reconnect" aria-label="Reconnect">↻</button>
                       )}
                     </span>
                   </span>
@@ -536,13 +536,13 @@ export function Agents() {
                       </div>
                     )
                   )}
-                  {error && !running && <div class="chat-msg system err" dir={chatDir}>{error}</div>}
-                  {attachError && <div class="chat-msg system err" dir={chatDir}>{attachError}</div>}
-                  {sendError && <div class="chat-msg system err" dir={chatDir}>{sendError}</div>}
+                  {error && !running && <div class="chat-msg system err" dir={chatDir} role="alert">{error}</div>}
+                  {attachError && <div class="chat-msg system err" dir={chatDir} role="alert">{attachError}</div>}
+                  {sendError && <div class="chat-msg system err" dir={chatDir} role="alert">{sendError}</div>}
                   {apiError && (
-                    <div class="chat-msg system err" dir={chatDir}>
+                    <div class="chat-msg system err" dir={chatDir} role="alert">
                       {apiError}
-                      <button class="btn-ghost sm" style="margin-left:8px" onClick={() => setApiError(null)}>×</button>
+                      <button class="btn-ghost sm" style="margin-left:8px" onClick={() => setApiError(null)} aria-label="Dismiss">×</button>
                     </div>
                   )}
                 </div>
@@ -558,14 +558,14 @@ export function Agents() {
                         )}
                         <span class="chat-attach-name">{p.name}</span>
                         <span class="chat-attach-size">{formatSize(p.size)}</span>
-                        <button class="chat-attach-x" type="button" onClick={() => removeFile(p.id)}>×</button>
+                        <button class="chat-attach-x" type="button" onClick={() => removeFile(p.id)} aria-label="Remove attachment">×</button>
                       </span>
                     ))}
                   </div>
                 )}
 
                 <form class="chat-input-row" onSubmit={submit}>
-                  <button class="btn-ghost chat-attach-btn" type="button" title="Attach files"
+                  <button class="btn-ghost chat-attach-btn" type="button" title="Attach files" aria-label="Attach files"
                     onClick={() => fileRef.current?.click()} disabled={running || reading}><Paperclip width={14} height={14} class="icon" /></button>
                   <input ref={fileRef} type="file" multiple style="display:none"
                     onChange={(e: any) => { addFiles(e.target.files); e.target.value = ''; }} />
