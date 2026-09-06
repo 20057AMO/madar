@@ -457,7 +457,7 @@ export function Project({ params }: { params: { slug: string } }) {
       {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
       {tab === 'chat' && <ProjectChat slug={slug} />}
       {tab === 'files' && <FilesPanel slug={slug} />}
-      {tab === 'logs' && <LogsPanel slug={slug} />}
+      {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
       {tab === 'notes' && <NotesPanel slug={slug} />}
       {tab === 'scripts' && <ScriptsPanel slug={slug} />}
       {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}
@@ -1757,10 +1757,12 @@ function FilesPanel({ slug }: { slug: string }) {
 }
 
 // ── Logs ──────────────────────────────────────────────────────
-function LogsPanel({ slug }: { slug: string }) {
+function LogsPanel({ slug, running }: { slug: string; running?: boolean }) {
   const [logs, setLogs] = useState('');
   const [filter, setFilter] = useState('');
   const [follow, setFollow] = useState(true);
+  const [pollFallback, setPollFallback] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -1784,6 +1786,9 @@ function LogsPanel({ slug }: { slug: string }) {
         if (!closed) startPolling();
       };
       socket.onerror = fail;
+      socket.onopen = () => {
+        if (!closed) setLoadedOnce(true);
+      };
       socket.onclose = () => {
         if (!closed && !socketWasClosedByUs) startPolling();
       };
@@ -1791,7 +1796,10 @@ function LogsPanel({ slug }: { slug: string }) {
         let msg: any;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.type === 'logs' && typeof msg.data === 'string') {
-          if (!closed) setLogs((prev) => (prev + msg.data).slice(-200000));
+          if (!closed) {
+            setLoadedOnce(true);
+            setLogs((prev) => (prev + msg.data).slice(-200000));
+          }
         }
       };
     };
@@ -1805,10 +1813,14 @@ function LogsPanel({ slug }: { slug: string }) {
     };
     const startPolling = () => {
       if (timer) return;
+      setPollFallback(true);
       const tick = () =>
         getLogs(slug, 500)
           .then((d) => {
-            if (!closed) setLogs(d.logs);
+            if (!closed) {
+              setLoadedOnce(true);
+              setLogs(d.logs);
+            }
           })
           .catch(() => {});
       tick();
@@ -1858,21 +1870,35 @@ function LogsPanel({ slug }: { slug: string }) {
 
   return (
     <div class="logs-panel">
+      <h2 class="panel-title">Logs</h2>
       <div class="logs-toolbar">
         <input
           class="modern-input"
           style="max-width: 260px"
           placeholder="Filter…"
+          aria-label="Filter logs"
           value={filter}
           onInput={(e: any) => setFilter(e.target.value)}
         />
-        <button class="btn-ghost sm" onClick={() => setFollow(!follow)}>{follow ? 'Auto-scroll: on' : 'Auto-scroll: off'}</button>
-        <button class="btn-ghost sm" onClick={copyAll}>Copy</button>
-        <button class="btn-ghost sm" onClick={download}>Download</button>
-        <button class="btn-ghost sm" onClick={() => setLogs('')}>Clear</button>
+        <button
+          class="btn-ghost sm"
+          aria-pressed={follow}
+          title="Follow or stop following new log lines"
+          onClick={() => setFollow(!follow)}
+        >{follow ? 'Auto-scroll: on' : 'Auto-scroll: off'}</button>
+        <button class="btn-ghost sm" title="Copy all log lines to clipboard" onClick={copyAll}>Copy</button>
+        <button class="btn-ghost sm" title="Download as .log file" onClick={download}>Download</button>
+        <button class="btn-ghost sm" title="Clear the buffer (does not touch the container)" onClick={() => setLogs('')}>Clear</button>
+        {pollFallback && (
+          <span class="logs-fallback" role="status">Live stream lost — polling every 4s</span>
+        )}
       </div>
-      <div class="logs-box mono scrollbar" ref={bodyRef}>
-        {filtered || (logs ? '' : 'No logs yet.')}
+      <div class="logs-box mono scrollbar" ref={bodyRef} role="log" aria-live="polite" aria-relevant="additions" aria-busy={!loadedOnce}>
+        {filtered
+          || (!logs && !loadedOnce && <span class="logs-empty">Loading logs…</span>)
+          || (!logs && running && <span class="logs-empty">No output yet — logs will appear here live.</span>)
+          || (!logs && <span class="logs-empty">Container is stopped — start it to stream logs.</span>)
+          || (filter.trim() && <span class="logs-empty">No lines match "{filter.trim()}"</span>)}
       </div>
     </div>
   );

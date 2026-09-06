@@ -1153,6 +1153,10 @@ textarea.agent-prompt-input {
   .files-newfile-row .modern-input { width: 100%; }
   .file-row { flex-wrap: wrap; }
   .file-actions { width: 100%; justify-content: flex-end; }
+
+  /* Logs: roomier toolbar, stretch filter */
+  .logs-toolbar { gap: 6px; }
+  .logs-toolbar .modern-input { max-width: none; flex: 1 1 100%; }
 }
 
 
@@ -1452,6 +1456,8 @@ textarea.agent-prompt-input {
 /* Logs tab */
 .logs-panel { display: flex; flex-direction: column; gap: 10px; }
 .logs-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.logs-fallback { color: #eab308; font-size: 0.72rem; }
+.logs-empty { color: var(--text-3); font-size: 0.78rem; }
 .logs-box {
   height: 420px; overflow: auto;
   background: #0a0b0e; border: 1px solid var(--border);
