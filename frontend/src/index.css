@@ -935,6 +935,8 @@ textarea.agent-prompt-input {
   border-color: var(--text-3);
   background: var(--panel-2);
 }
+.session-chip-rename { flex: 1; min-width: 0; display: flex; align-items: center; width: 180px; }
+.session-chip-rename .modern-input { width: 100%; min-width: 0; }
 .session-chip-main {
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
   text-align: left; padding: 0; border: 0; background: none; cursor: pointer;
@@ -1146,6 +1148,9 @@ textarea.agent-prompt-input {
   .header-menu { top: calc(100% + 4px); right: 0; min-width: 176px; }
   .glance-item { border-right: none; padding: 2px 10px; }
   .glance-strip { gap: 6px 0; }
+
+  /* Chat: roomier session chips on touch */
+  .session-chip { min-height: 44px; box-sizing: border-box; }
 
   /* Files: stack toolbar, wrap rows */
   .files-toolbar { flex-direction: column; align-items: stretch; }

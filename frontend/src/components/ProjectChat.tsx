@@ -38,6 +38,13 @@ export function ProjectChat({ slug }: { slug: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [chatDir, setChatDir] = useState<'ltr' | 'rtl'>('ltr');
   const [configOpen, setConfigOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState('');
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (renamingId && renameInputRef.current) renameInputRef.current.focus();
+  }, [renamingId]);
 
   const wsPath = activeSession ? `/ws/chat/${slug}/${activeSession.chatId}` : '';
   const { messages, running, status, error, send, stop, reconnect } = useChatSocket(wsPath, 'prompt');
@@ -97,11 +104,23 @@ export function ProjectChat({ slug }: { slug: string }) {
     setConfirmDelete(null);
   };
 
-  const handleRenameSession = async (s: ProjectChatSession) => {
-    const name = window.prompt('Session name:', s.name);
-    if (!name || !name.trim() || name.trim() === s.name) return;
+  const startRename = (s: ProjectChatSession) => {
+    setRenamingId(s.chatId);
+    setRenameName(s.name);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameName('');
+  };
+
+  const submitRename = async (s: ProjectChatSession) => {
+    const nn = renameName.trim();
+    if (!nn || nn === s.name) { cancelRename(); return; }
+    setRenamingId(null);
+    setRenameName('');
     try {
-      const { session } = await renameChatSession(slug, s.chatId, name.trim());
+      const { session } = await renameChatSession(slug, s.chatId, nn);
       setSessions((cur) => cur.map((x) => (x.chatId === session.chatId ? session : x)));
       if (activeSession?.chatId === session.chatId) setActiveSession(session);
     } catch { /* ignore */ }
@@ -132,32 +151,53 @@ export function ProjectChat({ slug }: { slug: string }) {
 
   return (
     <div class="project-chat">
-      <div class="agents-sessions-bar scrollbar">
+      <h2 class="panel-title" style="margin-bottom:10px">AI Chat</h2>
+      <div class="agents-sessions-bar scrollbar" role="list">
         <input
           class="session-search-input"
           type="text"
           placeholder="Search…"
+          aria-label="Search sessions"
           value={sessionSearch}
           onInput={(e: any) => setSessionSearch(e.target.value)}
         />
-        {filteredSessions.map((s) => (
-          <div class={`session-chip ${s.chatId === activeSession?.chatId ? 'active' : ''}`} key={s.chatId}>
-            <button class="session-chip-main" type="button" onClick={() => setActiveSession(s)}
-              onDblClick={() => handleRenameSession(s)} title={s.lastPreview}>
-              <span class="session-chip-name">{s.name}</span>
-              {s.messageCount > 1 && (
-                <span class="session-chip-summary">{s.messageCount} messages</span>
+        {filteredSessions.map((s) => {
+          const isActive = s.chatId === activeSession?.chatId;
+          return (
+            <div class={`session-chip ${isActive ? 'active' : ''}`} key={s.chatId} role="listitem" aria-current={isActive ? 'true' : undefined}>
+              {renamingId === s.chatId ? (
+                <div class="session-chip-rename">
+                  <input
+                    class="modern-input compact"
+                    ref={renameInputRef}
+                    aria-label="Session name"
+                    value={renameName}
+                    onInput={(e: any) => setRenameName(e.target.value)}
+                    onKeyDown={(e: any) => {
+                      if (e.key === 'Enter') submitRename(s);
+                      else if (e.key === 'Escape') cancelRename();
+                    }}
+                  />
+                </div>
+              ) : (
+                <button class="session-chip-main" type="button" onClick={() => setActiveSession(s)}
+                  onDblClick={() => startRename(s)} title={s.lastPreview}>
+                  <span class="session-chip-name">{s.name}</span>
+                  {s.messageCount > 1 && (
+                    <span class="session-chip-summary">{s.messageCount} messages</span>
+                  )}
+                  <span class="session-chip-meta">{relTime(s.updatedAt)} · {s.messageCount}</span>
+                </button>
               )}
-              <span class="session-chip-meta">{relTime(s.updatedAt)} · {s.messageCount}</span>
-            </button>
-            <span class="session-chip-actions">
-              <button class="session-chip-act" type="button" title="Rename" onClick={() => handleRenameSession(s)}>✎</button>
-              <button class="session-chip-act" type="button" title="Delete" onClick={() => setConfirmDelete(s)}>×</button>
-            </span>
-          </div>
-        ))}
+              <span class="session-chip-actions">
+                <button class="session-chip-act" type="button" title="Rename" aria-label="Rename session" aria-pressed={renamingId === s.chatId} onClick={() => startRename(s)}>✎</button>
+                <button class="session-chip-act" type="button" title="Delete" aria-label="Delete session" onClick={() => setConfirmDelete(s)}>×</button>
+              </span>
+            </div>
+          );
+        })}
         {sessionSearch && filteredSessions.length === 0 && (
-          <span class="session-no-results">No results</span>
+          <span class="session-no-results" role="status">No results</span>
         )}
         <button class="session-new-btn" type="button" onClick={handleNewSession}>+ New</button>
       </div>
@@ -167,7 +207,7 @@ export function ProjectChat({ slug }: { slug: string }) {
           <span class="chat-head-name">{activeSession?.name || 'Chat'}</span>
           <span class="chat-head-badge">{slug}</span>
           <span class="chat-head-tools">
-            <button class="dir-toggle-btn" type="button" onClick={() => setConfigOpen(true)} title="Chat settings (model, provider, system prompt)">
+            <button class="dir-toggle-btn" type="button" onClick={() => setConfigOpen(true)} title="Chat settings (model, provider, system prompt)" aria-label="Chat settings">
               <Settings width={13} height={13} class="icon" />
             </button>
             <button class="dir-toggle-btn" type="button" onClick={() => setChatDir((d) => d === 'ltr' ? 'rtl' : 'ltr')} title="Toggle text direction">
@@ -175,15 +215,17 @@ export function ProjectChat({ slug }: { slug: string }) {
               {chatDir === 'ltr' ? 'عربي' : 'English'}
             </button>
             <span class="chat-head-status">
-              {status === 'connected' ? 'connected' : status === 'connecting' ? 'connecting…' : status === 'disconnected' ? 'offline' : 'error'}
-              {running && ' · typing…'}
+              <span role="status">
+                {status === 'connected' ? 'connected' : status === 'connecting' ? 'connecting…' : status === 'disconnected' ? 'offline' : 'error'}
+                {running && ' · typing…'}
+              </span>
               {(status === 'disconnected' || status === 'error') && (
-                <button class="term-reconnect-btn" type="button" onClick={reconnect} title="Reconnect">↻</button>
+                <button class="term-reconnect-btn" type="button" onClick={reconnect} title="Reconnect" aria-label="Reconnect">↻</button>
               )}
             </span>
           </span>
         </div>
-        <div class="chat-body scrollbar" ref={bodyRef} style="flex:1;height:auto;min-height:0">
+        <div class="chat-body scrollbar" ref={bodyRef} role="log" aria-live="polite" aria-relevant="additions" aria-atomic="false" style="flex:1;height:auto;min-height:0">
           {messages.length === 0 && (
             <div class="chat-msg system" dir={chatDir}>
               Ask anything about this project — the model sees the project structure and can search its files. Images and text files can be attached for extra context.
@@ -295,6 +337,7 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
   const [systemPrompt, setSystemPrompt] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const providerRef = useRef<HTMLSelectElement | null>(null);
 
   useEffect(() => {
     getChatInfo()
@@ -308,6 +351,10 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
         setSystemPrompt(cfg.systemPrompt);
       })
       .catch(() => setSaveMsg('Failed to load chat configuration'));
+  }, []);
+
+  useEffect(() => {
+    providerRef.current?.focus();
   }, []);
 
   const handleProviderChange = (p: string) => {
@@ -340,14 +387,14 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div class="confirm-overlay" onClick={(e) => { if (e.target === (e.currentTarget as HTMLElement)) onClose(); }}>
-      <form class="presets-modal chat-config-modal" onSubmit={save}>
-        <div class="confirm-title">Chat Settings</div>
+      <form class="presets-modal chat-config-modal" role="dialog" aria-modal="true" aria-labelledby="chat-config-title" onSubmit={save}>
+        <div class="confirm-title" id="chat-config-title">Chat Settings</div>
         <div class="confirm-message">Global defaults for AI chat replies.</div>
 
         <div class="chat-settings-row">
           <label class="chat-settings-label">
             <span>Provider</span>
-            <select class="modern-input chat-sel" value={provider} onChange={(e: any) => handleProviderChange(e.target.value)}>
+            <select ref={providerRef} class="modern-input chat-sel" value={provider} onChange={(e: any) => handleProviderChange(e.target.value)}>
               {(info?.providers || []).filter((p) => p.enabled).map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -386,7 +433,7 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
         />
 
         {saveMsg && (
-          <div class={saveMsg === 'Saved.' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px">
+          <div class={saveMsg === 'Saved.' ? 'chat-save-msg' : 'login-error'} role={saveMsg === 'Saved.' ? 'status' : 'alert'} style="margin-top: 8px">
             {saveMsg}
           </div>
         )}
