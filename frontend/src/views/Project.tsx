@@ -59,6 +59,18 @@ type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'notes' | 'scripts' | 'team'
 
 const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'logs', 'notes', 'scripts', 'team', 'snapshots', 'canvas'];
 
+const TAB_LABELS: Record<Tab, string> = {
+  overview: 'Overview',
+  chat: 'AI Chat',
+  files: 'Files',
+  logs: 'Logs',
+  notes: 'Notes',
+  scripts: 'Scripts',
+  team: 'Team',
+  snapshots: 'Snapshots',
+  canvas: 'Canvas',
+};
+
 function fmtBytes(bytes: number): string {
   if (!bytes) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
@@ -233,12 +245,32 @@ export function Project({ params }: { params: { slug: string } }) {
   }, [slug]);
 
   const tabsRef = useRef<HTMLDivElement | null>(null);
+  const pendingTabFocus = useRef<Tab | null>(null);
   useEffect(() => {
     const bar = tabsRef.current;
-    if (!bar || window.innerWidth > 700) return;
+    if (!bar) return;
+    if (pendingTabFocus.current === tab) {
+      pendingTabFocus.current = null;
+      bar.querySelector<HTMLElement>(`.tab-btn[data-tab="${tab}"]`)?.focus();
+    }
+    if (window.innerWidth > 700) return;
     const active = bar.querySelector<HTMLElement>('.tab-btn.active');
     if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [tab]);
+
+  const onTabListKeyDown = (e: any) => {
+    const idx = VALID_TABS.indexOf(tab);
+    let next: number | null = null;
+    if (e.key === 'ArrowRight') next = (idx + 1) % VALID_TABS.length;
+    else if (e.key === 'ArrowLeft') next = (idx - 1 + VALID_TABS.length) % VALID_TABS.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = VALID_TABS.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    const t = VALID_TABS[next];
+    pendingTabFocus.current = t;
+    setTab(t);
+  };
 
   useEffect(() => {
     getIdeStatus()
@@ -446,23 +478,36 @@ export function Project({ params }: { params: { slug: string } }) {
         </div>
       )}
 
-      <nav class="detail-tabs" ref={tabsRef} aria-label="Project sections">
-        {((['overview', 'chat', 'files', 'logs', 'notes', 'scripts', 'team', 'snapshots', 'canvas'] as Tab[])).map((t) => (
-          <button class={`tab-btn ${tab === t ? 'active' : ''}`} key={t} onClick={() => setTab(t)} aria-current={tab === t ? 'page' : undefined}>
-            {t === 'chat' ? 'AI Chat' : t === 'notes' ? 'Notes' : t === 'team' ? 'Team' : t === 'snapshots' ? 'Snapshots' : t === 'canvas' ? 'Canvas' : t.charAt(0).toUpperCase() + t.slice(1)}
+      <nav class="detail-tabs" ref={tabsRef} role="tablist" aria-label="Project sections" onKeyDown={onTabListKeyDown}>
+        {VALID_TABS.map((t) => (
+          <button
+            class={`tab-btn ${tab === t ? 'active' : ''}`}
+            type="button"
+            key={t}
+            role="tab"
+            id={`ptab-${t}`}
+            aria-selected={tab === t}
+            tabIndex={tab === t ? 0 : -1}
+            aria-controls={`pane-${t}`}
+            data-tab={t}
+            onClick={() => setTab(t)}
+          >
+            {TAB_LABELS[t]}
           </button>
         ))}
       </nav>
 
-      {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
-      {tab === 'chat' && <ProjectChat slug={slug} />}
-      {tab === 'files' && <FilesPanel slug={slug} />}
-      {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
-      {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
-      {tab === 'scripts' && <ScriptsPanel slug={slug} />}
-      {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}
-      {tab === 'snapshots' && <SnapshotsPanel slug={slug} />}
-      {tab === 'canvas' && <ProjectCanvas slug={slug} readOnly={readOnly} />}
+      <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
+        {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
+        {tab === 'chat' && <ProjectChat slug={slug} />}
+        {tab === 'files' && <FilesPanel slug={slug} />}
+        {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
+        {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
+        {tab === 'scripts' && <ScriptsPanel slug={slug} />}
+        {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}
+        {tab === 'snapshots' && <SnapshotsPanel slug={slug} />}
+        {tab === 'canvas' && <ProjectCanvas slug={slug} readOnly={readOnly} />}
+      </div>
 
       <ConfirmModal
         open={confirmRestart}
