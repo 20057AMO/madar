@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { X, Loader2 } from 'lucide-preact';
 import { updateAgent, deleteAgent, getChatModels, getChatInfo, type AgentDef } from '../api';
 import { ConfirmModal } from './ConfirmModal';
@@ -35,6 +35,45 @@ export function AgentSettingsModal({ agent, onSave, onDelete, onClose }: Props) 
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState('');
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const confirmDeleteRef = useRef(false);
+  confirmDeleteRef.current = confirmDelete;
+
+  // Dialog: Escape closes (when no nested ConfirmModal is open), Tab trapped,
+  // focus moved in on open and restored to the trigger on close.
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      overlayRef.current && overlayRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+    (focusables()?.[0] ?? overlayRef.current)?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (!confirmDeleteRef.current) onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const nodes = focusables();
+      if (!nodes || nodes.length === 0) return;
+      const list = Array.from(nodes);
+      const firstEl = list[0];
+      const lastEl = list[list.length - 1];
+      if (e.shiftKey && (document.activeElement === firstEl || document.activeElement === overlayRef.current)) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      trigger?.focus();
+    };
+  }, []);
 
   useEffect(() => {
     getChatInfo()
@@ -103,8 +142,8 @@ export function AgentSettingsModal({ agent, onSave, onDelete, onClose }: Props) 
   };
 
   return (
-    <div class="modal-overlay" onClick={onClose}>
-      <div class="agent-settings-modal" onClick={(e) => e.stopPropagation()}>
+    <div class="modal-overlay" ref={overlayRef} onClick={onClose}>
+      <div class="agent-settings-modal" role="dialog" aria-modal="true" aria-label={`Settings for ${agent.name}`} onClick={(e) => e.stopPropagation()}>
         <div class="agent-settings-header">
           <div class="agent-settings-identity">
             <span class="agent-settings-icon-preview">{icon || '🤖'}</span>
@@ -114,16 +153,18 @@ export function AgentSettingsModal({ agent, onSave, onDelete, onClose }: Props) 
                 value={name}
                 onInput={(e: any) => setName(e.target.value)}
                 placeholder="Agent name"
+                aria-label="Agent name"
               />
               <input
                 class="agent-settings-desc-input"
                 value={description}
                 onInput={(e: any) => setDescription(e.target.value)}
                 placeholder="Short description"
+                aria-label="Short description"
               />
             </div>
           </div>
-          <button class="btn-ghost sm" onClick={onClose} title="Close"><X width={14} height={14} class="icon" /></button>
+          <button class="btn-ghost sm" onClick={onClose} title="Close" aria-label="Close"><X width={14} height={14} class="icon" /></button>
         </div>
 
         <div class="agent-settings-body scrollbar">
@@ -135,6 +176,7 @@ export function AgentSettingsModal({ agent, onSave, onDelete, onClose }: Props) 
                 value={icon}
                 onInput={(e: any) => setIcon(e.target.value)}
                 placeholder="🤖"
+                aria-label="Agent icon"
               />
               <span class="agent-settings-icon-hint">Use an emoji as the agent icon</span>
             </div>
@@ -148,6 +190,7 @@ export function AgentSettingsModal({ agent, onSave, onDelete, onClose }: Props) 
               value={systemPrompt}
               onInput={(e: any) => setSystemPrompt(e.target.value)}
               placeholder="Instructions for this agent..."
+              aria-label="System prompt"
             />
           </div>
 
@@ -227,7 +270,7 @@ export function AgentSettingsModal({ agent, onSave, onDelete, onClose }: Props) 
             )}
           </div>
 
-          {error && <div class="login-error">{error}</div>}
+          {error && <div class="login-error" role="alert">{error}</div>}
         </div>
 
         <div class="agent-settings-footer">
