@@ -84,6 +84,8 @@ export function NotesPanel({ slug, readOnly }: { slug: string; readOnly?: boolea
         <textarea
           class="modern-input"
           style="width:100%;min-height:56px;resize:vertical;font-size:0.82rem;line-height:1.5;box-sizing:border-box"
+          id="notes-composer"
+          aria-label="New note"
           placeholder={
             kind === 'bug'
               ? 'Describe the bug — error message, where it happens…'

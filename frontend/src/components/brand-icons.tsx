@@ -19,7 +19,6 @@ interface IconProps {
 export function VSCodeIcon({ width = 13, height = 13, class: cls, style }: IconProps) {
   return (
     <svg
-      role="img"
       viewBox="0 0 24 24"
       width={width}
       height={height}

@@ -273,20 +273,21 @@ export function ProjectChat({ slug }: { slug: string }) {
                 )}
                 <span class="chat-attach-name">{p.name}</span>
                 <span class="chat-attach-size">{formatSize(p.size)}</span>
-                <button class="chat-attach-x" type="button" onClick={() => removeFile(p.id)}>×</button>
+                <button class="chat-attach-x" type="button" onClick={() => removeFile(p.id)} aria-label="Remove attachment">×</button>
               </span>
             ))}
           </div>
         )}
 
         <form class="chat-input-row" onSubmit={submit}>
-          <button class="btn-ghost chat-attach-btn" type="button" title="Attach files"
+          <button class="btn-ghost chat-attach-btn" type="button" title="Attach files" aria-label="Attach files"
             onClick={() => fileRef.current?.click()} disabled={running || reading}><Paperclip width={14} height={14} class="icon" /></button>
           <input ref={fileRef} type="file" multiple style="display:none"
             onChange={(e: any) => { addFiles(e.target.files); e.target.value = ''; }} />
           <textarea
             class="modern-input agent-prompt-input" dir={chatDir} rows={1}
             placeholder="Ask about this project…"
+            aria-label="Ask about this project"
             value={prompt}
             onInput={(e: any) => {
               setPrompt(e.target.value);
@@ -338,6 +339,7 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const providerRef = useRef<HTMLSelectElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getChatInfo()
@@ -355,6 +357,39 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     providerRef.current?.focus();
+  }, []);
+
+  // Tab trap + Escape close.
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      overlayRef.current && overlayRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const nodes = focusables();
+      if (!nodes || nodes.length === 0) return;
+      const list = Array.from(nodes);
+      const firstEl = list[0];
+      const lastEl = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      trigger?.focus();
+    };
   }, []);
 
   const handleProviderChange = (p: string) => {
@@ -386,7 +421,7 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div class="confirm-overlay" onClick={(e) => { if (e.target === (e.currentTarget as HTMLElement)) onClose(); }}>
+    <div class="confirm-overlay" ref={overlayRef} onClick={(e) => { if (e.target === (e.currentTarget as HTMLElement)) onClose(); }}>
       <form class="presets-modal chat-config-modal" role="dialog" aria-modal="true" aria-labelledby="chat-config-title" onSubmit={save}>
         <div class="confirm-title" id="chat-config-title">Chat Settings</div>
         <div class="confirm-message">Global defaults for AI chat replies.</div>
@@ -425,8 +460,9 @@ function ChatConfigModal({ onClose }: { onClose: () => void }) {
           </label>
         </div>
 
-        <label class="field-label">System prompt</label>
+        <label class="field-label" for="chat-system-prompt">System prompt</label>
         <textarea
+          id="chat-system-prompt"
           class="modern-input chat-sysprompt" rows={6}
           value={systemPrompt}
           onInput={(e: any) => setSystemPrompt(e.target.value)}
