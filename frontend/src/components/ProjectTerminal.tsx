@@ -378,26 +378,53 @@ export function ProjectTerminal({ slug }: { slug: string }) {
 
   const statusLabel = status === 'ready' ? 'connected' : status === 'connecting' ? 'connecting…' : status === 'closed' ? 'disconnected' : 'error';
 
+  const onTabListKeyDown = (e: KeyboardEvent) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!keys.includes(e.key)) return;
+    const list = tabs.map((t) => t.id);
+    if (list.length === 0) return;
+    let idx = list.indexOf(activeTabId);
+    if (e.key === 'ArrowRight') idx = (idx + 1) % list.length;
+    else if (e.key === 'ArrowLeft') idx = (idx - 1 + list.length) % list.length;
+    else if (e.key === 'Home') idx = 0;
+    else if (e.key === 'End') idx = list.length - 1;
+    e.preventDefault();
+    const nextId = list[idx];
+    setActiveTabId(nextId);
+    const bar = e.currentTarget as HTMLElement;
+    bar.querySelector<HTMLElement>(`[data-term-tab="${nextId}"]`)?.focus();
+  };
+
   return (
     <div class="term-wrap">
       {/* ── Tabs Bar ── */}
       <div class="term-tabs-bar">
-        <div class="term-tabs-list">
+        <div class="term-tabs-list" role="tablist" aria-label="Terminal tabs" onKeyDown={onTabListKeyDown}>
           {tabs.map((t) => (
             <div
               key={t.id}
+              data-term-tab={t.id}
+              role="tab"
+              aria-selected={t.id === activeTabId}
+              tabIndex={t.id === activeTabId ? 0 : -1}
               class={`term-tab ${t.id === activeTabId ? 'active' : ''}`}
               onClick={() => setActiveTabId(t.id)}
+              onKeyDown={(e: KeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setActiveTabId(t.id);
+                }
+              }}
             >
               <span class="term-tab-mode-dot" title={t.mode === 'project' ? 'Project shell' : 'Control shell'} />
               <span class="term-tab-label">{t.label}</span>
               {tabs.length > 1 && (
-                <button class="term-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }} title="Close tab">×</button>
+                <button class="term-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }} title="Close tab" aria-label={`Close tab ${t.label}`}>×</button>
               )}
             </div>
           ))}
           {canAddTab && (
-            <button class="term-tab-add" onClick={addTab} title="New terminal tab">+</button>
+            <button class="term-tab-add" onClick={addTab} title="New terminal tab" aria-label="New terminal tab">+</button>
           )}
         </div>
       </div>
@@ -406,9 +433,9 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       <div class="term-header">
         <div class="term-header-left">
           <span class={`term-status-dot ${status}`} title={statusLabel} />
-          <span class="term-header-label">{statusLabel}</span>
+          <span class="term-header-label" role="status">{statusLabel}</span>
           {(status === 'closed' || status === 'error') && (
-            <button class="term-reconnect-btn" onClick={manualReconnect} title="Reconnect">
+            <button class="term-reconnect-btn" onClick={manualReconnect} title="Reconnect" aria-label="Reconnect">
               ↻ Reconnect
             </button>
           )}
@@ -426,7 +453,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
             <button class="term-ctrl-btn" onClick={() => changeFontSize(-1)} title="Zoom out (Ctrl+Scroll)">A-</button>
             <span class="term-font-label">{fontSize}px</span>
             <button class="term-ctrl-btn" onClick={() => changeFontSize(1)} title="Zoom in (Ctrl+Scroll)">A+</button>
-            <button class="term-ctrl-btn" onClick={() => changeFontSize(DEFAULT_FONT_SIZE - fontSize)} title="Reset font size">↺</button>
+            <button class="term-ctrl-btn" onClick={() => changeFontSize(DEFAULT_FONT_SIZE - fontSize)} title="Reset font size" aria-label="Reset font size">↺</button>
           </div>
 
           <div class="term-mode-switch">
