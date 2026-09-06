@@ -1146,6 +1146,13 @@ textarea.agent-prompt-input {
   .header-menu { top: calc(100% + 4px); right: 0; min-width: 176px; }
   .glance-item { border-right: none; padding: 2px 10px; }
   .glance-strip { gap: 6px 0; }
+
+  /* Files: stack toolbar, wrap rows */
+  .files-toolbar { flex-direction: column; align-items: stretch; }
+  .files-newfile-row { flex-wrap: wrap; }
+  .files-newfile-row .modern-input { width: 100%; }
+  .file-row { flex-wrap: wrap; }
+  .file-actions { width: 100%; justify-content: flex-end; }
 }
 
 
@@ -1412,6 +1419,12 @@ textarea.agent-prompt-input {
 .file-icon.file { color: var(--text-3); }
 .file-size { color: var(--text-3); font-size: 0.7rem; flex-shrink: 0; width: 72px; text-align: right; }
 .file-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.files-newfile-row { display: flex; gap: 8px; align-items: center; margin: 10px 0 4px; }
+.files-newfile-row .modern-input { flex: 1; min-width: 0; }
+.modern-input.compact { padding: 5px 8px; font-size: 0.75rem; }
+.file-preview-name { margin: 0; font-size: 0.76rem; font-weight: 600; display: flex; align-items: center; min-width: 0; flex: 1; }
+.file-preview-name .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-muted { color: var(--text-3); font-size: 0.8rem; padding: 20px 12px; }
 
 .file-preview {
   background: var(--bg-2); border: 1px solid var(--border);

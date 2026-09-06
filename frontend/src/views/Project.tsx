@@ -1445,8 +1445,22 @@ function FilesPanel({ slug }: { slug: string }) {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null);
+  const [showNewFile, setShowNewFile] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
   const loadSeqRef = useRef(0);
+  const newFileInputRef = useRef<HTMLInputElement | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (showNewFile && newFileInputRef.current) newFileInputRef.current.focus();
+  }, [showNewFile]);
+
+  useEffect(() => {
+    if (renaming && renameInputRef.current) renameInputRef.current.focus();
+  }, [renaming]);
 
   const load = async (dir: string) => {
     const seq = ++loadSeqRef.current;
@@ -1506,21 +1520,30 @@ function FilesPanel({ slug }: { slug: string }) {
     }
   };
 
-  const newFile = () => {
-    const raw = prompt('New file path (folders allowed, e.g. src/app.ts):');
-    if (!raw) return;
-    const clean = raw.trim().replace(/^\/+/, '');
+  const newFile = () => setShowNewFile(true);
+
+  const submitNewFile = () => {
+    const clean = newFileName.trim().replace(/^\/+/, '');
     if (!clean) return;
     setPreview({ content: '', truncated: false, size: 0, binary: false });
     setPreviewName(cwd ? `${cwd}/${clean}` : clean);
     setEditContent('');
     setFileMsg(null);
+    setNewFileName('');
+    setShowNewFile(false);
   };
 
-  const rename = async (name: string) => {
-    const p = cwd ? `${cwd}/${name}` : name;
-    const nn = prompt(`Rename "${p}" to:`, name);
+  const startRename = (name: string) => {
+    setRenaming(name);
+    setRenameValue(name);
+  };
+
+  const doRename = async (name: string) => {
+    const nn = renameValue.trim();
+    setRenaming(null);
+    setRenameValue('');
     if (!nn || nn === name) return;
+    const p = cwd ? `${cwd}/${name}` : name;
     const to = cwd ? `${cwd}/${nn.replace(/^\/+/, '')}` : nn.replace(/^\/+/, '');
     try {
       await renameProjectPath(slug, p, to);
@@ -1572,6 +1595,7 @@ function FilesPanel({ slug }: { slug: string }) {
 
   return (
     <div class="files-panel">
+      <h2 class="panel-title">Files</h2>
       <div class="files-toolbar">
         <div class="files-path">
           <button class="btn-ghost sm" onClick={() => setCwd('')} disabled={!cwd}>workspace root</button>
@@ -1580,6 +1604,7 @@ function FilesPanel({ slug }: { slug: string }) {
               <span class="dim">/</span>
               <button
                 class="btn-ghost sm"
+                aria-current={i === crumbs.length - 1 ? 'location' : undefined}
                 onClick={() => setCwd(crumbs.slice(0, i + 1).join('/'))}
               >{c}</button>
             </span>
@@ -1598,18 +1623,45 @@ function FilesPanel({ slug }: { slug: string }) {
             style="display:none"
             onChange={(e: any) => doUpload(Array.from(e.target.files || []))}
           />
-          <button class="btn-ghost sm" onClick={newFile}>+ New file</button>
+          <button class="btn-ghost sm" onClick={newFile} aria-expanded={showNewFile}>+ New file</button>
           <button class="btn-primary sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
             {uploading ? 'Uploading…' : `Upload${cwd ? ` to ${cwd}` : ''}`}
           </button>
         </div>
       </div>
-      {uploadMsg && <div class="terminal-line" style="margin: 8px 0">{uploadMsg}</div>}
-      {error && <div class="login-error" style="margin: 8px 0">{error}</div>}
+      {showNewFile && (
+        <div class="files-newfile-row">
+          <input
+            class="modern-input compact"
+            ref={newFileInputRef}
+            placeholder="Path, e.g. src/app.ts"
+            aria-label="New file path (folders allowed)"
+            value={newFileName}
+            onInput={(e: any) => setNewFileName(e.target.value)}
+            onKeyDown={(e: any) => {
+              if (e.key === 'Enter') submitNewFile();
+              else if (e.key === 'Escape') { setShowNewFile(false); setNewFileName(''); }
+            }}
+          />
+          <button class="btn-primary sm" onClick={submitNewFile} disabled={!newFileName.trim()}>Create</button>
+          <button class="btn-ghost sm" onClick={() => { setShowNewFile(false); setNewFileName(''); }}>Cancel</button>
+        </div>
+      )}
+      {uploadMsg && (
+        <div
+          class="terminal-line"
+          style="margin: 8px 0"
+          role={uploadMsg.startsWith('Upload failed') ? 'alert' : 'status'}
+        >{uploadMsg}</div>
+      )}
+      {error && <div class="login-error" role="alert" style="margin: 8px 0">{error}</div>}
 
-      <div class="file-list">
+      <div class="file-list" aria-busy={loading}>
+        {loading && entries.length === 0 && (
+          <div class="panel-muted" role="status">Loading files…</div>
+        )}
         {entries.length === 0 && !loading && (
-          <div class="empty-state" style="padding: 32px">{cwd ? 'Empty directory.' : 'Workspace is empty. Upload files or clone a repository.'}</div>
+          <div class="empty-state" role="status" style="padding: 32px">{cwd ? 'Empty directory.' : 'Workspace is empty. Upload files or clone a repository.'}</div>
         )}
         {entries.map((e) => (
           <div class="file-row" key={e.path}>
@@ -1625,7 +1677,21 @@ function FilesPanel({ slug }: { slug: string }) {
               {e.type === 'file' && (
                 <button class="btn-ghost sm" onClick={() => openFile(e.path)}>view</button>
               )}
-              <button class="btn-ghost sm" onClick={() => rename(e.path)}>rename</button>
+              {renaming === e.path ? (
+                <input
+                  class="modern-input compact"
+                  ref={renameInputRef}
+                  aria-label={`Rename ${e.path} to`}
+                  value={renameValue}
+                  onInput={(ev: any) => setRenameValue(ev.target.value)}
+                  onKeyDown={(ev: any) => {
+                    if (ev.key === 'Enter') doRename(e.path);
+                    else if (ev.key === 'Escape') { setRenaming(null); setRenameValue(''); }
+                  }}
+                />
+              ) : (
+                <button class="btn-ghost sm" onClick={() => startRename(e.path)}>rename</button>
+              )}
               <button class="btn-danger sm" onClick={() => remove(e.path)}>delete</button>
             </div>
           </div>
@@ -1635,7 +1701,7 @@ function FilesPanel({ slug }: { slug: string }) {
       {preview && (
         <div class="file-preview">
           <div class="file-preview-head">
-            <span class="mono">{previewName}</span>
+            <h3 class="file-preview-name"><span class="mono">{previewName}</span></h3>
             {editContent !== null && editContent !== preview.content && (
               <span class="dim" style="color: var(--warn, #eab308); font-size:0.72rem">• unsaved</span>
             )}
@@ -1649,7 +1715,13 @@ function FilesPanel({ slug }: { slug: string }) {
             )}
             <button class="btn-ghost sm" onClick={closePreview}>Close</button>
           </div>
-          {fileMsg && <div class="terminal-line" style="margin: 6px 0">{fileMsg}</div>}
+          {fileMsg && (
+            <div
+              class="terminal-line"
+              style="margin: 6px 0"
+              role={fileMsg.startsWith('Save failed') ? 'alert' : 'status'}
+            >{fileMsg}</div>
+          )}
           {preview.binary ? (
             <div class="empty-state" style="padding: 24px">Binary file — not previewable.</div>
           ) : editContent !== null && !preview.truncated ? (
