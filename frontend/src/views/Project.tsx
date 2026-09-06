@@ -1907,6 +1907,7 @@ function LogsPanel({ slug, running }: { slug: string; running?: boolean }) {
 // ── Scripts ───────────────────────────────────────────────────
 function ScriptsPanel({ slug }: { slug: string }) {
   const [scripts, setScripts] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState<string | null>(null);
   const [output, setOutput] = useState<{ script: string; exitCode: number | null; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1914,7 +1915,8 @@ function ScriptsPanel({ slug }: { slug: string }) {
   useEffect(() => {
     getProjectScripts(slug)
       .then(({ scripts: s }) => setScripts(s))
-      .catch((err: any) => setError(err.message));
+      .catch((err: any) => setError(err.message))
+      .finally(() => setLoading(false));
   }, [slug]);
 
   const run = async (name: string) => {
@@ -1934,16 +1936,18 @@ function ScriptsPanel({ slug }: { slug: string }) {
   const names = Object.keys(scripts);
   return (
     <div class="scripts-panel">
-      <div class="panel-title">npm scripts</div>
-      {error && <div class="login-error" style="margin: 8px 0">{error}</div>}
-      {names.length === 0 ? (
+      <h2 class="panel-title">npm scripts</h2>
+      {error && <div class="login-error" style="margin: 8px 0" role="alert">{error}</div>}
+      {loading ? (
+        <p role="status">Loading scripts…</p>
+      ) : names.length === 0 ? (
         <div class="empty-state" style="padding: 32px">
           No package.json or no scripts. <span class="dim">(scripts run via `npm run` inside the project container)</span>
         </div>
       ) : (
         <div class="scripts-grid">
           {names.map((n) => (
-            <button class="script-card" key={n} onClick={() => run(n)} disabled={running !== null}>
+            <button class="script-card" key={n} onClick={() => run(n)} disabled={running !== null} aria-label={`Run ${n}`}>
               <span class="script-name mono">{n}</span>
               <span class="script-cmd">{scripts[n]}</span>
               {running === n && <span class="dim">…running</span>}
@@ -1955,11 +1959,11 @@ function ScriptsPanel({ slug }: { slug: string }) {
         <div class="file-preview" style="margin-top: 16px">
           <div class="file-preview-head">
             <span class="mono">npm run {output.script}</span>
-            <span style={`color: ${output.exitCode === 0 ? 'var(--green)' : 'var(--red)'}`}>
+            <span style={`color: ${output.exitCode === 0 ? 'var(--green)' : 'var(--red)'}`} role="status">
               exit {output.exitCode === null ? '…' : output.exitCode}
             </span>
           </div>
-          <pre class="file-preview-body mono scrollbar">{output.text || '(no output)'}</pre>
+          <pre class="file-preview-body mono scrollbar" role="status">{output.text || '(no output)'}</pre>
         </div>
       )}
     </div>

@@ -1169,6 +1169,10 @@ textarea.agent-prompt-input {
   .add-member-form { flex-wrap: wrap; }
   .add-member-form .select-dark { flex: 1 1 100%; min-height: 40px; }
 
+  /* Scripts: roomier cards on touch */
+  .script-card { min-height: 56px; padding: 14px; }
+  .scripts-panel { padding: 14px 16px; }
+
   /* Files: stack toolbar, wrap rows */
   .files-toolbar { flex-direction: column; align-items: stretch; }
   .files-newfile-row { flex-wrap: wrap; }
