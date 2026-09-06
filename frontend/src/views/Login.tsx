@@ -51,7 +51,7 @@ export function Login() {
               value={code}
               onInput={(e: any) => setCode(e.target.value)}
             />
-            {error && <div class="login-error">{error}</div>}
+            {error && <div class="login-error" role="alert">{error}</div>}
             <button class="btn-primary login-btn" type="submit" disabled={loading}>
               {loading ? 'Verifying…' : 'Verify'}
             </button>
@@ -152,7 +152,7 @@ export function Login() {
             </>
           )}
 
-          {error && <div class="login-error">{error}</div>}
+{error && <div class="login-error" role="alert">{error}</div>}
 
           <button class="btn-primary login-btn" type="submit" disabled={loading}>
             {loading

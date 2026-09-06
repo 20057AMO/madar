@@ -257,7 +257,7 @@ export function Dashboard() {
       <div class="view">
         <div class="dash-loading">
           <Loader2 width={28} height={28} class="icon spin" />
-          Loading…
+          <span role="status">Loading…</span>
         </div>
       </div>
     );
@@ -275,8 +275,8 @@ export function Dashboard() {
         <p class="hero-sub">Your development environment at a glance.</p>
       </div>
 
-      {loadError && <div class="login-error dash-error">{loadError}</div>}
-      {stopAllSuccess && <div class="dash-success">All projects stopped.</div>}
+      {loadError && <div class="login-error dash-error" role="alert">{loadError}</div>}
+      {stopAllSuccess && <div class="dash-success" role="status">All projects stopped.</div>}
 
       {/* ── Quick Actions ─────────────────────────────────── */}
       <div class="dash-qa-section">
