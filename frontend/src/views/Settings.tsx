@@ -163,7 +163,7 @@ function WhRow({ w, onChanged, onDelete }: WhRowProps) {
         </label>
         <button class="btn-ghost sm" onClick={test} disabled={busy}>Test</button>
         <button class="btn-primary sm" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
-        <button class="btn-ghost sm" style="color: var(--red)" onClick={onDelete} title="Delete webhook">
+        <button class="btn-ghost sm" style="color: var(--red)" onClick={onDelete} title="Delete webhook" aria-label="Delete webhook">
           <Trash2 width={13} height={13} class="icon" />
         </button>
       </div>
@@ -657,7 +657,7 @@ export function Settings() {
 
       {/* Account Info */}
       <div class="panel settings-section">
-        <div class="panel-title">Account</div>
+        <h2 class="panel-title">Account</h2>
         <div class="settings-row">
           <span class="field-label">Username</span>
           <span class="mono" style="color: var(--text)">{user?.username || '—'}</span>
@@ -679,9 +679,9 @@ export function Settings() {
 
       {/* Providers Security Lock — two-step flow */}
       <div class="panel settings-section">
-        <div class="panel-title">
+        <h2 class="panel-title">
           <span class="icon-wrap"><KeyRound width={14} height={14} /></span> Providers Security
-        </div>
+        </h2>
         <p class="settings-hint">
           Optional second-layer password guarding the Providers page.
         </p>
@@ -721,7 +721,7 @@ export function Settings() {
           />
 
           {lockMsg && (
-            <div class={lockMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px">
+            <div class={lockMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px" role={lockMsg.type === 'ok' ? 'status' : 'alert'}>
               {lockMsg.text}
             </div>
           )}
@@ -758,13 +758,13 @@ export function Settings() {
 
       {/* Logout everywhere */}
       <div class="panel settings-section">
-        <div class="panel-title">Logout Everywhere</div>
+        <h2 class="panel-title">Logout Everywhere</h2>
         <p class="settings-hint">
           Invalidate every signed-in session — all browser tabs and devices will
           need to log in again. You will be logged out here too.
         </p>
         {pwMsg && pendingAction === null && (
-          <div class={pwMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px">
+          <div class={pwMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px" role={pwMsg.type === 'ok' ? 'status' : 'alert'}>
             {pwMsg.text}
           </div>
         )}
@@ -775,7 +775,7 @@ export function Settings() {
 
       {/* Two-factor authentication (TOTP) */}
       <div class="panel settings-section">
-        <div class="panel-title">
+        <h2 class="panel-title">
           Two-Factor Authentication
           {totpEnabled === true && (
             <span class="badge-ok" style="margin-inline-start: 8px;">
@@ -785,14 +785,14 @@ export function Settings() {
           {totpEnabled === false && (
             <span class="badge-off" style="margin-inline-start: 8px;">Off</span>
           )}
-        </div>
+        </h2>
         <p class="settings-hint">
           Require a 6-digit code from an authenticator app (Google Authenticator,
           Authy, Aegis…) after your password at every sign-in.
         </p>
 
         {totpMsg && (
-          <div class={totpMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px">
+          <div class={totpMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px" role={totpMsg.type === 'ok' ? 'status' : 'alert'}>
             {totpMsg.text}
           </div>
         )}
@@ -842,7 +842,7 @@ export function Settings() {
 
       {/* Auto-logout on inactivity */}
       <div class="panel settings-section">
-        <div class="panel-title">Idle security</div>
+        <h2 class="panel-title">Idle security</h2>
         <p class="settings-hint">
           Sign out automatically after a period of inactivity — and optionally re-lock
           the Providers page (revokes its unlock token everywhere).
@@ -860,7 +860,7 @@ export function Settings() {
             <option value="60">1 hour</option>
             <option value="120">2 hours</option>
           </select>
-          {idleSaved && <span class="chat-save-msg">Saved ✓</span>}
+          {idleSaved && <span class="chat-save-msg" role="status">Saved ✓</span>}
         </div>
         <div class="settings-row">
           <span class="field-label">Auto-relock Providers</span>
@@ -875,13 +875,13 @@ export function Settings() {
             <option value="15">15 minutes</option>
             <option value="30">30 minutes</option>
           </select>
-          {relockSaved && <span class="chat-save-msg">Saved ✓</span>}
+          {relockSaved && <span class="chat-save-msg" role="status">Saved ✓</span>}
         </div>
       </div>
 
       {/* Notifications / Webhooks */}
       <div class="panel settings-section">
-        <div class="panel-title"><span class="icon-wrap"><BellRing width={14} height={14} /></span> Notifications &amp; Webhooks</div>
+        <h2 class="panel-title"><span class="icon-wrap"><BellRing width={14} height={14} /></span> Notifications &amp; Webhooks</h2>
         <p class="settings-hint">
           Forward container lifecycle and crash events to an external URL (Slack, Discord, Telegram, a status page…).
           Crashes are detected by the server even when no browser is open. When a signing secret is set, every POST
@@ -889,7 +889,7 @@ export function Settings() {
         </p>
 
         {whMsg && (
-          <div class={whMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px">
+          <div class={whMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px" role={whMsg.type === 'ok' ? 'status' : 'alert'}>
             {whMsg.text}
           </div>
         )}
@@ -919,7 +919,7 @@ export function Settings() {
             </div>
 
             {webhooks === null ? (
-              <div class="dim" style="margin-top: 12px">Loading webhooks…</div>
+              <div class="dim" style="margin-top: 12px" role="status">Loading webhooks…</div>
             ) : webhooks.length === 0 ? (
               <div class="dim" style="margin-top: 12px">
                 No webhooks — crashes and lifecycle events are still shown in-app.
@@ -937,21 +937,21 @@ export function Settings() {
 
       {/* Storage / disk usage */}
       <div class="panel settings-section">
-        <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
+        <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
           <span>Storage</span>
           <button class="btn-ghost sm" onClick={refreshStorage} disabled={storageRefreshing}>
             {storageRefreshing ? <Loader2 width={13} height={13} class="icon spin" /> : <RefreshCw width={13} height={13} class="icon" />}
             Refresh
           </button>
-        </div>
+        </h2>
         <p class="settings-hint">
           Disk usage across workspaces, snapshot archives and Docker. Read-only snapshot — refresh forces a rescan.
         </p>
         {storageMsg && (
-          <div class={storageMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom:8px">{storageMsg.text}</div>
+          <div class={storageMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom:8px" role={storageMsg.type === 'ok' ? 'status' : 'alert'}>{storageMsg.text}</div>
         )}
         {storage == null ? (
-          <div class="dim">Loading storage metrics…</div>
+          <div class="dim" role="status">Loading storage metrics…</div>
         ) : (
           <>
             <div class="storage-totals">
@@ -996,14 +996,14 @@ export function Settings() {
 
       {/* Backup / Restore */}
       <div class="panel settings-section">
-        <div class="panel-title">Backup &amp; Restore</div>
+        <h2 class="panel-title">Backup &amp; Restore</h2>
         <p class="settings-hint">
           Export agents, sessions, provider configs and chat preferences as JSON.
           <strong> API keys are never included.</strong> Import merges new items only.
         </p>
 
         {backupMsg && (
-          <div class={backupMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px">
+          <div class={backupMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px" role={backupMsg.type === 'ok' ? 'status' : 'alert'}>
             {backupMsg.text}
           </div>
         )}
@@ -1023,7 +1023,7 @@ export function Settings() {
 
       {/* Change Password */}
       <div class="panel settings-section">
-        <div class="panel-title">Change Password</div>
+        <h2 class="panel-title">Change Password</h2>
         <form onSubmit={changePassword}>
           <label class="field-label">Current Password</label>
           <input
@@ -1054,7 +1054,7 @@ export function Settings() {
           />
 
           {pwMsg && (
-            <div class={pwMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px">
+            <div class={pwMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px" role={pwMsg.type === 'ok' ? 'status' : 'alert'}>
               {pwMsg.text}
             </div>
           )}
@@ -1073,10 +1073,10 @@ export function Settings() {
 
       {/* Security Activity */}
       <div class="panel settings-section">
-        <div class="panel-title">Security Activity</div>
+        <h2 class="panel-title">Security Activity</h2>
         <p class="settings-hint">Recent security-related events (newest first, last 50).</p>
         {audit === null ? (
-          <div class="inline-loading"><Loader2 width={12} height={12} class="icon spin" /> Loading…</div>
+          <div class="inline-loading" role="status"><Loader2 width={12} height={12} class="icon spin" /> Loading…</div>
         ) : audit.length === 0 ? (
           <div class="settings-hint">No activity recorded yet.</div>
         ) : (
@@ -1109,7 +1109,7 @@ export function Settings() {
 
       {/* About */}
       <div class="panel settings-section">
-        <div class="panel-title">About</div>
+        <h2 class="panel-title">About</h2>
         <div class="settings-row">
           <span class="field-label">Version</span>
           <span class="mono beta-chip" title="Beta software — features and data format may change">{APP_VERSION}</span>
