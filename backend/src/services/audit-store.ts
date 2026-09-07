@@ -36,6 +36,7 @@ export type AuditEvent =
   | 'backup-import'
   | 'snapshot-export'
   | 'snapshot-import'
+  | 'project-zip'
   | 'snapshot-save'
   | 'snapshot-download'
   | 'snapshot-delete'

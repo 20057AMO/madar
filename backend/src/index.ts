@@ -42,6 +42,7 @@ import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorksp
 import { loadMeta, saveMeta } from './services/projects-meta';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
+import { exportProjectZip } from './services/project-zip';
 import * as snapAuto from './services/project-snapshots-auto';
 import { getIdeStatus } from './services/ide-service';
 import { detectIp } from './services/server-info';
@@ -1146,6 +1147,26 @@ app.get('/api/projects/:slug/export', requireProjectAccess('editor'), (req: any,
   });
   snapshot.stream.pipe(res);
   recordAudit('snapshot-export', true, req.ip);
+});
+
+// Download the project's workspace as a ZIP archive (editor+ — data leaves
+// the server). Same permissiveness as snapshot export; files only, meta is
+// NOT baked in (that's what snapshots/tar.gz are for).
+app.get('/api/projects/:slug/zip', requireProjectAccess('editor'), (req: any, res) => {
+  let zip;
+  try {
+    zip = exportProjectZip(req.params.slug);
+  } catch (err: any) {
+    return res.status(err.statusCode || 500).json({ error: err.message });
+  }
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${zip.filename}"`);
+  zip.stream.on('error', (err: any) => {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+    else res.destroy(err);
+  });
+  zip.stream.pipe(res);
+  recordAudit('project-zip', true, req.ip);
 });
 
 // Restore a snapshot upload as a NEW project (never overwrites an existing one).

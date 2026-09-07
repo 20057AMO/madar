@@ -419,6 +419,36 @@ export async function exportProjectSnapshot(slug: string): Promise<{ blob: Blob;
   return { blob, filename: m ? m[1] : `madar-${slug}.tar.gz` };
 }
 
+/** Download a project's workspace files as a ZIP archive. */
+export async function exportProjectZip(slug: string): Promise<{ blob: Blob; filename: string }> {
+  const headers: Record<string, string> = {};
+  const token = getAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const unlock = getProvidersUnlock();
+  if (unlock) headers['X-Providers-Unlock'] = unlock.token;
+  const res = await fetch(`/api/projects/${encodeURIComponent(slug)}/zip`, { headers });
+  if (!res.ok) {
+    let msg = `Request failed (HTTP ${res.status})`;
+    try {
+      const d = await res.json();
+      if (d?.error) msg = d.error;
+    } catch {
+      /* non-JSON body */
+    }
+    if (res.status === 401) {
+      localStorage.removeItem('wsd.token');
+      window.location.hash = '/login';
+    }
+    const err = new Error(msg) as ApiError;
+    err.status = res.status;
+    throw err;
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename="([^"]+)"/);
+  return { blob, filename: m ? m[1] : `${slug}.zip` };
+}
+
 /** Restore a snapshot upload as a brand-new project (never overwrites). */
 export const importProjectSnapshot = (file: File) => {
   const fd = new FormData();

@@ -469,6 +469,11 @@ select:focus-visible {
   border-radius: 11px; font-weight: 700; font-size: 1.15rem;
 }
 .detail-title { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+input.detail-title {
+  background: var(--panel-2); border: 1px solid var(--focus); border-radius: var(--radius-sm);
+  padding: 2px 8px; color: var(--text-1); font: inherit; width: 280px; max-width: 60vw;
+}
+.copied-flash { color: var(--green) !important; }
 .detail-meta-line { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .ws-live-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--green);
@@ -1084,7 +1089,7 @@ textarea.agent-prompt-input {
   }
   .menu-btn:hover { border-color: var(--accent); }
   .main { padding: 18px 16px 50px; }
-  .watermark { width: 56px; height: 56px; right: 12px; bottom: 10px; }
+  .watermark { width: 85px; height: 60px; right: 12px; bottom: 10px; }
   .detail-topbar { flex-wrap: wrap; }
 }
 

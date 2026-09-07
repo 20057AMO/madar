@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { ExternalLink, Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis } from 'lucide-preact';
+import { ExternalLink, Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -29,6 +29,7 @@ import {
   getLogs,
   wsUrl,
   exportProjectSnapshot,
+  exportProjectZip,
   crashTitle,
   startServe,
   stopServe,
@@ -310,6 +311,10 @@ export function Project({ params }: { params: { slug: string } }) {
   };
 
   const [exporting, setExporting] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [zipping, setZipping] = useState(false);
 
   const [moreOpen, setMoreOpen] = useState(false);
   const headerMoreWrap = useRef<HTMLDivElement | null>(null);
@@ -370,8 +375,67 @@ export function Project({ params }: { params: { slug: string } }) {
   const copy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+      return;
     } catch {
-      /* clipboard unavailable */
+      // Fallback: legacy execCommand for insecure contexts / older browsers.
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      } catch { /* clipboard unavailable */ }
+    }
+  };
+
+  const handleZip = async () => {
+    if (zipping) return;
+    setZipping(true);
+    try {
+      const { blob, filename } = await exportProjectZip(slug);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setZipping(false);
+    }
+  };
+
+  // Escape/blur both cancel — never commit a draft on accidental blur. The
+  // input unmounts right after Escape, firing onBlur; routing it here instead
+  // of handleSaveName is what keeps a stale keystroke from being PATCHed.
+  const cancelRename = () => {
+    setNameDraft(project?.name || '');
+    setRenaming(false);
+  };
+
+  const handleSaveName = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed || trimmed === (project?.name || '')) {
+      cancelRename();
+      return;
+    }
+    try {
+      await updateProject(slug, { name: trimmed });
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setRenaming(false);
     }
   };
 
@@ -383,14 +447,47 @@ export function Project({ params }: { params: { slug: string } }) {
       <div class="detail-topbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/projects')}>← Projects</button>
         <div class="detail-title-wrap">
-          <div class="detail-avatar">{(project?.name || '?').charAt(0).toUpperCase()}</div>
           <div>
-            <h1 class="detail-title">
-              {project?.name || 'Loading…'}
-            </h1>
+            {renaming ? (
+              <input
+                type="text"
+                class="detail-title"
+                value={nameDraft}
+                onInput={(e: any) => setNameDraft((e.target as HTMLInputElement).value)}
+                onBlur={cancelRename}
+                onKeyDown={(e: KeyboardEvent) => {
+                  if (e.key === 'Enter') { e.preventDefault(); handleSaveName(); }
+                  if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                }}
+                autoFocus
+                aria-label="Project name"
+              />
+            ) : (
+              <h1 class="detail-title" style="display:inline-flex;align-items:center;gap:6px">
+                {project?.name || 'Loading…'}
+                {!readOnly && (
+                  <button
+                    class="btn-ghost sm icon-only"
+                    style="padding:2px;margin-left:-2px"
+                    title="Rename project"
+                    aria-label="Rename project"
+                    onClick={() => { setNameDraft(project?.name || ''); setRenaming(true); }}
+                  >
+                    <Pencil width={13} height={13} class="icon" />
+                  </button>
+                )}
+              </h1>
+            )}
             <div class="detail-meta-line">
               <span class="detail-slug">{slug}</span>
-              <button class="btn-ghost sm" style="padding: 4px 8px" onClick={() => copy(slug)}>copy</button>
+              <button
+                class={`btn-ghost sm${copied ? ' copied-flash' : ''}`}
+                style="padding: 4px 8px"
+                onClick={() => copy(slug)}
+                aria-label={copied ? 'Slug copied to clipboard' : 'Copy slug'}
+              >
+                {copied ? <><Check width={13} height={13} class="icon" /> Copied</> : 'Copy'}
+              </button>
               <span class={`status-badge ${project?.status || 'missing'}`}>{project?.status || '…'}</span>
               {project?.crash && <CrashBadge crash={project.crash} />}
               {wsConnected && <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" />}
@@ -416,6 +513,10 @@ export function Project({ params }: { params: { slug: string } }) {
             <span class="detail-action-sep" aria-hidden="true" />
             <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — export requires editor access' : undefined}>
               <Download width={13} height={13} class="icon" /> {exporting ? 'Exporting…' : 'Export'}
+            </button>
+            <span class="detail-action-sep" aria-hidden="true" />
+            <button class="btn-ghost sm" onClick={handleZip} disabled={zipping || readOnly} title={readOnly ? 'Viewer — download requires editor access' : 'Download workspace as ZIP'}>
+              <FileArchive width={13} height={13} class="icon" /> {zipping ? 'Zipping…' : 'ZIP'}
             </button>
           </div>
           <span class="header-more-wrap" ref={headerMoreWrap}>
