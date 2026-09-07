@@ -318,7 +318,7 @@ export function OpencodeStudio() {
         </div>
       )}
 
-      <div id={`studio-pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
+      <div id={`studio-pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0} style="flex:1;display:flex;flex-direction:column;min-height:0">
       {tab === 'guide' ? (
         <div style="flex:1;overflow:hidden">
           <StudioGuide />
