@@ -369,7 +369,12 @@ export function Project({ params }: { params: { slug: string } }) {
       return;
     }
     const folder = subdirInfo?.hostPath || `/workspaces/${slug}`;
-    setLocation(`/ide?folder=${encodeURIComponent(folder)}`);
+    // Set the hash directly (instead of setLocation('/ide?folder=…')): wouter's
+    // navigate() pushes a query into location.search — OUTSIDE the hash — so the
+    // IDE keep-alive layer (which watches hashchange) would never see the folder.
+    // "#/ide?folder=/workspaces/<slug>" keeps the query inside the hash where
+    // EmbeddedIDE's handler parses it.
+    window.location.hash = `/ide?folder=${encodeURIComponent(folder)}`;
   };
 
   const copy = async (text: string) => {
@@ -507,12 +512,11 @@ export function Project({ params }: { params: { slug: string } }) {
         </div>
         <div class="detail-actions">
           <div class="header-overflow">
-            <button class="btn-ghost sm" onClick={() => setTab('chat')}>Ask AI</button>
             <button class="btn-ghost sm" onClick={() => setLocation(`/terminals/${slug}`)}>Terminals</button>
             <button class="btn-ghost sm" onClick={openIde}><ExternalLink width={13} height={13} class="icon" /> Open IDE</button>
             <span class="detail-action-sep" aria-hidden="true" />
-            <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — export requires editor access' : undefined}>
-              <Download width={13} height={13} class="icon" /> {exporting ? 'Exporting…' : 'Export'}
+            <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — backup requires editor access' : 'Download a snapshot of the project as tar.gz'}>
+              <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
             </button>
             <span class="detail-action-sep" aria-hidden="true" />
             <button class="btn-ghost sm" onClick={handleZip} disabled={zipping || readOnly} title={readOnly ? 'Viewer — download requires editor access' : 'Download workspace as ZIP'}>
@@ -531,12 +535,11 @@ export function Project({ params }: { params: { slug: string } }) {
             </button>
             {moreOpen && (
               <div class="header-menu" role="menu">
-                <button role="menuitem" onClick={() => { setMoreOpen(false); setTab('chat'); }}>Ask AI</button>
                 <button role="menuitem" onClick={() => { setMoreOpen(false); setLocation(`/terminals/${slug}`); }}>Terminals</button>
                 <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><ExternalLink width={13} height={13} class="icon" /> Open IDE</button>
                 <div class="header-menu-sep" role="separator" />
-                <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title="Export snapshot">
-                  <Download width={13} height={13} class="icon" /> {exporting ? 'Exporting…' : 'Export'}
+                <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title="Download snapshot as tar.gz">
+                  <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
                 </button>
               </div>
             )}

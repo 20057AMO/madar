@@ -6,7 +6,8 @@ import { ProjectTerminal } from '../components/ProjectTerminal';
 
 const LS_LAST = 'wsd.terminals.lastProject';
 
-export function Terminals({ slug }: { slug?: string }) {
+export function Terminals({ params }: { params: { slug?: string } }) {
+  const slug = params?.slug;
   const [, setLocation] = useHashLocation();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,6 +35,13 @@ export function Terminals({ slug }: { slug?: string }) {
       setLocation('/terminals');
     }
   }, [loading, slug, projects]);
+
+  // A deep-link like /terminals/<slug> must select that project even when
+  // this component stays mounted (e.g. navigating from /terminals to
+  // /terminals/<slug> — useState(slug) only reads the initial value).
+  useEffect(() => {
+    if (slug) setSelected(slug);
+  }, [slug]);
 
   const q = query.trim().toLowerCase();
   const visible = useMemo(
