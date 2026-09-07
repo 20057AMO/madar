@@ -662,6 +662,7 @@ function OverviewPanel({
   const [portsText, setPortsText] = useState('');
   const [portsMsg, setPortsMsg] = useState<string | null>(null);
   const [savingPorts, setSavingPorts] = useState(false);
+  const [editPortsOpen, setEditPortsOpen] = useState(false);
   const portsInputRef = useRef<HTMLInputElement | null>(null);
 
   const [servePort, setServePort] = useState<number | undefined>();
@@ -682,6 +683,7 @@ function OverviewPanel({
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [tagsMsg, setTagsMsg] = useState<string | null>(null);
   const [savingTags, setSavingTags] = useState(false);
+  const [editingTags, setEditingTags] = useState(false);
   const tagInputRef = useRef<HTMLInputElement | null>(null);
 
   const [recreating, setRecreating] = useState(false);
@@ -691,6 +693,30 @@ function OverviewPanel({
 
   // Which config section is currently in edit mode (view/edit pattern).
   const [editSection, setEditSection] = useState<'env' | 'ports' | 'limits' | null>(null);
+
+  // Quick-nav: smooth-scroll to an overview section and track the visible one.
+  const secIds = ['ov-ctx', 'ov-config', 'ov-runtime', 'ov-activity'];
+  const [activeSec, setActiveSec] = useState<string | null>(null);
+  const gotoSection = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const vis = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        setActiveSec(vis ? vis.target.id : null);
+      },
+      { rootMargin: '-80px 0px -60% 0px', threshold: [0, 0.1, 0.3] },
+    );
+    secIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) obs.observe(el);
+    });
+    return () => obs.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const visible = useDocumentVisible();
   const visibleRef = useRef(visible);
@@ -950,6 +976,7 @@ function OverviewPanel({
       setTagsMsg('Saved ✓');
       setTimeout(() => setTagsMsg(null), 4000);
       tagsDirtyRef.current = false;
+      setEditingTags(false);
       onChanged();
     } catch (err: any) {
       setTagsMsg(`Failed: ${err.message}`);
@@ -1082,6 +1109,22 @@ function OverviewPanel({
         </div>
       </div>
 
+      {/* ── Quick-nav ── */}
+      <nav class="ov-nav" aria-label="Overview sections">
+        <button type="button" class={`ov-nav-btn${activeSec === 'ov-ctx' ? ' active' : ''}`} data-sec="ov-ctx" onClick={() => gotoSection('ov-ctx')}>
+          AI Context
+        </button>
+        <button type="button" class={`ov-nav-btn${activeSec === 'ov-config' ? ' active' : ''}`} data-sec="ov-config" onClick={() => gotoSection('ov-config')}>
+          Configuration
+        </button>
+        <button type="button" class={`ov-nav-btn${activeSec === 'ov-runtime' ? ' active' : ''}`} data-sec="ov-runtime" onClick={() => gotoSection('ov-runtime')}>
+          Runtime
+        </button>
+        <button type="button" class={`ov-nav-btn${activeSec === 'ov-activity' ? ' active' : ''}`} data-sec="ov-activity" onClick={() => gotoSection('ov-activity')}>
+          Activity
+        </button>
+      </nav>
+
       {/* ── Links & health ── */}
       <div class="panel" id="ov-links">
         <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
@@ -1128,6 +1171,99 @@ function OverviewPanel({
                 </div>
               );
             })()}
+
+            {/* Published ports editing (moved into Links & health) */}
+            <div class="ov-section" style="margin-top: 14px">
+              <div class="ov-row-actions" style="align-items:center;gap:8px">
+                <span class="ov-section-label" style="margin:0">Published ports</span>
+                {!readOnly && !editPortsOpen && (
+                  <button class="btn-ghost sm" onClick={() => setEditPortsOpen(true)}>Edit</button>
+                )}
+              </div>
+              {editPortsOpen ? (
+                <>
+                  <div class="ov-field" style="margin-top:8px">
+                    <input
+                      class="modern-input mono"
+                      style="flex:1"
+                      aria-label="Published ports"
+                      aria-describedby="portsFormatHint"
+                      placeholder="e.g. 8000, 8080 — blank unpublishes all"
+                      value={portsText}
+                      ref={portsInputRef}
+                      onInput={(e: any) => setPortsText(e.target.value)}
+                      onKeyDown={(e: any) => e.key === 'Enter' && savePorts()}
+                    />
+                    <span class="sr-only" id="portsFormatHint">Comma-separated host ports. Leave blank to unpublish all. Applies on the next container recreate.</span>
+                  </div>
+                  <div class="ov-row-actions" style="margin-top:8px">
+                    <button class="btn-ghost sm" onClick={savePorts} disabled={savingPorts}>
+                      {savingPorts ? 'Saving…' : 'Save ports'}
+                    </button>
+                    <button class="btn-ghost sm" onClick={() => { setEditPortsOpen(false); setPortsText((project?.ports || []).join(', ')); }}>Cancel</button>
+                    {portsMsg && <span class="dim" style="color: var(--text-3)" role={msgRole(portsMsg)}>{portsMsg}</span>}
+                  </div>
+                </>
+              ) : (
+                !readOnly && (
+                  <div class="ov-value">
+                    {project?.ports && project.ports.length > 0 ? project.ports.join(', ') : <span class="ov-value-empty">No published ports.</span>}
+                  </div>
+                )
+              )}
+            </div>
+
+            {/* Tags (moved into Links & health) */}
+            <div class="ov-section" style="margin-top: 14px">
+              <div class="ov-row-actions" style="align-items:center;gap:8px">
+                <span class="ov-section-label" style="margin:0">Tags</span>
+                {!readOnly && !editingTags && (
+                  <button class="btn-ghost sm" onClick={() => setEditingTags(true)}>
+                    {currentTags.length > 0 ? 'Edit' : 'Add'}
+                  </button>
+                )}
+              </div>
+              <div class="tag-editor">
+                {currentTags.map((t) => (
+                  <span class="tag-chip" key={t}>
+                    {t}
+                    {!readOnly && editingTags && (
+                      <button type="button" class="tag-remove" aria-label={`Remove tag ${t}`} onClick={() => removeTag(t)}>×</button>
+                    )}
+                  </span>
+                ))}
+                {!readOnly && editingTags && (
+                  <input
+                    class="tag-input"
+                    placeholder="Add tag…"
+                    maxLength={30}
+                    value={tagInput}
+                    aria-label="Add tag"
+                    ref={tagInputRef}
+                    onInput={(e: any) => setTagInput(e.target.value)}
+                    onKeyDown={handleTagKeyDown}
+                  />
+                )}
+              </div>
+              {!readOnly && editingTags ? (
+                <div class="ov-row-actions" style="margin-top:8px">
+                  <button class="btn-ghost sm" onClick={saveTags} disabled={savingTags}>
+                    {savingTags ? 'Saving…' : 'Save tags'}
+                  </button>
+                  <button class="btn-ghost sm" onClick={() => { setEditingTags(false); setCurrentTags(project?.tags ? [...project.tags] : []); }}>Cancel</button>
+                  <span class="dim">Enter to add · {currentTags.length}/20 · max 30 chars</span>
+                  {tagsMsg && <span class="dim" role={msgRole(tagsMsg)}>{tagsMsg}</span>}
+                </div>
+              ) : (
+                (readOnly || currentTags.length === 0) && (
+                  <div class="ov-value" style="margin-top:4px">
+                    {currentTags.length > 0
+                      ? currentTags.join(' · ')
+                      : <span class="ov-value-empty">No tags. {readOnly ? '' : 'Add tags to organize this project.'}</span>}
+                  </div>
+                )
+              )}
+            </div>
 
             {project && project.ports && project.ports.length > 0 && (
               <div class="serve-box" style="margin-top: 16px">
@@ -1197,7 +1333,7 @@ function OverviewPanel({
             )}
           </>
         ) : (
-          <div class="empty-state" style="padding: 16px">No published ports. Add one in Config to open this project in the browser.</div>
+          <div class="empty-state" style="padding: 16px">No published ports. Add one above to open this project in the browser.</div>
         )}
       </div>
 
@@ -1252,46 +1388,6 @@ function OverviewPanel({
                 <div class="kv">
                   <span>Uptime</span>
                   <b>{effectiveStats?.running ? fmtUptime(effectiveStats.startedAt) : project?.status === 'running' ? '…' : 'stopped'}</b>
-                </div>
-                <div class="kv" style="flex-direction:column; align-items:stretch; gap:6px">
-                  <span class="kv-label">Tags</span>
-                  <div class="tag-editor">
-                    {currentTags.map((t) => (
-                      <span class="tag-chip" key={t}>
-                        {t}
-                        {!readOnly && (
-                          <button type="button" class="tag-remove" aria-label={`Remove tag ${t}`} onClick={() => removeTag(t)}>×</button>
-                        )}
-                      </span>
-                    ))}
-                    {!readOnly && (
-                      <input
-                        class="tag-input"
-                        placeholder="Add tag…"
-                        maxLength={30}
-                        value={tagInput}
-                        aria-label="Add tag"
-                        ref={tagInputRef}
-                        onInput={(e: any) => setTagInput(e.target.value)}
-                        onKeyDown={handleTagKeyDown}
-                      />
-                    )}
-                  </div>
-                  <div class="kv-sub">
-                    {readOnly ? (
-                      <span class="dim">Viewer — read-only</span>
-                    ) : (
-                      <span class="dim">Enter to add · {currentTags.length}/20 · max 30 chars</span>
-                    )}
-                    {!readOnly && (
-                      <div class="kv-actions">
-                        <button class="btn-ghost sm" onClick={saveTags} disabled={savingTags}>
-                          {savingTags ? 'Saving…' : 'Save tags'}
-                        </button>
-                        {tagsMsg && <span class="dim" role={msgRole(tagsMsg)}>{tagsMsg}</span>}
-                      </div>
-                    )}
-                  </div>
                 </div>
                 </div>
         </div>
@@ -1410,44 +1506,6 @@ function OverviewPanel({
                 )}
                 <div class="ov-row-actions">
                   {!readOnly && <button class="btn-ghost sm" onClick={() => setEditSection('env')}>Edit</button>}
-                </div>
-              </>
-            )}
-          </div>
-
-          <div class="ov-section">
-            <h3 class="ov-section-label">Published ports</h3>
-            {editSection === 'ports' ? (
-              <>
-                <div class="ov-field">
-                  <input
-                    class="modern-input mono"
-                    style="flex:1"
-                    aria-label="Published ports"
-                    aria-describedby="portsFormatHint"
-                    placeholder="e.g. 8000, 8080 — blank unpublishes all"
-                    value={portsText}
-                    ref={portsInputRef}
-                    onInput={(e: any) => setPortsText(e.target.value)}
-                    onKeyDown={(e: any) => e.key === 'Enter' && savePorts()}
-                  />
-                  <span class="sr-only" id="portsFormatHint">Comma-separated host ports. Leave blank to unpublish all. Applies on the next container recreate.</span>
-                </div>
-                <div class="ov-row-actions">
-                  <button class="btn-ghost sm" onClick={savePorts} disabled={savingPorts}>
-                    {savingPorts ? 'Saving…' : 'Save ports'}
-                  </button>
-                  <button class="btn-ghost sm" onClick={() => setEditSection(null)}>Cancel</button>
-                  {portsMsg && <span class="dim" style="color: var(--text-3)" role={msgRole(portsMsg)}>{portsMsg}</span>}
-                </div>
-              </>
-            ) : (
-              <>
-                <div class="ov-value">
-                  {project?.ports && project.ports.length > 0 ? project.ports.join(', ') : <span class="ov-value-empty">No published ports.</span>}
-                </div>
-                <div class="ov-row-actions">
-                  {!readOnly && <button class="btn-ghost sm" onClick={() => setEditSection('ports')}>Edit</button>}
                 </div>
               </>
             )}
