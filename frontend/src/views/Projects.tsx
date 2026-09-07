@@ -697,7 +697,15 @@ export function Projects() {
             <div
               class={`project-card ${selected.has(p.slug) ? 'selected' : ''}`}
               key={p.slug}
+              role="button"
+              tabIndex={0}
               onClick={() => setLocation(`/project/${p.slug}`)}
+              onKeyDown={(e: KeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setLocation(`/project/${p.slug}`);
+                }
+              }}
             >
               <div class="project-card-header">
                 <label class="proj-checkbox" onClick={(e) => e.stopPropagation()}>
@@ -768,20 +776,52 @@ export function Projects() {
                 <th class="proj-th-check">
                   <input type="checkbox" ref={selectAllRef} checked={filtered.length > 0 && filtered.every((p) => selected.has(p.slug))} onChange={selectAll} aria-label="Select all projects" />
                 </th>
-                <th class="proj-th-sortable" onClick={() => toggleSort('name')}>Name{sortIcon('name')}</th>
+                <th
+                  class="proj-th-sortable"
+                  tabIndex={0}
+                  onClick={() => toggleSort('name')}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('name'); }
+                  }}
+                >Name{sortIcon('name')}</th>
                 <th>Status</th>
                 <th>Description</th>
                 <th>Ports</th>
                 <th>Team</th>
                 <th>Size</th>
-                <th className="proj-th-sortable" onClick={() => toggleSort('activity')}>Activity{sortIcon('activity')}</th>
-                <th className="proj-th-sortable" onClick={() => toggleSort('created')}>Created{sortIcon('created')}</th>
+                <th
+                  className="proj-th-sortable"
+                  tabIndex={0}
+                  onClick={() => toggleSort('activity')}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('activity'); }
+                  }}
+                >Activity{sortIcon('activity')}</th>
+                <th
+                  className="proj-th-sortable"
+                  tabIndex={0}
+                  onClick={() => toggleSort('created')}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('created'); }
+                  }}
+                >Created{sortIcon('created')}</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {pageItems.map((p) => (
-                <tr key={p.slug} class={selected.has(p.slug) ? 'selected' : ''} onClick={() => setLocation(`/project/${p.slug}`)}>
+                <tr
+                  key={p.slug}
+                  class={selected.has(p.slug) ? 'selected' : ''}
+                  tabIndex={0}
+                  onClick={() => setLocation(`/project/${p.slug}`)}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if ((e.key === 'Enter' || e.key === ' ') && !(e.target as HTMLElement).closest('button,a,input,select')) {
+                      e.preventDefault();
+                      setLocation(`/project/${p.slug}`);
+                    }
+                  }}
+                >
                   <td onClick={(e) => e.stopPropagation()}>
                     <input type="checkbox" checked={selected.has(p.slug)} onChange={() => toggleSelect(p.slug)} aria-label={`Select ${p.name}`} />
                   </td>

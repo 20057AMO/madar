@@ -186,7 +186,19 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toolBase = `${window.location.protocol === 'https:' ? 'https' : 'http'}://${window.location.hostname}`;
   return (
     <aside class={`sidebar${open ? ' open' : ''}`}>
-      <div class="sidebar-brand" onClick={() => { navigate('/'); onClose(); }}>
+      <div
+        class="sidebar-brand"
+        role="button"
+        tabIndex={0}
+        onClick={() => { navigate('/'); onClose(); }}
+        onKeyDown={(e: KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            navigate('/');
+            onClose();
+          }
+        }}
+      >
         <div class="brand-mark"><img class="brand-logo" src="/logo.png" alt="Madar" /></div>
         <div class="brand-text">
           <span class="brand-name">Madar</span>

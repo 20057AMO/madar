@@ -773,7 +773,19 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         </div>
 
         {loaded && doc && doc.nodes.length === 0 && (
-          <div class="cn-empty" onClick={() => setMenuOpen(true)}>
+          <div
+            class="cn-empty"
+            role="button"
+            tabIndex={0}
+            aria-label="Add to canvas"
+            onClick={() => setMenuOpen(true)}
+            onKeyDown={(e: KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setMenuOpen(true);
+              }
+            }}
+          >
             <div class="cn-empty-icon">✸</div>
             <div class="cn-empty-title">An empty board for your big ideas</div>
             <div class="cn-empty-sub">
