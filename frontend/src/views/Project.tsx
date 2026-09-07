@@ -695,8 +695,7 @@ function OverviewPanel({
   const [editSection, setEditSection] = useState<'env' | 'ports' | 'limits' | null>(null);
 
   // Quick-nav: smooth-scroll to an overview section and track the visible one.
-  const secIds = ['ov-ctx', 'ov-config', 'ov-runtime', 'ov-activity'];
-  const [activeSec, setActiveSec] = useState<string>('ov-ctx');
+  const [activeSec, setActiveSec] = useState<string>('');
 
   const visible = useDocumentVisible();
   const visibleRef = useRef(visible);
@@ -1141,8 +1140,7 @@ function OverviewPanel({
                         <button class="btn-ghost sm icon-only" aria-label={`Copy URL for port ${priv}`} title="Copy URL" onClick={() => copyPortUrl(url, priv)}>
                           {copied ? <Check width={12} height={12} class="icon" /> : <Copy width={12} height={12} class="icon" />}
                         </button>
-           </div>
-        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -1338,9 +1336,7 @@ function OverviewPanel({
                     />
                     <div style="display:flex; gap:6px">
                       <button class="btn-primary sm" onClick={saveDescription}>Save</button>
-                      <button class="btn-ghost sm" onClick={() => { setEditDesc(false); setDescText(project?.description || ''); }}>Cancel</button>
-         </div>
-        )}
+                    </div>
                   </>
                 ) : (
                   <>
@@ -1397,11 +1393,11 @@ function OverviewPanel({
           )}
 
           </div>
+        )}
 
         {/* ── AI context ── */}
         {activeSec === 'ov-ctx' && (
-        {activeSec === 'ov-ctx' && (
-        <div class="panel" id="ov-ctx">
+          <div class="panel" id="ov-ctx">
           <h2 class="panel-title">AI context</h2>
           <div class="kv-list">
             <div class="kv">
@@ -1427,7 +1423,6 @@ function OverviewPanel({
         )}
 
         {/* ── Configuration ── */}
-        {activeSec === 'ov-config' && (
         {activeSec === 'ov-config' && (
         <div class="panel" id="ov-config">
           <h2 class="panel-title">Configuration</h2>
@@ -1564,6 +1559,7 @@ function OverviewPanel({
             </div>
           </div>
         </div>
+        )}
 
         {/* ── Activity ── */}
         {activeSec === 'ov-activity' && (
