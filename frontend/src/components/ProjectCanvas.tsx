@@ -789,9 +789,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <div class="cn-empty-icon">✸</div>
             <div class="cn-empty-title">An empty board for your big ideas</div>
             <div class="cn-empty-sub">
-              Drop sticky notes (N), task cards (C), link them with arrows (L), or import open notes from the Notes tab.
+              Drop sticky notes, task cards, or link them with arrows. Press Enter to add your first item — or use <b>N</b> / <b>C</b> to create a note or card.
             </div>
-            {!readOnly && <button class="btn-ghost sm" onClick={(e) => { e.stopPropagation(); addNode('note'); }}>Start with a sticky note</button>}
           </div>
         )}
       </div>

@@ -2612,9 +2612,9 @@ input[type="file"].modern-file::file-selector-button {
   text-align: center;
   color: var(--text-3);
   padding: 20px;
-  cursor: default;
+  cursor: pointer;
 }
 .cn-empty-icon { font-size: 2rem; opacity: 0.5; }
 .cn-empty-title { font-size: 0.95rem; color: var(--text-2); }
 .cn-empty-sub { font-size: 0.75rem; max-width: 460px; line-height: 1.6; color: var(--text-3); }
-.cn-empty .btn-ghost { pointer-events: auto; opacity: 1; }
+.cn-empty:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: -2px; border-radius: 8px; }
