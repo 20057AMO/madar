@@ -468,7 +468,7 @@ export function Project({ params }: { params: { slug: string } }) {
                 {!readOnly && (
                   <button
                     class="btn-ghost sm icon-only"
-                    style="padding:2px;margin-left:-2px"
+                    style="padding:8px; margin-left:6px"
                     title="Rename project"
                     aria-label="Rename project"
                     onClick={() => { setNameDraft(project?.name || ''); setRenaming(true); }}
