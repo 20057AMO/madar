@@ -5,7 +5,7 @@
  * BM25 retrieval over the workspace. Sessions persist per project slug.
  */
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Paperclip, Languages, Settings } from 'lucide-preact';
+import { Paperclip, Languages, Settings, Lock } from 'lucide-preact';
 import {
   listChatSessions,
   createChatSession,
@@ -30,7 +30,7 @@ function relTime(iso: string): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
-export function ProjectChat({ slug }: { slug: string }) {
+export function ProjectChat({ slug, readOnly = false }: { slug: string; readOnly?: boolean }) {
   const [sessions, setSessions] = useState<ProjectChatSession[]>([]);
   const [activeSession, setActiveSession] = useState<ProjectChatSession | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
@@ -64,7 +64,9 @@ export function ProjectChat({ slug }: { slug: string }) {
         if (cancelled) return;
         let current = list;
         let active = current[0] || null;
-        if (!active) {
+        // Read-only viewers never auto-create a session (that's a write op);
+        // they just read whatever the editors left behind.
+        if (!active && !readOnly) {
           const { session } = await createChatSession(slug);
           if (cancelled) return;
           current = [session];
@@ -75,7 +77,7 @@ export function ProjectChat({ slug }: { slug: string }) {
       })
       .catch(() => setLoadError('Failed to load chat sessions'));
     return () => { cancelled = true; };
-  }, [slug]);
+  }, [slug, readOnly]);
 
   useEffect(() => {
     const el = bodyRef.current;
@@ -190,8 +192,12 @@ export function ProjectChat({ slug }: { slug: string }) {
                 </button>
               )}
               <span class="session-chip-actions">
-                <button class="session-chip-act" type="button" title="Rename" aria-label="Rename session" aria-pressed={renamingId === s.chatId} onClick={() => startRename(s)}>✎</button>
-                <button class="session-chip-act" type="button" title="Delete" aria-label="Delete session" onClick={() => setConfirmDelete(s)}>×</button>
+                {!readOnly && (
+                  <>
+                    <button class="session-chip-act" type="button" title="Rename" aria-label="Rename session" aria-pressed={renamingId === s.chatId} onClick={() => startRename(s)}>✎</button>
+                    <button class="session-chip-act" type="button" title="Delete" aria-label="Delete session" onClick={() => setConfirmDelete(s)}>×</button>
+                  </>
+                )}
               </span>
             </div>
           );
@@ -199,7 +205,7 @@ export function ProjectChat({ slug }: { slug: string }) {
         {sessionSearch && filteredSessions.length === 0 && (
           <span class="session-no-results" role="status">No results</span>
         )}
-        <button class="session-new-btn" type="button" onClick={handleNewSession}>+ New</button>
+        {!readOnly && <button class="session-new-btn" type="button" onClick={handleNewSession}>+ New</button>}
       </div>
 
       <div class="chat-panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -207,9 +213,16 @@ export function ProjectChat({ slug }: { slug: string }) {
           <span class="chat-head-name">{activeSession?.name || 'Chat'}</span>
           <span class="chat-head-badge">{slug}</span>
           <span class="chat-head-tools">
-            <button class="dir-toggle-btn" type="button" onClick={() => setConfigOpen(true)} title="Chat settings (model, provider, system prompt)" aria-label="Chat settings">
-              <Settings width={13} height={13} class="icon" />
-            </button>
+            {!readOnly && (
+              <button class="dir-toggle-btn" type="button" onClick={() => setConfigOpen(true)} title="Chat settings (model, provider, system prompt)" aria-label="Chat settings">
+                <Settings width={13} height={13} class="icon" />
+              </button>
+            )}
+            {readOnly && (
+              <span class="cn-ro-chip" title="Your role can only read this chat" role="status">
+                <Lock width={11} height={11} /> Read-only
+              </span>
+            )}
             <button class="dir-toggle-btn" type="button" onClick={() => setChatDir((d) => d === 'ltr' ? 'rtl' : 'ltr')} title="Toggle text direction">
               <Languages width={13} height={13} class="icon" />
               {chatDir === 'ltr' ? 'عربي' : 'English'}
@@ -262,7 +275,7 @@ export function ProjectChat({ slug }: { slug: string }) {
           {sendError && <div class="chat-msg system err" dir={chatDir}>{sendError}</div>}
         </div>
 
-        {pending.length > 0 && (
+        {pending.length > 0 && !readOnly && (
           <div class="chat-pending">
             {pending.map((p) => (
               <span class="chat-attach-chip" key={p.id}>
@@ -279,7 +292,12 @@ export function ProjectChat({ slug }: { slug: string }) {
           </div>
         )}
 
-        <form class="chat-input-row" onSubmit={submit}>
+        {readOnly ? (
+          <div class="chat-input-row ro" role="status">
+            <span class="dim">Viewer — read-only. Ask an editor to start a conversation.</span>
+          </div>
+        ) : (
+          <form class="chat-input-row" onSubmit={submit}>
           <button class="btn-ghost chat-attach-btn" type="button" title="Attach files" aria-label="Attach files"
             onClick={() => fileRef.current?.click()} disabled={running || reading}><Paperclip width={14} height={14} class="icon" /></button>
           <input ref={fileRef} type="file" multiple style="display:none"
@@ -305,7 +323,8 @@ export function ProjectChat({ slug }: { slug: string }) {
             disabled={running || reading || (!prompt.trim() && pending.length === 0)}>
             {reading ? '…' : 'Send'}
           </button>
-        </form>
+          </form>
+        )}
       </div>
 
       {configOpen && (

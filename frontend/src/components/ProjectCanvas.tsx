@@ -32,6 +32,7 @@ import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType } from '../
 
 const HISTORY_DEPTH = 60;
 const MAX_NODES = 200;
+const MAX_EDGES = 400;
 const MIN_Z = 0.2;
 const MAX_Z = 3;
 
@@ -84,6 +85,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     cY: number;
     startX: number;
     startY: number;
+    /** True once a real movement (beyond the click threshold) happened. */
+    moved?: boolean;
+    /** Pre-drag document snapshot — only appended to history if we moved. */
+    pre?: string;
   }>(null);
 
   // ── load ─────────────────────────────────────────────────────
@@ -250,6 +255,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   };
 
   const addEdge = (from: string, to: string) => {
+    const d = docRef.current;
+    if (d && d.edges.length >= MAX_EDGES) {
+      setNotice(`Edge limit reached (${MAX_EDGES} edges)`);
+      return;
+    }
     mutate((d) => ({ ...d, edges: [...d.edges, { id: freshId('e'), from, to }] }));
   };
 
@@ -443,7 +453,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       setSelNode(id);
       setSelEdge(null);
       if (e.button === 0) {
-        pushHistory();
+        // Don't push history on pointer-down: a plain click (no movement)
+        // must not leave an empty undo entry. Stage the pre-drag snapshot
+        // instead; endDrag appends it only when the node actually moved.
         dragRef.current = {
           kind: 'node',
           id,
@@ -451,6 +463,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           cY: e.clientY,
           startX: node.x,
           startY: node.y,
+          moved: false,
+          pre: JSON.stringify(docRef.current),
         };
         el.setPointerCapture(e.pointerId);
       }
@@ -487,18 +501,49 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     if (dr.kind === 'pan') {
       setViewState({ ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy });
     } else if (dr.id) {
+      if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       const z = viewRef.current.z;
-      patchNode(dr.id, { x: dr.startX + dx / z, y: dr.startY + dy / z }, false);
+      const nx = dr.startX + dx / z;
+      const ny = dr.startY + dy / z;
+      dr.moved = true;
+      const node = docRef.current?.nodes.find((n) => n.id === dr.id);
+      if (!node) return;
+      node.x = nx;
+      node.y = ny;
+      // Patch the live node DOM element directly — no full-board re-render
+      // (setDoc) on every pointermove. Edges catch up on release.
+      const el = containerRef.current?.querySelector<HTMLElement>(`.cn-node[data-id="${dr.id}"]`);
+      if (el) {
+        el.style.left = `${nx}px`;
+        el.style.top = `${ny}px`;
+      }
     }
   };
 
   const endDrag = (e: any) => {
+    const dr = dragRef.current;
     dragRef.current = null;
     try {
       (e.target as Element).closest?.('.canvas-root')?.releasePointerCapture?.(e.pointerId);
     } catch {
       /* already released */
     }
+    if (!dr || dr.kind !== 'node' || !dr.id || !dr.moved) return;
+    const cur = docRef.current;
+    if (!cur) return;
+    // A real drag: commit exactly ONE undo entry from the pre-drag snapshot,
+    // then one re-render with the final positions. Plain clicks (moved=false)
+    // never touch history or write anything.
+    if (dr.pre) {
+      histRef.current = [...histRef.current.slice(-(HISTORY_DEPTH - 1)), dr.pre];
+      setCanUndo(true);
+    }
+    redoRef.current = [];
+    setCanRedo(false);
+    const next = { ...cur, nodes: cur.nodes.map((n) => n) };
+    docRef.current = next;
+    setDoc(next);
+    scheduleSave();
   };
 
   // ── editing (inline textarea) ───────────────────────────────

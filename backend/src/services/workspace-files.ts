@@ -12,6 +12,11 @@ import { IGNORED_DIRS, invalidateProjectContext } from './project-context';
 
 const MAX_PREVIEW_CHARS = 200 * 1024;
 
+/** Hard cap on directory-list rows — huge dirs get a truncated flag instead
+ *  of shipping a multi-thousand-row array to the Files tab. Totals below
+ *  (fileCount/totalBytes) always reflect the FULL directory, never the slice. */
+const MAX_LIST_ENTRIES = 1000;
+
 export interface FileEntry {
   path: string;
   type: 'file' | 'dir';
@@ -161,7 +166,10 @@ export function listWorkspaceFiles(slug: string, rel?: string): FileListing {
     return a.path.localeCompare(b.path);
   });
 
-  return { entries, fileCount, dirCount, totalBytes, truncated: false };
+  const truncated = entries.length > MAX_LIST_ENTRIES;
+  const listed = truncated ? entries.slice(0, MAX_LIST_ENTRIES) : entries;
+
+  return { entries: listed, fileCount, dirCount, totalBytes, truncated };
 }
 
 export interface FilePreview {

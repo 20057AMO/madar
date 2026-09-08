@@ -604,7 +604,7 @@ export function Project({ params }: { params: { slug: string } }) {
 
       <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
         {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
-        {tab === 'chat' && <ProjectChat slug={slug} />}
+        {tab === 'chat' && <ProjectChat slug={slug} readOnly={readOnly} />}
         {tab === 'files' && <FilesPanel slug={slug} />}
         {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
         {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
@@ -1656,7 +1656,7 @@ function fileTypeMeta(name: string, type: 'file' | 'dir'): { Icon: any; color: s
 function FilesPanel({ slug }: { slug: string }) {
   const [cwd, setCwd] = useState('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [meta, setMeta] = useState<{ fileCount: number; totalBytes: number } | null>(null);
+  const [meta, setMeta] = useState<{ fileCount: number; totalBytes: number; truncated?: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<FilePreview | null>(null);
@@ -1704,7 +1704,7 @@ function FilesPanel({ slug }: { slug: string }) {
       const l = await listProjectFiles(slug, dir || undefined);
       if (seq !== loadSeqRef.current) return;
       setEntries(l.entries);
-      setMeta({ fileCount: l.fileCount, totalBytes: l.totalBytes });
+      setMeta({ fileCount: l.fileCount, totalBytes: l.totalBytes, truncated: l.truncated });
     } catch (err: any) {
       if (seq !== loadSeqRef.current) return;
       setError(err.message);
@@ -1879,6 +1879,7 @@ function FilesPanel({ slug }: { slug: string }) {
           {meta && (
             <span class="dim" style="color: var(--text-3); font-size:0.72rem">
               {meta.fileCount} files · {fmtBytes(meta.totalBytes)}
+              {meta.truncated && <span title="Directory has more entries than the listing shows"> · list capped</span>}
             </span>
           )}
           <input
