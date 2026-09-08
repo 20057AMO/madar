@@ -2,6 +2,18 @@
 
 > **Naming (2026-08)**: the product was renamed **WSD-Pro → Madar (مدار)**. All user-facing strings, docs and baked opencode content say Madar; the GitHub repo is now `20057AMO/madar` and backup downloads are named `madar-backup-*.json` (legacy `wsd-pro-backup` exports still importable). Deliberately KEPT for data/infra compatibility: `wsd.*` localStorage keys, `WSD_*` env vars, docker resource names (`wsd-pro` container, `wsd-pro-app` image, `wsd-<slug>` project containers, `wsd/workspace` image), JWT default-secret literals, the per-project goals filename `WSD_PROJECT.md`, and the legacy `wsd-pro-backup` import marker alongside the new `madar-backup`.
 
+## Vertical Goal (الهدف الرأسي)
+
+**Madar is an excellent, professional environment for a development team — بيئة متكاملة واحترافية لفريق تطوير.**
+
+The product unifies the whole development lifecycle in one place:
+- **بيئة تطوير مستقلة لكل مشروع** — حاوية خاصة + محرر VS Code مضمّن + طرفية + ملفات + سجلات
+- **تخطيط وتوثيق** — لوحة التخطيط البصري (Canvas) + ملاحظات (أفكار/أخطاء/أهداف) + نظرة سياق ذكية
+- **ذكاء اصطناعي مدمج** — opencode + وكلاء/مهارات/أوامر + محادثة بسياق المشروع الكامل
+- **تعاون وفريق** — أعضاء وأدوار وصلاحيات + لقطات/نسخ احتياطية + مراقبة وتنبيهات + مقاييس تخزين
+
+كل ميزة أو تعديل يجب أن يخدم هذا الهدف: بيئة واحدة احترافية يعمل فيها الفريق من التخطيط إلى التطوير والاختبار والإنتاج.
+
 ## Docker Rebuild Rule
 
 After every code change to `frontend/` or `backend/`, always rebuild and restart the container:
@@ -357,23 +369,48 @@ Every completed task ends with a commit pushed to GitHub; no uncommitted changes
 ### Testing note
 Run the affected suites after a change: `cd backend && node --test --test-concurrency=1 "tests/**/*.test.ts"` (always serial — parallel runs + browser polling can trip the rate limiter). **The dev container runs `WSD_TESTING=0`** (production rate-limiter budgets), so the full suite 429s on project creation there — only the offline suites (`*-core.test.ts`, `serve-core`, `snapshots-schedule`, `alerts-core`, …) run reliably against it. The complete suite needs the suite container with `WSD_TESTING=1`.
 
-## Development Phases
+## Development Phases & Goals (مراحل التطوير والأهداف)
 
-The application progresses through three distinct phases:
+The application progresses through three distinct phases, in order. All three are the current goals of the project — each builds on the one before:
 
-### Phase 1: New Features
+### Phase 1 — New Features (الميزات الجديدة) — **الحالية (current)**
 Adding new capabilities and functionality to the application.
 Every new feature must be built, tested, and committed.
 
-### Phase 2: Improvements
-Enhancing and refining existing features.
+### Phase 2 — Improvements (التحسينات — الهدف التالي)
+Enhancing and refining existing features — UX, performance, reliability of what already exists.
 Every improvement must be verified to not break existing behavior.
 
-### Phase 3: Full Testing & Production Readiness
+### Phase 3 — Full Testing & Production Readiness (الاختبار الشامل والجاهزية الإنتاجية)
 End-to-end testing based on real-world scenarios.
 Act as a real user configuring the application for deployment.
 The goal: a fully working production machine ready for daily use.
 
+## Feature Roadmap (خريطة الميزات المطلوبة)
+
+الأهداف المقبلة بعد اكتمال الميزات الحالية، مرتبة حسب الأولوية — كلها تخدم الهدف الرأسي:
+
+### فريق العمل والتعاون (Team & Collaboration)
+- **حساب المستخدم (User Account)** — *الميزة الأولى المطلوبة*: صفحة بروفايل لكل مستخدم للتعديل: الاسم/الاسم المعروض/البريد + **إضافة صورة للمستخدم (avatar)** + إعدادات شخصية، وربطها في واجهة الحضور/الفريق (Team/Presence)
+- تحسين إدارة الفريق: عرض أوضح للأعضاء والأدوار، تدفّق أفضل لنقل الملكية
+- نشاط لكل مشروع: من قام بماذا ومتى، مع رؤية مبسطة
+- مراجعات/تعليقات على الملفات والكود داخل المنصة
+
+### تعميق الذكاء الاصطناعي (AI Depth)
+- تكامل أعمق مع opencode والوكلاء/المهارات/الأوامر (الاستوديو الموسّع)
+- تلقائية ذكية: ملخصات مشروع دورية، اقتراحات تخطيط من اللوحة والملاحظات
+- مساعدة جودة الكود: مراجعة تلقائية قبل commit
+
+### الموثوقية والعمليات (Reliability & Ops)
+- مراقبة موارد متقدمة (CPU/RAM/قرص لكل مشروع) + تنبيهات
+- أتمتة النسخ الاحتياطي مع تحقّق دوري من الاستعادة
+- استقرار الحاويات والطرفيات: معالجة الجلسات اليتيمة والارتباطات العالقة
+
+### جاهزية الإنتاج والاختبار (Production & Testing Readiness)
+- توسيع تغطية الاختبارات (وحدات + E2E + مصفوفة وصول)
+- اختبارات ضغط/أداء على الحاويات
+- إصلاح الأخطاء المعروفة + توثيق شامل للمستخدم (AR/EN)
+
 ## Current Phase
 
-**Phase 1: New Features**
+**Phase 1: New Features (الميزات الجديدة)** — التطوير النشط قائم الآن؛ الهدف التالي المعلن هو **حساب المستخدم والبروفايل** (صورة مستخدم + تعديل بيانات + إعدادات شخصية)، يليه تحسينات Phase 2 ثم اختبار Phase 3.
