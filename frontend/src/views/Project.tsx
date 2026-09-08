@@ -75,6 +75,19 @@ const TAB_LABELS: Record<Tab, string> = {
   canvas: 'Canvas',
 };
 
+const TAB_EMOJI: Record<Tab, string> = {
+  overview: '🏠',
+  chat: '🤖',
+  files: '📁',
+  logs: '📜',
+  terminal: '⌨️',
+  notes: '📝',
+  scripts: '⚙️',
+  team: '👥',
+  snapshots: '📸',
+  canvas: '🎨',
+};
+
 function fmtBytes(bytes: number): string {
   if (!bytes) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
@@ -597,6 +610,7 @@ export function Project({ params }: { params: { slug: string } }) {
             data-tab={t}
             onClick={() => setTab(t)}
           >
+            <span class="tab-emoji" aria-hidden="true">{TAB_EMOJI[t]}</span>
             {TAB_LABELS[t]}
           </button>
         ))}
@@ -1697,6 +1711,23 @@ function FilesPanel({ slug }: { slug: string }) {
     if (renaming && renameInputRef.current) renameInputRef.current.focus();
   }, [renaming]);
 
+  const popupCloseRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!preview) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    popupCloseRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closePreview();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [preview]);
+
   const load = async (dir: string) => {
     const seq = ++loadSeqRef.current;
     setLoading(true);
@@ -1976,60 +2007,70 @@ function FilesPanel({ slug }: { slug: string }) {
       </div>
 
       {preview && (
-        <div class="file-preview">
-          <div class="file-preview-head">
-            <h3 class="file-preview-name"><span class="mono">{previewName}</span></h3>
-            {editContent !== null && editContent !== preview.content && (
-              <span class="dim" style="color: var(--warn, #eab308); font-size:0.72rem">• unsaved</span>
-            )}
-            <span class="dim" style="color: var(--text-3); font-size:0.72rem">
-              {preview.binary ? `${fmtBytes(preview.size)} · binary` : `${fmtBytes(preview.size)}${preview.truncated ? ' · read-only (too large)' : ''}`}
-            </span>
-            {editContent !== null && (
-              <button class="btn-primary sm" onClick={saveFile} disabled={savingFile}>
-                {savingFile ? 'Saving…' : 'Save'}
+        <div
+          class="modal-overlay"
+          onMouseDown={(e: any) => { if (e.target === e.currentTarget) closePreview(); }}
+        >
+          <div
+            class="modal-card file-popup-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Preview ${previewName}`}
+          >
+            <div class="file-preview-head">
+              <h3 class="file-preview-name"><span class="mono">{previewName}</span></h3>
+              {editContent !== null && editContent !== preview.content && (
+                <span class="dim" style="color: var(--warn, #eab308); font-size:0.72rem">• unsaved</span>
+              )}
+              <span class="dim" style="color: var(--text-3); font-size:0.72rem">
+                {preview.binary ? `${fmtBytes(preview.size)} · binary` : `${fmtBytes(preview.size)}${preview.truncated ? ' · read-only (too large)' : ''}`}
+              </span>
+              {editContent !== null && (
+                <button class="btn-primary sm" onClick={saveFile} disabled={savingFile}>
+                  {savingFile ? 'Saving…' : 'Save'}
+                </button>
+              )}
+              <button class="btn-ghost sm" onClick={() => downloadFile(previewName)} title="Download file" aria-label="Download file">
+                <Download width={12} height={12} class="icon" /> Download
               </button>
+              <button class="btn-ghost sm" ref={popupCloseRef} onClick={closePreview}>Close</button>
+            </div>
+            {fileMsg && (
+              <div
+                class="terminal-line"
+                style="margin: 6px 0"
+                role={fileMsg.startsWith('Save failed') ? 'alert' : 'status'}
+              >{fileMsg}</div>
             )}
-            <button class="btn-ghost sm" onClick={() => downloadFile(previewName)} title="Download file" aria-label="Download file">
-              <Download width={12} height={12} class="icon" /> Download
-            </button>
-            <button class="btn-ghost sm" onClick={closePreview}>Close</button>
-          </div>
-          {fileMsg && (
-            <div
-              class="terminal-line"
-              style="margin: 6px 0"
-              role={fileMsg.startsWith('Save failed') ? 'alert' : 'status'}
-            >{fileMsg}</div>
-          )}
-          {preview.binary ? (
-            imgUrl ? (
-              <div class="file-image-view" style="max-height:480px;overflow:auto;padding:14px;display:flex;justify-content:center;background:#0a0b0e">
-                <img src={imgUrl} alt={previewName} style="max-width:100%;height:auto;border-radius:6px;object-fit:contain" />
-              </div>
-            ) : imgLoading ? (
-              <div class="empty-state" style="padding: 24px">Loading image…</div>
-            ) : isImagePath(previewName) ? (
-              <div class="empty-state" style="padding: 24px">Could not load this image.</div>
+            {preview.binary ? (
+              imgUrl ? (
+                <div class="file-image-view" style="max-height:60vh;overflow:auto;padding:14px;display:flex;justify-content:center;background:#0a0b0e">
+                  <img src={imgUrl} alt={previewName} style="max-width:100%;height:auto;border-radius:6px;object-fit:contain" />
+                </div>
+              ) : imgLoading ? (
+                <div class="empty-state" style="padding: 24px">Loading image…</div>
+              ) : isImagePath(previewName) ? (
+                <div class="empty-state" style="padding: 24px">Could not load this image.</div>
+              ) : (
+                <div class="empty-state" style="padding: 24px">Binary file — not previewable. Use the Download button.</div>
+              )
+            ) : editContent !== null && !preview.truncated ? (
+              <textarea
+                class="file-editor mono scrollbar"
+                value={editContent}
+                onInput={(e: any) => setEditContent(e.target.value)}
+                onKeyDown={(e: any) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                    e.preventDefault();
+                    saveFile();
+                  }
+                }}
+                spellcheck={false}
+              />
             ) : (
-              <div class="empty-state" style="padding: 24px">Binary file — not previewable. Use the Download button.</div>
-            )
-          ) : editContent !== null && !preview.truncated ? (
-            <textarea
-              class="file-editor mono scrollbar"
-              value={editContent}
-              onInput={(e: any) => setEditContent(e.target.value)}
-              onKeyDown={(e: any) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-                  e.preventDefault();
-                  saveFile();
-                }
-              }}
-              spellcheck={false}
-            />
-          ) : (
-            <pre class="file-preview-body mono scrollbar">{preview.content}</pre>
-          )}
+              <pre class="file-preview-body mono scrollbar">{preview.content}</pre>
+            )}
+          </div>
         </div>
       )}
 
