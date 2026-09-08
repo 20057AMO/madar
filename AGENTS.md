@@ -179,7 +179,7 @@ Dockerfile.workspace — Ubuntu 24.04 base image for project containers
 ### Project notes (ideas / bugs / goals)
 - Per-project structured notes stored in `data/projects/<slug>/notes.json` (`services/project-notes.ts`): items `{id, text, kind: 'idea'|'bug'|'goal', done, createdAt}` — ≤300 items, text ≤2000 chars, junk rows dropped silently on normalize, unknown kinds default to `idea`
 - API: `GET/PUT /api/projects/:slug/notes` (full-document PUT; 400 without `items` array or over cap) — covered by `tests/project-notes.test.ts`
-- Project page tab "Notes" (NotesPanel) replaced the per-project terminal: quick composer with kind selector (Ctrl+Enter), filter chips with live counts, done toggle (completed hidden by default + "Show completed"), delete
+- Project page tab "Notes" (NotesPanel) sits where the per-project terminal used to live (the terminal is restored as its own tab again): quick composer with kind selector (Ctrl+Enter), filter chips with live counts, done toggle (completed hidden by default + "Show completed"), delete
 - **Smart context**: `formatNotesForContext()` renders open bugs → active goals → ideas into the AI context block (section `[Developer notes]`, priority right after WSD_PROJECT.md goals, ~2500 char cap, done items summarized as a count); `noteCounts()` appends `— notes: N open bug(s), M active goal(s)` to every project line in the 'all' brief; the context cache key includes a notes mtime:size signature so edits invalidate immediately
 - ws-chat and ws-agent inherit everything automatically via `getProjectContext` — no per-surface wiring
 
