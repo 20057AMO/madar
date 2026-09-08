@@ -33,6 +33,7 @@ import {
   getProjectNotes,
 } from '../api';
 import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection } from '../api';
+import { ConfirmModal } from './ConfirmModal';
 
 /**
  * ProjectCanvas — an infinite pan/zoom whiteboard for planning one project.
@@ -88,6 +89,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [addSectionOpen, setAddSectionOpen] = useState(false);
+  const [confirmDelSection, setConfirmDelSection] = useState<string | null>(null);
+  /** Cascade counter so rapid adds never stack new nodes on the viewport center. */
+  const addSeqRef = useRef(0);
 
   const [view, setView] = useState<ViewState>({ x: 40, y: 40, z: 1 });
   const [canUndo, setCanUndo] = useState(false);
@@ -317,13 +321,18 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const r = el?.getBoundingClientRect();
     const cx = r ? (r.width / 2 - viewRef.current.x) / viewRef.current.z : 60;
     const cy = r ? (r.height / 2 - viewRef.current.y) / viewRef.current.z : 60;
+    // Cascade successive adds in a visible fan (large steps relative to the
+    // 220×100 node) so rapid FAB/N/C creates never stack at the exact center.
+    const seq = addSeqRef.current++;
+    const offX = (seq % 4) * 90;
+    const offY = Math.floor(seq / 4) * 90;
     const id = freshId('n');
     const node: CanvasNode = {
       id,
       type,
       text: '',
-      x: cx - 110,
-      y: cy - 50,
+      x: cx - 110 + offX,
+      y: cy - 50 + offY,
       w: 220,
       h: type === 'card' ? 120 : 100,
       color: type === 'card' ? 'blue' : 'yellow',
@@ -444,6 +453,24 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       });
       setSelNodes([]);
     }
+  };
+
+  const removeNode = (id: string) => {
+    mutate((d) => {
+      const keep = d.nodes.filter((n) => n.id !== id);
+      return {
+        ...d,
+        nodes: keep,
+        edges: d.edges.filter((e) => e.from !== id && e.to !== id),
+      };
+    });
+    setSelNodes((prev) => prev.filter((x) => x !== id));
+    setSelEdge(null);
+  };
+
+  const removeEdge = (id: string) => {
+    mutate((d) => ({ ...d, edges: d.edges.filter((e) => e.id !== id) }));
+    setSelEdge(null);
   };
 
   const bringToFront = () => {
@@ -649,6 +676,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const target = e.target as HTMLElement;
     const nodeEl = (target as Element).closest?.('.cn-node');
     const edgeEl = (target as Element).closest?.('.cn-edge');
+
+    // Commit the open text editor on any pointer-down outside the node being
+    // edited — clicking another node, the background or a section must close it.
+    if (editing && nodeEl?.getAttribute('data-id') !== editing) {
+      setEditing(null);
+    }
 
     if (e.button === 2) return;
 
@@ -1055,7 +1088,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 <span class="cn-section-name">{s.name}</span>
                 <span class="cn-section-count">{count}</span>
                 {!readOnly && (
-                  <button class="cn-section-del" aria-label={`Delete section ${s.name}`} onClick={() => removeSection(s.id)}>
+                  <button class="cn-section-del" aria-label={`Delete section ${s.name}`} onClick={() => setConfirmDelSection(s.id)}>
                     <X width={12} height={12} />
                   </button>
                 )}
@@ -1230,7 +1263,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                     </>
                   ) : null}
                   <span class="cn-ctx-sep" />
-                  <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); removeSelected(); closeCtxMenu(); }}>
+                  <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { removeNode(ctxMenu.nodeId!); closeCtxMenu(); }}>
                     <Trash2 width={14} height={14} /> Delete
                   </button>
                 </>
@@ -1239,7 +1272,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           ) : ctxMenu.edgeId ? (
             <>
               {!readOnly && (
-                <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { setSelEdge(ctxMenu.edgeId!); removeSelected(); closeCtxMenu(); }}>
+                <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { removeEdge(ctxMenu.edgeId!); closeCtxMenu(); }}>
                   <Trash2 width={14} height={14} /> Delete arrow
                 </button>
               )}
@@ -1402,6 +1435,19 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={!!confirmDelSection}
+        title={`Delete section '${doc?.sections?.find((s) => s.id === confirmDelSection)?.name ?? ''}'?`}
+        message="Nodes inside it stay on the board but lose their section."
+        confirmLabel="Delete section"
+        danger
+        onCancel={() => setConfirmDelSection(null)}
+        onConfirm={() => {
+          if (confirmDelSection) removeSection(confirmDelSection);
+          setConfirmDelSection(null);
+        }}
+      />
     </div>
   );
 }
