@@ -602,7 +602,7 @@ export function Project({ params }: { params: { slug: string } }) {
       </nav>
 
       <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
-        {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
+        {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} onNavigateTab={setTab} />}
         {tab === 'chat' && <ProjectChat slug={slug} />}
         {tab === 'files' && <FilesPanel slug={slug} />}
         {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
@@ -634,6 +634,7 @@ function OverviewPanel({
   readOnly,
   onChanged,
   onError,
+  onNavigateTab,
 }: {
   slug: string;
   project: Project | null;
@@ -641,6 +642,7 @@ function OverviewPanel({
   readOnly: boolean;
   onChanged: () => void;
   onError: (msg: string) => void;
+  onNavigateTab?: (tab: Tab) => void;
 }) {
   const [, setLocation] = useHashLocation();
   const [stats, setStats] = useState<ProjectStats | null>(null);
@@ -1108,6 +1110,16 @@ function OverviewPanel({
           <button type="button" class={`ov-nav-btn${activeSec === 'ov-activity' ? ' active' : ''}`} onClick={() => setActiveSec('ov-activity')}>
             Activity
           </button>
+          {onNavigateTab && (
+            <>
+              <span class="ov-nav-sep" aria-hidden="true" />
+              {VALID_TABS.filter((t) => t !== 'overview').map((t) => (
+                <button type="button" class="ov-nav-btn" key={t} onClick={() => onNavigateTab(t)}>
+                  {TAB_LABELS[t]}
+                </button>
+              ))}
+            </>
+          )}
         </nav>
 
       {/* ── Links & health ── */}
