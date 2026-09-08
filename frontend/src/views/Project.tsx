@@ -468,7 +468,7 @@ export function Project({ params }: { params: { slug: string } }) {
                 aria-label="Project name"
               />
             ) : (
-              <h1 class="detail-title" style="display:inline-flex;align-items:center;gap:6px">
+              <h1 class="detail-title" style="display:inline-flex;align-items:center;gap:6px; margin-bottom:10px;">
                 {project?.name || 'Loading…'}
                 {!readOnly && (
                   <button
@@ -513,7 +513,7 @@ export function Project({ params }: { params: { slug: string } }) {
         <div class="detail-actions">
           <div class="header-overflow">
             <button class="btn-ghost sm" onClick={() => setLocation(`/terminals/${slug}`)}>Terminals</button>
-            <button class="btn-ghost sm" onClick={openIde}><ExternalLink width={13} height={13} class="icon" /> Open IDE</button>
+            <button class="btn-ghost sm" onClick={openIde}><ExternalLink width={13} height={13} class="icon" /> Open Code</button>
             <span class="detail-action-sep" aria-hidden="true" />
             <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — backup requires editor access' : 'Download a snapshot of the project as tar.gz'}>
               <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
@@ -536,7 +536,7 @@ export function Project({ params }: { params: { slug: string } }) {
             {moreOpen && (
               <div class="header-menu" role="menu">
                 <button role="menuitem" onClick={() => { setMoreOpen(false); setLocation(`/terminals/${slug}`); }}>Terminals</button>
-                <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><ExternalLink width={13} height={13} class="icon" /> Open IDE</button>
+                <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><ExternalLink width={13} height={13} class="icon" /> Open Code</button>
                 <div class="header-menu-sep" role="separator" />
                 <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title="Download snapshot as tar.gz">
                   <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
@@ -1090,9 +1090,6 @@ function OverviewPanel({
 
       {/* ── Quick-nav ── */}
         <nav class="ov-nav" aria-label="Overview sections">
-          <button type="button" class={`ov-nav-btn${activeSec === 'ov-ctx' ? ' active' : ''}`} onClick={() => setActiveSec('ov-ctx')}>
-            AI Context
-          </button>
           <button type="button" class={`ov-nav-btn${activeSec === 'ov-links' ? ' active' : ''}`} onClick={() => setActiveSec('ov-links')}>
             Links &amp; health
           </button>
@@ -1101,6 +1098,9 @@ function OverviewPanel({
           </button>
           <button type="button" class={`ov-nav-btn${activeSec === 'ov-config' ? ' active' : ''}`} onClick={() => setActiveSec('ov-config')}>
             Configuration
+          </button>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-ctx' ? ' active' : ''}`} onClick={() => setActiveSec('ov-ctx')}>
+            AI Context
           </button>
           <button type="button" class={`ov-nav-btn${activeSec === 'ov-runtime' ? ' active' : ''}`} onClick={() => setActiveSec('ov-runtime')}>
             Runtime
