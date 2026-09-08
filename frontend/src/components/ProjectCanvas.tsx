@@ -13,6 +13,8 @@ import {
   Trash2,
   Sparkles,
   Lock,
+  Copy,
+  CopyPlus,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -62,8 +64,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [saveState, setSaveState] = useState<'dirty' | 'saving' | 'saved'>('saved');
   const [savedAt, setSavedAt] = useState('');
 
-  const [selNode, setSelNode] = useState<string | null>(null);
+  const [selNodes, setSelNodes] = useState<string[]>([]);
   const [selEdge, setSelEdge] = useState<string | null>(null);
+  // Primary (first) selected node — most UI reads only the head of the set.
+  const selNode = selNodes[0] ?? null;
   const [editing, setEditing] = useState<string | null>(null);
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -80,7 +84,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const dirtyRef = useRef(false);
   const dragRef = useRef<null | {
     kind: 'node' | 'pan';
-    id?: string;
+    ids?: string[];
+    /** World positions of every dragged node at drag start. */
+    startPos?: Record<string, { x: number; y: number }>;
     cX: number;
     cY: number;
     startX: number;
@@ -217,6 +223,62 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
   };
 
+  const copyRef = useRef<CanvasNode[] | null>(null);
+  const pasteCountRef = useRef(0);
+
+  const duplicateSelected = () => {
+    if (!selNodes.length || readOnly) return;
+    const d = docRef.current;
+    if (!d) return;
+    const maxNew = MAX_NODES - d.nodes.length;
+    if (maxNew <= 0) { setNotice(`Canvas limit reached (${MAX_NODES} nodes)`); return; }
+    const budget = Math.min(selNodes.length, maxNew);
+    const src = selNodes.slice(0, budget).map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
+    if (!src.length) return;
+    const ids: string[] = [];
+    const nodes: CanvasNode[] = src.map((s) => {
+      const id = freshId('n');
+      ids.push(id);
+      return { ...s, id, x: s.x + 24, y: s.y + 24 };
+    });
+    mutate((prev) => ({ ...prev, nodes: [...prev.nodes, ...nodes] }));
+    setSelNodes(ids);
+    pasteCountRef.current = 0;
+  };
+
+  const copySelected = () => {
+    if (!selNodes.length) return;
+    const d = docRef.current;
+    if (!d) return;
+    const nodes = selNodes.map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
+    copyRef.current = nodes;
+    try { navigator.clipboard.writeText(JSON.stringify(nodes)); } catch { /* best-effort */ }
+    pasteCountRef.current = 0;
+    setNotice(`Copied ${nodes.length} node(s)`);
+  };
+
+  const pasteFromClipboard = () => {
+    const nodes = copyRef.current;
+    if (!nodes || !nodes.length) return;
+    if (readOnly) return;
+    const d = docRef.current;
+    if (!d) return;
+    const maxNew = MAX_NODES - d.nodes.length;
+    if (maxNew <= 0) { setNotice(`Canvas limit reached (${MAX_NODES} nodes)`); return; }
+    const budget = Math.min(nodes.length, maxNew);
+    if (budget < nodes.length) setNotice(`Canvas limit — pasted ${budget} of ${nodes.length}`);
+    const off = 24 + pasteCountRef.current * 20;
+    pasteCountRef.current += 1;
+    const newIds: string[] = [];
+    const newNodes: CanvasNode[] = nodes.slice(0, budget).map((n) => {
+      const id = freshId('n');
+      newIds.push(id);
+      return { ...n, id, x: n.x + off, y: n.y + off };
+    });
+    mutate((prev) => ({ ...prev, nodes: [...prev.nodes, ...newNodes] }));
+    setSelNodes(newIds);
+  };
+
   const patchNode = (id: string, patch: Partial<CanvasNode>, withHistory = true) => {
     mutate(
       (d) => ({ ...d, nodes: d.nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)) }),
@@ -248,7 +310,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       done: false,
     };
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
-    setSelNode(id);
+    setSelNodes([id]);
     setSelEdge(null);
     setEditing(id); // type straight into the new node
     setMenuOpen(false);
@@ -267,13 +329,18 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     if (selEdge) {
       mutate((d) => ({ ...d, edges: d.edges.filter((e) => e.id !== selEdge) }));
       setSelEdge(null);
-    } else if (selNode) {
-      mutate((d) => ({
-        ...d,
-        nodes: d.nodes.filter((n) => n.id !== selNode),
-        edges: d.edges.filter((e) => e.from !== selNode && e.to !== selNode),
-      }));
-      setSelNode(null);
+    } else if (selNodes.length) {
+      mutate((d) => {
+        const keep = d.nodes.filter((n) => !selNodes.includes(n.id));
+        return {
+          ...d,
+          nodes: keep,
+          edges: d.edges.filter(
+            (e) => keep.some((n) => n.id === e.from) && keep.some((n) => n.id === e.to)
+          ),
+        };
+      });
+      setSelNodes([]);
     }
   };
 
@@ -381,15 +448,18 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         else undo();
         return;
       }
+      if (meta && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateSelected(); return; }
+      if (meta && (e.key === 'x' || e.key === 'X')) { e.preventDefault(); copySelected(); removeSelected(); return; }
+      if (meta && (e.key === 'v' || e.key === 'V')) { e.preventDefault(); pasteFromClipboard(); return; }
       if (e.key === 'Escape') {
         setConnectFrom(null);
-        setSelNode(null);
+        setSelNodes([]);
         setSelEdge(null);
         setMenuOpen(false);
         if (editing) setEditing(null);
         return;
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && (selNode || selEdge)) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (selNodes.length || selEdge)) {
         e.preventDefault();
         removeSelected();
         return;
@@ -415,7 +485,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [readOnly, selNode, selEdge, editing, connectFrom]);
+  }, [readOnly, selNodes, selEdge, editing, connectFrom]);
 
   // ── pointer interactions (delegated to the canvas root) ─────
   const onPointerDown = (e: any) => {
@@ -430,7 +500,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     if (edgeEl && !readOnly) {
       const id = (edgeEl as HTMLElement).dataset.id!;
       setSelEdge(id);
-      setSelNode(null);
+      setSelNodes([]);
       return;
     }
 
@@ -446,11 +516,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         return;
       }
       if (readOnly) {
-        setSelNode(id);
+        setSelNodes([id]);
         setSelEdge(null);
         return;
       }
-      setSelNode(id);
+      setSelNodes([id]);
       setSelEdge(null);
       if (e.button === 0) {
         // Don't push history on pointer-down: a plain click (no movement)
@@ -458,7 +528,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         // instead; endDrag appends it only when the node actually moved.
         dragRef.current = {
           kind: 'node',
-          id,
+          ids: [id],
+          startPos: { [id]: { x: node.x, y: node.y } },
           cX: e.clientX,
           cY: e.clientY,
           startX: node.x,
@@ -487,7 +558,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       el.setPointerCapture(e.pointerId);
     }
     if (e.button === 0) {
-      setSelNode(null);
+      setSelNodes([]);
       setSelEdge(null);
       setMenuOpen(false);
     }
@@ -500,22 +571,25 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const dy = e.clientY - dr.cY;
     if (dr.kind === 'pan') {
       setViewState({ ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy });
-    } else if (dr.id) {
+    } else if (dr.ids && dr.ids.length) {
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       const z = viewRef.current.z;
-      const nx = dr.startX + dx / z;
-      const ny = dr.startY + dy / z;
       dr.moved = true;
-      const node = docRef.current?.nodes.find((n) => n.id === dr.id);
-      if (!node) return;
-      node.x = nx;
-      node.y = ny;
-      // Patch the live node DOM element directly — no full-board re-render
-      // (setDoc) on every pointermove. Edges catch up on release.
-      const el = containerRef.current?.querySelector<HTMLElement>(`.cn-node[data-id="${dr.id}"]`);
-      if (el) {
-        el.style.left = `${nx}px`;
-        el.style.top = `${ny}px`;
+      // Patch every dragged node's DOM element directly — no full-board
+      // re-render (setDoc) on pointermove. Edges catch up on release.
+      for (const id of dr.ids) {
+        const sp = dr.startPos?.[id];
+        const node = docRef.current?.nodes.find((n) => n.id === id);
+        if (!sp || !node) continue;
+        const nx = sp.x + dx / z;
+        const ny = sp.y + dy / z;
+        node.x = nx;
+        node.y = ny;
+        const el = containerRef.current?.querySelector<HTMLElement>(`.cn-node[data-id="${id}"]`);
+        if (el) {
+          el.style.left = `${nx}px`;
+          el.style.top = `${ny}px`;
+        }
       }
     }
   };
@@ -528,7 +602,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     } catch {
       /* already released */
     }
-    if (!dr || dr.kind !== 'node' || !dr.id || !dr.moved) return;
+    if (!dr || dr.kind !== 'node' || !dr.ids?.length || !dr.moved) return;
     const cur = docRef.current;
     if (!cur) return;
     // A real drag: commit exactly ONE undo entry from the pre-drag snapshot,
@@ -619,7 +693,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   e.stopPropagation();
                   if (readOnly) return;
                   setSelEdge(edge.id);
-                  setSelNode(null);
+                  setSelNodes([]);
                 }}
               />
               <line
@@ -700,7 +774,13 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             />
           ))}
           <span class="cn-sel-sep" />
-          <button class="cn-tb-btn" title="Delete (Del)" aria-label="Delete selected node" onClick={removeSelected}>
+          <button class="cn-tb-btn" title="Duplicate (Ctrl+D)" aria-label="Duplicate selected" onClick={duplicateSelected}>
+            <CopyPlus width={14} height={14} />
+          </button>
+          <button class="cn-tb-btn" title="Copy (Ctrl+C)" aria-label="Copy selected" onClick={copySelected}>
+            <Copy width={14} height={14} />
+          </button>
+          <button class="cn-tb-btn" title="Delete (Del)" aria-label="Delete selected" onClick={removeSelected}>
             <Trash2 width={14} height={14} />
           </button>
         </div>
@@ -752,7 +832,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         >
           {renderEdges()}
           {doc?.nodes.map((n) => {
-            const isSel = selNode === n.id;
+            const isSel = selNodes.includes(n.id);
             const isEditing = editing === n.id;
             return (
               <div
