@@ -36,6 +36,8 @@ export interface CanvasNode {
   h: number;
   color: CanvasColor;
   done?: boolean;
+  /** Optional swimlane/section id this node belongs to. */
+  section?: string;
 }
 
 export interface CanvasEdge {
@@ -44,16 +46,26 @@ export interface CanvasEdge {
   to: string;
 }
 
+export interface CanvasSection {
+  id: string;
+  name: string;
+  /** Swatch color for the section header/lane. */
+  color: CanvasColor;
+}
+
 export interface ProjectCanvas {
   version: 1;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
+  /** Optional horizontal swimlanes grouping nodes. */
+  sections?: CanvasSection[];
   updatedAt: string | null;
 }
 
 export const MAX_NODES = 200;
 export const MAX_EDGES = 400;
 export const MAX_TEXT = 2000;
+export const MAX_SECTIONS = 12;
 
 const COLORS: CanvasColor[] = ['yellow', 'blue', 'red', 'green'];
 
@@ -80,10 +92,21 @@ function freshId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeSection(raw: unknown): CanvasSection | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  return {
+    id: nodeId(r.id, freshId('s')),
+    name: typeof r.name === 'string' ? r.name.slice(0, 80) : 'Section',
+    color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
+  };
+}
+
 function normalizeNode(raw: unknown): CanvasNode | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   const type: CanvasNodeType = r.type === 'card' ? 'card' : 'note';
+  const section = typeof r.section === 'string' && /^[a-zA-Z0-9_-]{1,48}$/.test(r.section) ? r.section : undefined;
   return {
     id: nodeId(r.id, freshId('n')),
     type,
@@ -94,6 +117,7 @@ function normalizeNode(raw: unknown): CanvasNode | null {
     h: clampNum(r.h, 40, 900, type === 'card' ? 120 : 100),
     color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
     done: r.done === true,
+    section,
   };
 }
 
@@ -124,6 +148,16 @@ export function loadCanvas(slug: unknown): ProjectCanvas {
       if (node) nodes.push(node);
     }
     const ids = new Set(nodes.map((n) => n.id));
+    const rawSections = Array.isArray(raw?.sections) ? (raw.sections as unknown[]) : [];
+    const sections: CanvasSection[] = [];
+    for (const s of rawSections) {
+      if (sections.length >= MAX_SECTIONS) break;
+      const section = normalizeSection(s);
+      if (section) sections.push(section);
+    }
+    const sectionIds = new Set(sections.map((s) => s.id));
+    // Drop section refs whose section is missing (lean + never dangling).
+    for (const n of nodes) if (n.section && !sectionIds.has(n.section)) delete n.section;
     const edges: CanvasEdge[] = [];
     for (const e of rawEdges) {
       if (edges.length >= MAX_EDGES) break;
@@ -134,6 +168,7 @@ export function loadCanvas(slug: unknown): ProjectCanvas {
       version: 1,
       nodes,
       edges,
+      ...(sections.length ? { sections } : {}),
       updatedAt: typeof raw?.updatedAt === 'string' ? raw.updatedAt : null,
     };
   } catch {
@@ -154,20 +189,35 @@ export function saveCanvas(slug: unknown, input: unknown): ProjectCanvas {
     }
     const rawNodes = r.nodes as unknown[];
     const rawEdges = r.edges as unknown[];
+    const rawSections = Array.isArray(r.sections) ? (r.sections as unknown[]) : [];
     if (rawNodes.length > MAX_NODES) throw new Error(`Too many canvas nodes (max ${MAX_NODES})`);
     if (rawEdges.length > MAX_EDGES) throw new Error(`Too many canvas edges (max ${MAX_EDGES})`);
+    if (rawSections.length > MAX_SECTIONS) throw new Error(`Too many canvas sections (max ${MAX_SECTIONS})`);
     const nodes: CanvasNode[] = [];
     for (const raw of rawNodes) {
       const n = normalizeNode(raw);
       if (n) nodes.push(n);
     }
     const ids = new Set(nodes.map((n) => n.id));
+    const sections: CanvasSection[] = [];
+    for (const raw of rawSections) {
+      const s = normalizeSection(raw);
+      if (s) sections.push(s);
+    }
+    const sectionIds = new Set(sections.map((s) => s.id));
+    for (const n of nodes) if (n.section && !sectionIds.has(n.section)) delete n.section;
     const edges: CanvasEdge[] = [];
     for (const raw of rawEdges) {
       const e = normalizeEdge(raw, ids);
       if (e) edges.push(e);
     }
-    const doc: ProjectCanvas = { version: 1, nodes, edges, updatedAt: new Date().toISOString() };
+    const doc: ProjectCanvas = {
+      version: 1,
+      nodes,
+      edges,
+      ...(sections.length ? { sections } : {}),
+      updatedAt: new Date().toISOString(),
+    };
     fs.mkdirSync(path.dirname(canvasFile(clean)), { recursive: true });
     fs.writeFileSync(canvasFile(clean), JSON.stringify(doc, null, 2), 'utf8');
     refreshCanvasMirror(clean);
@@ -228,12 +278,14 @@ export function canvasNodeCount(slug: unknown): number {
  * every sticky note + task card, done cards counted. Empty canvases return ''.
  */
 export function formatCanvasForContext(slug: unknown, maxChars: number = 1500): string {
-  const { nodes } = loadCanvas(slug);
+  const { nodes, sections } = loadCanvas(slug);
   const withText = nodes.filter((n) => n.text.trim());
   if (!withText.length) return '';
-  const lines = withText.map(
-    (n) => `- [${n.type === 'card' ? (n.done ? 'done' : 'task') : 'note'}] ${n.text.trim()}`
-  );
+  const secName = (id?: string) => sections?.find((s) => s.id === id)?.name;
+  const lines = withText.map((n) => {
+    const sec = n.section && secName(n.section) ? ` [${secName(n.section)}]` : '';
+    return `- [${n.type === 'card' ? (n.done ? 'done' : 'task') : 'note'}]${sec} ${n.text.trim()}`;
+  });
   const doneCount = nodes.filter((n) => n.type === 'card' && n.done).length;
   let text = `[Planning canvas]\n${lines.join('\n')}`;
   if (doneCount > 0) text += `\n(${doneCount} completed card(s))`;

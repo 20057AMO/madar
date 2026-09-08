@@ -2422,6 +2422,84 @@ input[type="file"].modern-file::file-selector-button {
   0%, 100% { transform: scale(1); opacity: 0.7; }
   50% { transform: scale(1.25); opacity: 0.25; }
 }
+.cn-sections-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+.cn-section-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px 2px 3px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: rgba(128, 128, 128, 0.12);
+  border: 1px solid transparent;
+}
+.cn-section-chip.c-yellow { border-color: rgba(250, 204, 21, 0.45); }
+.cn-section-chip.c-blue { border-color: rgba(96, 165, 250, 0.45); }
+.cn-section-chip.c-red { border-color: rgba(248, 113, 113, 0.45); }
+.cn-section-chip.c-green { border-color: rgba(74, 222, 128, 0.45); }
+.cn-section-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+}
+.cn-section-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-section-count {
+  font-size: 0.7rem;
+  color: var(--text-3);
+  background: rgba(128, 128, 128, 0.18);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.cn-section-del {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+}
+.cn-section-del:hover { color: var(--danger); }
+.cn-section-add { display: inline-flex; align-items: center; gap: 4px; }
+.cn-section-input {
+  background: var(--bg);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 0.78rem;
+  width: 130px;
+  outline: none;
+}
+.cn-section-input:focus { border-color: var(--accent); }
+.cn-section-ok {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+}
+.cn-section-select {
+  background: var(--bg);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 4px;
+  font-size: 0.75rem;
+  max-width: 140px;
+  outline: none;
+}
 .cn-save-state {
   display: inline-flex;
   align-items: center;

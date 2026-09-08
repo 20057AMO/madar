@@ -18,13 +18,17 @@ import {
   BringToFront,
   SendToBack,
   Home,
+  Rows3,
+  ChevronRight,
+  ChevronDown,
+  X,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
   saveProjectCanvas,
   getProjectNotes,
 } from '../api';
-import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge } from '../api';
+import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection } from '../api';
 
 /**
  * ProjectCanvas — an infinite pan/zoom whiteboard for planning one project.
@@ -75,6 +79,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [addSectionOpen, setAddSectionOpen] = useState(false);
 
   const [view, setView] = useState<ViewState>({ x: 40, y: 40, z: 1 });
   const [canUndo, setCanUndo] = useState(false);
@@ -331,6 +337,35 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
     mutate((d) => ({ ...d, edges: [...d.edges, { id: freshId('e'), from, to }] }));
   };
+
+  // ── sections (swimlanes) ────────────────────────────────────
+  const MAX_SECTIONS = 12;
+  const addSection = (name: string) => {
+    const cur = docRef.current;
+    if (cur && (cur.sections?.length ?? 0) >= MAX_SECTIONS) {
+      setNotice(`Limit reached (${MAX_SECTIONS} sections)`);
+      return;
+    }
+    const sec: CanvasSection = { id: freshId('s'), name: name.slice(0, 80) || 'Section', color: 'blue' };
+    mutate((d) => ({ ...d, sections: [...(d.sections ?? []), sec] }));
+    setAddSectionOpen(false);
+  };
+  const removeSection = (id: string) => {
+    mutate((d) => ({
+      ...d,
+      sections: (d.sections ?? []).filter((s) => s.id !== id),
+      nodes: d.nodes.map((n) => (n.section === id ? { ...n, section: undefined } : n)),
+    }));
+  };
+  const toggleSection = (id: string) =>
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const setNodeSection = (nodeId: string, section: string | undefined) =>
+    patchNode(nodeId, { section });
 
   const removeSelected = () => {
     if (selEdge) {
@@ -818,6 +853,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   const renderEdges = () => {
     if (!doc || !doc.edges.length) return null;
+    // Hide edges touching a collapsed section.
+    const hidden = new Set(
+      doc.nodes.filter((n) => n.section && collapsedSections.has(n.section)).map((n) => n.id)
+    );
+    const visible = doc.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to));
+    if (!visible.length) return null;
     // Pre-compute a world→SVG path for every edge between live nodes.
     const edgePath = (edge: CanvasEdge): string | null => {
       const a = nodeById(edge.from);
@@ -841,7 +882,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <path d="M 0.5 0.5 L 8.5 5 L 0.5 9.5 z" fill="var(--text-3)" />
           </marker>
         </defs>
-        {doc.edges.map((edge) => {
+        {visible.map((edge) => {
           const d = edgePath(edge);
           if (!d) return null;
           const selectedLine = selEdge === edge.id;
@@ -912,6 +953,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           </button>
         </div>
         <div class="cn-tb-group">
+          {!readOnly && (
+            <button class="cn-tb-btn" title="Add a horizontal section (swimlane)" aria-label="Add section" onClick={() => setAddSectionOpen(true)}>
+              <Rows3 width={15} height={15} />
+              {addSectionOpen ? <span class="cn-tb-hint">name</span> : null}
+            </button>
+          )}
           <button class={`cn-tb-btn ${connectFrom ? 'cn-active' : ''}`} title="Connect nodes (select source, then target)" aria-label="Connect nodes" aria-pressed={!!connectFrom} disabled={readOnly || !selNode} onClick={() => setConnectFrom(connectFrom ? null : selNode)}>
             <Link2 width={15} height={15} />
             {connectFrom ? <span class="cn-tb-hint">pick target</span> : null}
@@ -931,6 +978,51 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         </div>
       </div>
 
+      {/* Sections (swimlanes) bar */}
+      {(doc?.sections?.length || addSectionOpen) && (
+        <div class="cn-sections-bar">
+          {doc?.sections?.map((s) => {
+            const collapsed = collapsedSections.has(s.id);
+            const count = doc.nodes.filter((n) => n.section === s.id).length;
+            return (
+              <span key={s.id} class={`cn-section-chip c-${s.color}`}>
+                <button class="cn-section-toggle" aria-label={collapsed ? 'Expand section' : 'Collapse section'} onClick={() => toggleSection(s.id)}>
+                  {collapsed ? <ChevronRight width={12} height={12} /> : <ChevronDown width={12} height={12} />}
+                </button>
+                <span class="cn-section-name">{s.name}</span>
+                <span class="cn-section-count">{count}</span>
+                {!readOnly && (
+                  <button class="cn-section-del" aria-label={`Delete section ${s.name}`} onClick={() => removeSection(s.id)}>
+                    <X width={12} height={12} />
+                  </button>
+                )}
+              </span>
+            );
+          })}
+          {addSectionOpen && (
+            <span class="cn-section-add">
+              <input
+                autoFocus
+                class="cn-section-input"
+                placeholder="Section name"
+                aria-label="New section name"
+                onKeyDown={(e: any) => {
+                  if (e.key === 'Enter') addSection(e.currentTarget.value);
+                  if (e.key === 'Escape') setAddSectionOpen(false);
+                }}
+                onBlur={() => setAddSectionOpen(false)}
+              />
+              <button class="cn-section-ok" aria-label="Create section" onClick={(e) => {
+                const inp = (e.currentTarget.parentElement as HTMLElement).querySelector('.cn-section-input') as HTMLInputElement;
+                if (inp) addSection(inp.value);
+              }}>
+                <Plus width={14} height={14} />
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Selection toolbar (active while a node is selected) */}
       {selected && !readOnly && (
         <div class="cn-selbar">
@@ -944,6 +1036,25 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               onClick={() => setColor(selected.id, c)}
             />
           ))}
+          {doc?.sections?.length ? (
+            <select
+              class="cn-section-select"
+              title="Move node to section"
+              aria-label="Move selected node to section"
+              value={selected.section ?? ''}
+              onPointerDown={(e: any) => e.stopPropagation()}
+              onClick={(e: any) => e.stopPropagation()}
+              onChange={(e: any) => {
+                e.stopPropagation();
+                setNodeSection(selected.id, e.currentTarget.value || undefined);
+              }}
+            >
+              <option value="">No section</option>
+              {doc.sections.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          ) : null}
           <span class="cn-sel-sep" />
           <button class="cn-tb-btn" title="Bring to front" aria-label="Bring selected to front" onClick={bringToFront}>
             <BringToFront width={14} height={14} />
@@ -1018,6 +1129,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         >
           {renderEdges()}
           {doc?.nodes.map((n) => {
+            if (n.section && collapsedSections.has(n.section)) return null;
             const isSel = selNodes.includes(n.id);
             const isEditing = editing === n.id;
             return (

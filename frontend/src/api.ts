@@ -550,16 +550,23 @@ export interface CanvasNode {
   h: number;
   color: CanvasColor;
   done?: boolean;
+  section?: string;
 }
 export interface CanvasEdge {
   id: string;
   from: string;
   to: string;
 }
+export interface CanvasSection {
+  id: string;
+  name: string;
+  color: CanvasColor;
+}
 export interface ProjectCanvas {
   version: 1;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
+  sections?: CanvasSection[];
   updatedAt: string | null;
 }
 export const getProjectCanvas = (slug: string) =>
