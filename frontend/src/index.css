@@ -2352,6 +2352,49 @@ input[type="file"].modern-file::file-selector-button {
   contain: strict;
 }
 .canvas-root.cn-panning { cursor: grabbing; }
+.canvas-wrap.cn-fullscreen {
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 100vh;
+}
+
+.cn-ctx {
+  position: fixed;
+  z-index: 200;
+  min-width: 205px;
+  max-width: 230px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 0.82rem;
+  color: var(--text-1);
+}
+.cn-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  color: var(--text-1);
+  font-size: 0.82rem;
+  text-align: left;
+  width: 100%;
+}
+.cn-ctx-item:hover { background: var(--bg-3); color: var(--text); }
+.cn-ctx-item .dim { margin-left: auto; }
+.cn-ctx-danger:hover { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
+.cn-ctx-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+.cn-ctx-label { font-size: 0.7rem; color: var(--text-3); padding: 4px 8px 0; }
+.cn-ctx-colors { display: flex; gap: 6px; padding: 4px 8px 6px; }
+.cn-ctx-select { margin: 2px 8px 6px; }
 
 .cn-toolbar {
   display: flex;

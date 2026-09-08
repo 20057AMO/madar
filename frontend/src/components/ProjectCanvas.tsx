@@ -22,6 +22,10 @@ import {
   ChevronRight,
   ChevronDown,
   X,
+  Pencil,
+  ClipboardPaste,
+  Maximize2,
+  Minimize2,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -63,6 +67,7 @@ function clamp(v: number, lo: number, hi: number): number {
 
 export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null as HTMLDivElement | null);
   const [doc, setDoc] = useState<ProjectCanvas | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -70,6 +75,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [notice, setNotice] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'dirty' | 'saving' | 'saved'>('saved');
   const [savedAt, setSavedAt] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string } | null>(null);
 
   const [selNodes, setSelNodes] = useState<string[]>([]);
   const [selEdge, setSelEdge] = useState<string | null>(null);
@@ -366,6 +373,59 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     });
   const setNodeSection = (nodeId: string, section: string | undefined) =>
     patchNode(nodeId, { section });
+
+  // ── fullscreen ──────────────────────────────────────────────
+  const toggleFullscreen = () => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      wrap.requestFullscreen().catch(() => {});
+    }
+  };
+
+  // ── right-click context menu ────────────────────────────────
+  const openCtxMenu = (e: any) => {
+    const t = e.target as Element;
+    const nodeEl = t.closest?.('.cn-node') as HTMLElement | null;
+    const edgeEl = t.closest?.('.cn-edge') as HTMLElement | null;
+    if (nodeEl) {
+      const id = nodeEl.dataset.id ?? '';
+      setSelNodes((prev) => (prev.includes(id) ? prev : [id]));
+      setSelEdge(null);
+    }
+    setCtxMenu({ x: e.clientX, y: e.clientY, nodeId: nodeEl?.dataset.id ?? undefined, edgeId: edgeEl?.dataset.id ?? undefined });
+  };
+  const closeCtxMenu = () => setCtxMenu(null);
+
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onDown = (e: any) => {
+      if ((e.target as Element).closest?.('.cn-ctx')) return;
+      closeCtxMenu();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeCtxMenu();
+    };
+    const onScroll = () => closeCtxMenu();
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onScroll);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', onScroll);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [ctxMenu]);
 
   const removeSelected = () => {
     if (selEdge) {
@@ -920,7 +980,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   };
 
   return (
-    <div class="canvas-wrap">
+    <div class={`canvas-wrap ${isFullscreen ? 'cn-fullscreen' : ''}`} ref={wrapRef}>
       <h2 class="panel-title" style="display:flex;align-items:center;gap:6px">
         Planning canvas
         {!readOnly && <span class="dim" style="font-weight:400;font-size:0.7rem">— drag nodes, double-click to edit, Ctrl+Z to undo</span>}
@@ -942,6 +1002,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           </button>
           <button class="cn-tb-btn" title="Reset view (Home)" aria-label="Reset view" onClick={resetView}>
             <Home width={14} height={14} />
+          </button>
+          <button class="cn-tb-btn" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={toggleFullscreen}>
+            {isFullscreen ? <Minimize2 width={15} height={15} /> : <Maximize2 width={15} height={15} />}
           </button>
         </div>
         <div class="cn-tb-group">
@@ -1111,6 +1174,101 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         </div>
       )}
 
+      {/* Right-click context menu */}
+      {ctxMenu && (
+        <div
+          class="cn-ctx"
+          role="menu"
+          aria-label="Canvas menu"
+          style={{ left: Math.min(ctxMenu.x, window.innerWidth - 230), top: Math.min(ctxMenu.y, window.innerHeight - 320) }}
+          onContextMenu={(e: any) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeCtxMenu();
+          }}
+        >
+          {ctxMenu.nodeId ? (
+            <>
+              {!readOnly && (
+                <button class="cn-ctx-item" role="menuitem" onClick={() => { startEdit(ctxMenu.nodeId!); closeCtxMenu(); }}>
+                  <Pencil width={14} height={14} /> Edit
+                </button>
+              )}
+              {!readOnly && (
+                <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); duplicateSelected(); closeCtxMenu(); }}>
+                  <CopyPlus width={14} height={14} /> Duplicate <span class="dim">Ctrl+D</span>
+                </button>
+              )}
+              {!readOnly && (
+                <>
+                  <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); copySelected(); closeCtxMenu(); }}>
+                    <Copy width={14} height={14} /> Copy <span class="dim">Ctrl+C</span>
+                  </button>
+                  <span class="cn-ctx-sep" />
+                  <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); bringToFront(); closeCtxMenu(); }}>
+                    <BringToFront width={14} height={14} /> Bring to front
+                  </button>
+                  <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); sendToBack(); closeCtxMenu(); }}>
+                    <SendToBack width={14} height={14} /> Send to back
+                  </button>
+                  <span class="cn-ctx-sep" />
+                  <span class="cn-ctx-label">Color</span>
+                  <span class="cn-ctx-colors">
+                    {COLORS.map((c) => (
+                      <button key={c} type="button" class={`cn-dot c-${c} ${doc?.nodes.find((n) => n.id === ctxMenu.nodeId)?.color === c ? 'cn-dot-active' : ''}`} aria-label={`${c} color`} onClick={() => { setColor(ctxMenu.nodeId!, c); closeCtxMenu(); }} />
+                    ))}
+                  </span>
+                  {doc?.sections?.length ? (
+                    <>
+                      <span class="cn-ctx-label">Section</span>
+                      <select class="cn-section-select cn-ctx-select" value={doc.nodes.find((n) => n.id === ctxMenu.nodeId)?.section ?? ''} onClick={(e: any) => e.stopPropagation()} onChange={(e: any) => { setNodeSection(ctxMenu.nodeId!, e.currentTarget.value || undefined); closeCtxMenu(); }}>
+                        <option value="">No section</option>
+                        {doc.sections.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </>
+                  ) : null}
+                  <span class="cn-ctx-sep" />
+                  <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); removeSelected(); closeCtxMenu(); }}>
+                    <Trash2 width={14} height={14} /> Delete
+                  </button>
+                </>
+              )}
+            </>
+          ) : ctxMenu.edgeId ? (
+            <>
+              {!readOnly && (
+                <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { setSelEdge(ctxMenu.edgeId!); removeSelected(); closeCtxMenu(); }}>
+                  <Trash2 width={14} height={14} /> Delete arrow
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              {!readOnly && (
+                <button class="cn-ctx-item" role="menuitem" onClick={() => { addNode('note'); closeCtxMenu(); }}>
+                  <StickyNote width={14} height={14} /> Sticky note <span class="dim">N</span>
+                </button>
+              )}
+              {!readOnly && (
+                <button class="cn-ctx-item" role="menuitem" onClick={() => { addNode('card'); closeCtxMenu(); }}>
+                  <CheckSquare width={14} height={14} /> Task card <span class="dim">C</span>
+                </button>
+              )}
+              {!readOnly && copyRef.current?.length ? (
+                <button class="cn-ctx-item" role="menuitem" onClick={() => { pasteFromClipboard(); closeCtxMenu(); }}>
+                  <ClipboardPaste width={14} height={14} /> Paste <span class="dim">Ctrl+V</span>
+                </button>
+              ) : null}
+              <button class="cn-ctx-item" role="menuitem" onClick={() => { fitView(); closeCtxMenu(); }}>
+                <Maximize width={14} height={14} /> Fit all nodes
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Notice toast */}
       {notice && <div class="cn-notice" role="status">{notice}</div>}
 
@@ -1121,7 +1279,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
-        onContextMenu={(e: any) => e.preventDefault()}
+        onContextMenu={(e: any) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openCtxMenu(e);
+        }}
       >
         <div
           class="cn-world"
