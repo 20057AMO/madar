@@ -2394,6 +2394,7 @@ input[type="file"].modern-file::file-selector-button {
 }
 .cn-tb-btn:disabled { opacity: 0.35; pointer-events: none; }
 .cn-tb-hint { font-size: 0.72rem; color: var(--text-3); }
+.cn-zoom-btn { min-width: 44px; font-variant-numeric: tabular-nums; }
 .cn-save-state {
   display: inline-flex;
   align-items: center;

@@ -17,6 +17,7 @@ import {
   CopyPlus,
   BringToFront,
   SendToBack,
+  Home,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -426,6 +427,23 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     setView(v);
   };
 
+  const resetZoom = () => {
+    const v = viewRef.current;
+    setViewState({ ...v, z: 1 });
+  };
+
+  const resetView = () => {
+    setViewState({ x: 40, y: 40, z: 1 });
+  };
+
+  // Soft grid snap applied only on release so live dragging stays free and the
+  // "no full re-render during move" contract holds.
+  const SNAP = 12;
+  const snapCoord = (n: number) => {
+    const rem = ((n % SNAP) + SNAP) % SNAP;
+    return rem < SNAP / 2 ? n - rem : n + (SNAP - rem);
+  };
+
   const zoomBy = (factor: number, anchor?: { sx: number; sy: number }) => {
     const v = viewRef.current;
     const nz = clamp(v.z * factor, MIN_Z, MAX_Z);
@@ -684,7 +702,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
     redoRef.current = [];
     setCanRedo(false);
-    const next = { ...cur, nodes: cur.nodes.map((n) => n) };
+    const next = {
+      ...cur,
+      nodes: cur.nodes.map((n) =>
+        dr!.ids!.includes(n.id)
+          ? { ...n, x: snapCoord(n.x), y: snapCoord(n.y) }
+          : n
+      ),
+    };
     docRef.current = next;
     setDoc(next);
     scheduleSave();
@@ -807,6 +832,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           </button>
           <button class="cn-tb-btn" title="Fit all nodes" aria-label="Fit all nodes" onClick={fitView}>
             <Maximize width={14} height={14} />
+          </button>
+          <button class="cn-tb-btn cn-zoom-btn" title={`Zoom: ${Math.round(view.z * 100)}% — click to reset to 100%`} aria-label={`Zoom ${Math.round(view.z * 100)}%`} onClick={resetZoom}>
+            {Math.round(view.z * 100)}%
+          </button>
+          <button class="cn-tb-btn" title="Reset view (Home)" aria-label="Reset view" onClick={resetView}>
+            <Home width={14} height={14} />
           </button>
         </div>
         <div class="cn-tb-group">
