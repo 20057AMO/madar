@@ -22,6 +22,7 @@ import { getProjectContext, listProjectsBrief, capText } from '../services/proje
 import { retrieveProject, formatRetrievedChunks } from '../services/project-index';
 import { buildSystemPrompt, getChatConfig } from '../services/chat-config';
 import { checkUserWrite } from '../services/user-write-limiter';
+import { checkProjectAccess } from '../middleware/auth';
 import type { UserRole } from '../services/user-store';
 
 const MAX_PROMPT_CHARS = 20000;
@@ -155,6 +156,21 @@ export function handleChatSocket(
   authUser: { id: string; username: string; role: UserRole; jti?: string } | null,
   onRelease: () => void
 ): void {
+  // Project-level authorization matches the REST surface: 'global' is not a
+  // project (stays open to every authenticated user); any other slug requires
+  // membership to READ the room and editor-level access to WRITE it. System
+  // admins always pass; legacy projects without membership data stay open.
+  const notGlobal = slug !== 'global';
+  const ctx = notGlobal
+    ? { read: checkProjectAccess(authUser?.id ?? '', authUser?.role ?? 'viewer', slug, 'viewer').allowed,
+        write: checkProjectAccess(authUser?.id ?? '', authUser?.role ?? 'viewer', slug, 'editor').allowed }
+    : { read: true, write: true };
+  if (!ctx.read) {
+    onRelease();
+    ws.close(1008, 'access denied');
+    return;
+  }
+
   const room = roomKey(slug, chatId);
   const events = chatStore.readEvents(slug, chatId);
   sendJson(ws, { type: 'replay', events });
@@ -185,6 +201,10 @@ export function handleChatSocket(
     }
 
     if (msg.type === 'stop') {
+      if (!ctx.write) {
+        sendJson(ws, { type: 'error', message: 'Read-only: only editors can control this chat.' });
+        return;
+      }
       const ctrl = controls.get(room);
       if (ctrl) {
         ctrl.cancelled = true;
@@ -192,6 +212,11 @@ export function handleChatSocket(
       }
       active.delete(room);
       controls.delete(room);
+      return;
+    }
+
+    if (!ctx.write) {
+      sendJson(ws, { type: 'error', message: 'Read-only: only editors can send messages to this project chat.' });
       return;
     }
 

@@ -92,6 +92,8 @@ Dockerfile.workspace — Ubuntu 24.04 base image for project containers
 | `/ws/projects/:slug/logs` | `ws-project-logs.ts` | Live Docker logs tail |
 | `/ws/projects/:slug/terminal` | `ws-terminal.ts` | xterm.js terminal |
 | `/ws/chat/:slug/:chatId` | `ws-chat.ts` | AI chat per project |
+
+- **Project access over the chat WS (mirrors `requireProjectAccess`)**: only project members may connect to a project's chat room (outsiders are closed with 1008 before any replay is sent) and only members with at least editor access may send `prompt`/`stop` — a viewer's write attempt gets a read-only `error` frame while the socket stays open (they keep live read). `global` chat remains open to every authenticated user; system admins always pass; legacy projects without membership data stay open
 | `/ws/agent/:id/:chatId` | `ws-agent.ts` | Agent chat with tools |
 
 ### Frontend Pages

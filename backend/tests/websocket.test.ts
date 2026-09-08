@@ -1,7 +1,8 @@
-import { test, describe, before } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import WebSocket from 'ws';
-import { signTestToken, firstProjectSlug, initTestAuth } from './helpers.ts';
+import jwt from 'jsonwebtoken';
+import { signTestToken, firstProjectSlug, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
 
 const WS_BASE = (process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api')
   .replace('/api', '')
@@ -226,4 +227,108 @@ describe('WebSocket fan-out broadcasters', () => {
 
     for (const ws of sockets) { try { ws.terminate(); } catch { /* gone */ } }
   }, { timeout: 15000 });
+});
+
+/**
+ * Project-level chat WS authorization (mirrors requireProjectAccess on REST):
+ * a NON-MEMBER may not connect at all (1008), a member VIEWER may connect and
+ * replay history but sending a prompt is refused with an error frame.
+ * Uses the 'global' chat as a control (always open to any authenticated user).
+ */
+describe('project chat access control (membership + roles)', () => {
+  before(async () => { await initTestAuth(); });
+
+  let slug = 'probe-slug';
+  let viewerId = '';
+  let outsiderId = '';
+
+  const mintUserToken = (id: string, username: string, role: string): string =>
+    jwt.sign({ id, username, role, tv: 0, jti: `wsacc-${Date.now().toString(36)}-${role}` }, JWT_SECRET, { expiresIn: '1h' });
+
+  const createUser = async (username: string, role: string): Promise<string> => {
+    const res = await fetch(`${API_URL}/users`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: 'ProbePass123!', role }),
+    });
+    const data = await res.json() as any;
+    assert.ok(res.ok, `create ${role} user failed: ${res.status} ${JSON.stringify(data)}`);
+    return data?.user?.id || data?.id;
+  };
+
+  const addMember = async (userId: string, role: string): Promise<void> => {
+    const res = await fetch(`${API_URL}/projects/${slug}/members`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, role }),
+    });
+    assert.ok(res.ok, `add member failed: ${res.status}`);
+  };
+
+  test('resolve a real project slug when available', async () => {
+    slug = (await firstProjectSlug()) || slug;
+    assert.ok(slug, 'a slug must be resolvable');
+  });
+
+  test('setup: create outsider editor + member viewer users', async () => {
+    viewerId = await createUser(`wsacc-viewer-${Date.now().toString(36)}`, 'viewer');
+    outsiderId = await createUser(`wsacc-outsider-${Date.now().toString(36)}`, 'editor');
+    await addMember(viewerId, 'viewer');
+  });
+
+  const chatUrl = (targetSlug: string, token: string): string =>
+    `${WS_BASE}/ws/chat/${targetSlug}/${Date.now().toString(36)}?token=${encodeURIComponent(token)}`;
+
+  test('non-member token → chat room closed with 1008 (no replay leaked)', async () => {
+    const ws = new WebSocket(chatUrl(slug, mintUserToken(outsiderId, 'outsider', 'editor')));
+    await new Promise<void>((resolve, reject) => {
+      const to = setTimeout(() => { try { ws.terminate(); } catch { /* gone */ } reject(new Error('socket not closed within 5s')); }, 5000);
+      ws.on('error', () => { /* handshake error path */ });
+      ws.on('message', () => { clearTimeout(to); try { ws.terminate(); } catch { /* gone */ } reject(new Error('no messages may reach a non-member')); });
+      ws.on('close', (code) => { clearTimeout(to); try { resolve(); } finally { assert.strictEqual(code, 1008, `expected 1008, got ${code}`); } });
+    });
+  }, { timeout: 10000 });
+
+  test('member viewer → connects + replay, prompt refused without starting a reply', async () => {
+    const ws = new WebSocket(chatUrl(slug, mintUserToken(viewerId, 'wsacc-viewer', 'viewer')));
+    const frames: any[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const to = setTimeout(() => { try { ws.terminate(); } catch { /* gone */ } reject(new Error('timeout waiting for the write-refusal error')); }, 5000);
+      ws.on('open', () => ws.send(JSON.stringify({ type: 'prompt', text: 'hello from viewer probe' })));
+      ws.on('message', (d) => {
+        const m = JSON.parse(d.toString());
+        frames.push(m);
+        if (m.type === 'error') { clearTimeout(to); resolve(); }
+      });
+      ws.on('error', (e) => { clearTimeout(to); reject(e); });
+    });
+    try { ws.terminate(); } catch { /* gone */ }
+
+    assert.ok(frames.some((f) => f.type === 'replay'), 'viewer must receive the history replay');
+    const refusal = frames.find((f) => f.type === 'error');
+    assert.ok(refusal, 'expected an error frame for a viewer prompt');
+    assert.match(refusal.message, /read-only|editor/i, `refusal should say read-only, got: ${refusal.message}`);
+    assert.ok(!frames.some((f) => f.type === 'started' || f.type === 'event'),
+      'a viewer prompt must never start a reply or append events');
+  }, { timeout: 10000 });
+
+  test('control: global chat still opens for any authenticated user', async () => {
+    const ws = new WebSocket(chatUrl('global', signTestToken()));
+    await new Promise<void>((resolve, reject) => {
+      const to = setTimeout(() => { try { ws.terminate(); } catch { /* gone */ } reject(new Error('global chat must stay open')); }, 5000);
+      ws.on('open', () => { clearTimeout(to); try { ws.terminate(); } catch { /* gone */ } resolve(); });
+      ws.on('error', (e) => { clearTimeout(to); reject(e); });
+    });
+  }, { timeout: 10000 });
+
+  after(async () => {
+    if (!slug || slug === 'probe-slug') return;
+    if (viewerId) {
+      await fetch(`${API_URL}/projects/${slug}/members/${viewerId}`, { method: 'DELETE', headers: authHeaders() }).catch(() => {});
+      await fetch(`${API_URL}/users/${viewerId}`, { method: 'DELETE', headers: authHeaders() }).catch(() => {});
+    }
+    if (outsiderId) {
+      await fetch(`${API_URL}/users/${outsiderId}`, { method: 'DELETE', headers: authHeaders() }).catch(() => {});
+    }
+  });
 });
