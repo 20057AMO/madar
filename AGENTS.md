@@ -318,9 +318,11 @@ Dockerfile.workspace — Ubuntu 24.04 base image for project containers
 - **Room-based connection limits**: Max 8 connections per WS room
 - **ReAuthModal sudo pattern**: All sensitive ops (lock, backup, logout-everywhere, password change) require account-password re-auth via a unified modal
 
-## Working Methodology
+## Working Rules (قواعد العمل)
 
-### Per-Feature Four-Phase Loop (يمثل العقد الإلزامي لكل ميزة أو تعديل)
+The mandatory work contract for every feature, fix, or refactor — the four-phase loop below (يمثل العقد الإلزامي) governs every round, and the sections after it are binding rules that are never skipped.
+
+### Per-Feature Four-Phase Loop
 Every new feature or modification runs these four phases, in order, end-to-end:
 
 1. **التخطيط (Planning)** — `@planner` subagent first: open with the mandatory expert question **"ما المشكلة التي تحلّها هذه الميزة؟"** (what real problem does this solve — who is affected, when does it bite, what breaks today without it), then vertical goal, design approach with rejected alternatives, file-level task breakdown, edge cases/risks. No code before the problem is crisply defined.
@@ -328,32 +330,32 @@ Every new feature or modification runs these four phases, in order, end-to-end:
 3. **التحقق (Verification)** — `@explore` subagent verifies the change against its intent; whenever a problem surfaces, `@debugger` diagnoses and fixes it (root-cause, then fix, then re-verify).
 4. **المراجعة والاختبار (Review & Testing)** — `@reviewer` (code quality), `@tester` (coverage/regressions), `@security` (auth/crypto/input/secret audit) review the round; run tsc + vite build + Docker rebuild + the affected suites, then commit + push.
 
-### Area-by-Area (بالقطع)
-Work on one feature/page/area at a time. Do not jump between unrelated areas. Example: today's work was on the Agents page — all changes focused there.
+### Working Discipline
+- **Area-by-Area (بالقطع)**: work on one feature/page/area at a time; do not jump between unrelated areas.
+- **Context & Vertical Goal**: before ANY code change, understand the full context and the vertical goal — never work blindly or make random changes.
+- **Think like a senior engineer**: plan thoroughly before touching code, consider edge cases / race conditions / security, test every change, never break existing functionality.
+- Respond to the user in **Arabic (عربي)** unless they switch; code, logs and identifiers stay English.
+- Do not add code comments unless the user asks; mirror the surrounding conventions and libraries.
+- Keep every change minimal and reviewable — one area per round.
 
-### Context & Vertical Goal (السياق والهدف الرأسي)
-Before ANY code change:
-1. Understand the full context of the feature being worked on
-2. Know the vertical goal — the end result the user wants to achieve
-3. Never work blindly or make random changes
+### Verification Pipeline (after EVERY code change — mandatory)
+1. Type-check: `cd frontend && node node_modules\typescript\bin\tsc --noEmit` (plus `cd backend && node node_modules\typescript\bin\tsc --noEmit` when backend is touched)
+2. Production build: `cd frontend && node node_modules\vite\bin\vite.js build`
+3. Rebuild + restart the container — **no exceptions**: `docker compose build app && docker compose up -d app`
+4. Poll `http://localhost:3000/api/health` until it returns `{"status":"ok"}`
+5. Verify behavior against the RUNNING container: API requests for backend changes, the browser (chrome-devtools) for UI changes — a green build alone is never proof.
 
-### Think Like a Senior Engineer
-After understanding context and goal:
-- Plan thoroughly before touching code
-- Consider edge cases, race conditions, security
-- Test every change (tsc + vite build + Docker)
-- Never break existing functionality
+### Git Workflow
+Every completed task ends with a commit pushed to GitHub; no uncommitted changes are left behind after finishing.
 
-## Git Workflow
+1. Inspect first: `git status --short`, then `git diff` — review exactly what changed.
+2. Stage **only the intended files** — **never `git add -A`** (a stray temp file or tool artifact can slip junk or a secret into a commit). Re-run `git status` after staging to confirm the list before committing.
+3. Never commit secrets/keys (`.env`, `data/*`, tokens, cookies).
+4. Commit message style: lowercase area prefix + concise description, e.g. `terminal: restore per-project Terminal tab, drop sidebar Terminals buttons`.
+5. Push immediately after the commit: `git push`.
 
-After every completed task + test + verification, commit to GitHub.
-No uncommitted changes should remain after finishing a task.
-
-```bash
-git add -A
-git commit -m "descriptive message"
-git push
-```
+### Testing note
+Run the affected suites after a change: `cd backend && node --test --test-concurrency=1 "tests/**/*.test.ts"` (always serial — parallel runs + browser polling can trip the rate limiter). **The dev container runs `WSD_TESTING=0`** (production rate-limiter budgets), so the full suite 429s on project creation there — only the offline suites (`*-core.test.ts`, `serve-core`, `snapshots-schedule`, `alerts-core`, …) run reliably against it. The complete suite needs the suite container with `WSD_TESTING=1`.
 
 ## Development Phases
 
