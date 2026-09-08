@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { ExternalLink, Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage } from 'lucide-preact';
+import { ExternalLink, Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -75,17 +75,17 @@ const TAB_LABELS: Record<Tab, string> = {
   canvas: 'Canvas',
 };
 
-const TAB_EMOJI: Record<Tab, string> = {
-  overview: '🏠',
-  chat: '🤖',
-  files: '📁',
-  logs: '📜',
-  terminal: '⌨️',
-  notes: '📝',
-  scripts: '⚙️',
-  team: '👥',
-  snapshots: '📸',
-  canvas: '🎨',
+const TAB_ICON: Record<Tab, any> = {
+  overview: Home,
+  chat: Bot,
+  files: FolderOpen,
+  logs: ScrollText,
+  terminal: SquareTerminal,
+  notes: StickyNote,
+  scripts: Wrench,
+  team: Users,
+  snapshots: Camera,
+  canvas: PenTool,
 };
 
 function fmtBytes(bytes: number): string {
@@ -597,23 +597,26 @@ export function Project({ params }: { params: { slug: string } }) {
       )}
 
       <nav class="detail-tabs" ref={tabsRef} role="tablist" aria-label="Project sections" onKeyDown={onTabListKeyDown}>
-        {VALID_TABS.map((t) => (
-          <button
-            class={`tab-btn ${tab === t ? 'active' : ''}`}
-            type="button"
-            key={t}
-            role="tab"
-            id={`ptab-${t}`}
-            aria-selected={tab === t}
-            tabIndex={tab === t ? 0 : -1}
-            aria-controls={`pane-${t}`}
-            data-tab={t}
-            onClick={() => setTab(t)}
-          >
-            <span class="tab-emoji" aria-hidden="true">{TAB_EMOJI[t]}</span>
-            {TAB_LABELS[t]}
-          </button>
-        ))}
+        {VALID_TABS.map((t) => {
+          const Ic = TAB_ICON[t];
+          return (
+            <button
+              class={`tab-btn ${tab === t ? 'active' : ''}`}
+              type="button"
+              key={t}
+              role="tab"
+              id={`ptab-${t}`}
+              aria-selected={tab === t}
+              tabIndex={tab === t ? 0 : -1}
+              aria-controls={`pane-${t}`}
+              data-tab={t}
+              onClick={() => setTab(t)}
+            >
+              <span class="tab-icon" aria-hidden="true"><Ic width={13} height={13} class="icon" /></span>
+              {TAB_LABELS[t]}
+            </button>
+          );
+        })}
       </nav>
 
       <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>

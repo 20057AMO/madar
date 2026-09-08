@@ -550,7 +550,8 @@ input.detail-title {
 }
 .tab-btn:hover { color: var(--text); }
 .tab-btn.active { color: var(--text); border-bottom-color: var(--text); }
-.tab-btn .tab-emoji { margin-right: 6px; }
+.detail-tabs .tab-btn { display: inline-flex; align-items: center; gap: 6px; }
+.detail-tabs .tab-btn .tab-icon { display: inline-flex; align-items: center; }
 
 
 /* Terminal */
