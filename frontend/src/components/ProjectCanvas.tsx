@@ -23,7 +23,7 @@ import {
   saveProjectCanvas,
   getProjectNotes,
 } from '../api';
-import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType } from '../api';
+import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge } from '../api';
 
 /**
  * ProjectCanvas — an infinite pan/zoom whiteboard for planning one project.
@@ -731,33 +731,42 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   const renderEdges = () => {
     if (!doc || !doc.edges.length) return null;
+    // Pre-compute a world→SVG path for every edge between live nodes.
+    const edgePath = (edge: CanvasEdge): string | null => {
+      const a = nodeById(edge.from);
+      const b = nodeById(edge.to);
+      if (!a || !b) return null;
+      const x1 = a.x + a.w / 2;
+      const y1 = a.y + a.h / 2;
+      const x2 = b.x + b.w / 2;
+      const y2 = b.y + b.h / 2;
+      // Control point biased by the dominant axis so curves read naturally.
+      const dx = Math.abs(x2 - x1);
+      const dy = Math.abs(y2 - y1);
+      const cx = dx >= dy ? (x1 + x2) / 2 : x1;
+      const cy = dx >= dy ? y1 : (y1 + y2) / 2;
+      return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
+    };
     return (
       <svg class="cn-svg" aria-hidden="true">
         <defs>
-          <marker id={`arrow-${slug}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-3)" />
+          <marker id={`arrow-${slug}`} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+            <path d="M 0.5 0.5 L 8.5 5 L 0.5 9.5 z" fill="var(--text-3)" />
           </marker>
         </defs>
         {doc.edges.map((edge) => {
-          const a = nodeById(edge.from);
-          const b = nodeById(edge.to);
-          if (!a || !b) return null;
-          const x1 = a.x + a.w / 2;
-          const y1 = a.y + a.h / 2;
-          const x2 = b.x + b.w / 2;
-          const y2 = b.y + b.h / 2;
+          const d = edgePath(edge);
+          if (!d) return null;
           const selectedLine = selEdge === edge.id;
           return (
             <g key={edge.id}>
-              <line
+              <path
                 class="cn-edge"
                 data-id={edge.id}
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
+                d={d}
                 stroke="transparent"
                 stroke-width="16"
+                fill="none"
                 style="pointer-events: stroke; cursor: pointer"
                 onPointerDown={(e: any) => {
                   e.stopPropagation();
@@ -766,13 +775,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   setSelNodes([]);
                 }}
               />
-              <line
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
+              <path
+                d={d}
                 stroke={selectedLine ? 'var(--accent)' : 'var(--text-3)'}
                 stroke-width={selectedLine ? 2.5 : 1.5}
+                fill="none"
                 marker-end={`url(#arrow-${slug})`}
                 style="pointer-events: none"
               />

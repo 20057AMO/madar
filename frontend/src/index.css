@@ -2567,8 +2567,11 @@ input[type="file"].modern-file::file-selector-button {
   touch-action: none;
   box-sizing: border-box;
 }
-.cn-node:hover { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
-.cn-node.cn-selected { border-color: #7dd3fc; box-shadow: 0 0 0 1.5px rgba(125, 211, 252, 0.35), 0 4px 14px rgba(0, 0, 0, 0.35); }
+.cn-node:hover { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04); }
+.cn-node.cn-selected {
+  border-color: #7dd3fc;
+  box-shadow: 0 0 0 1.5px rgba(125, 211, 252, 0.5), 0 0 22px rgba(125, 211, 252, 0.22), 0 6px 20px rgba(0, 0, 0, 0.45);
+}
 .cn-node.cn-connect-src { outline: 2px dashed #7dd3fc; outline-offset: 2px; }
 .cn-node.cn-connectable { outline: 2px dashed #fbbf24; outline-offset: 2px; }
 
