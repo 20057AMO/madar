@@ -86,11 +86,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const saveTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const dragRef = useRef<null | {
-    kind: 'node' | 'pan' | 'resize';
+    kind: 'node' | 'pan' | 'resize' | 'marquee';
     ids?: string[];
     /** World positions of every dragged node at drag start. */
     startPos?: Record<string, { x: number; y: number }>;
     resize?: { id: string; w: number; h: number; pre: string };
+    /** Marquee rubber-band end point (world coords). */
+    endX?: number;
+    endY?: number;
     cX: number;
     cY: number;
     startX: number;
@@ -604,7 +607,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       setConnectFrom(null);
       return;
     }
-    if (e.button === 0 || e.button === 1 || spaceHeld) {
+    if (e.button === 1 || spaceHeld || e.button === 2) {
       dragRef.current = {
         kind: 'pan',
         cX: e.clientX,
@@ -613,8 +616,26 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         startY: viewRef.current.y,
       };
       el.setPointerCapture(e.pointerId);
-    }
-    if (e.button === 0) {
+    } else if (e.button === 0) {
+      // Left-drag on empty canvas → marquee selection (rubber band).
+      const { x, y, z } = viewRef.current;
+      const rr = containerRef.current?.getBoundingClientRect();
+      const ox = rr ? rr.left : 0;
+      const oy = rr ? rr.top : 0;
+      const sx = (e.clientX - ox - x) / z;
+      const sy = (e.clientY - oy - y) / z;
+      dragRef.current = {
+        kind: 'marquee',
+        cX: e.clientX,
+        cY: e.clientY,
+        startX: sx,
+        startY: sy,
+        endX: sx,
+        endY: sy,
+        moved: false,
+        pre: JSON.stringify(docRef.current),
+      };
+      el.setPointerCapture(e.pointerId);
       setSelNodes([]);
       setSelEdge(null);
       setMenuOpen(false);
@@ -628,6 +649,28 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const dy = e.clientY - dr.cY;
     if (dr.kind === 'pan') {
       setViewState({ ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy });
+    } else if (dr.kind === 'marquee') {
+      const { x, y, z } = viewRef.current;
+      const rr = containerRef.current?.getBoundingClientRect();
+      const ox = rr ? rr.left : 0;
+      const oy = rr ? rr.top : 0;
+      const ex = (e.clientX - ox - x) / z;
+      const ey = (e.clientY - oy - y) / z;
+      if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+      dr.moved = true;
+      dr.endX = ex;
+      dr.endY = ey;
+      const marq = document.querySelector('.cn-marquee');
+      if (marq) {
+        const sx = Math.min(dr.startX, ex);
+        const sy = Math.min(dr.startY, ey);
+        const sw = Math.abs(ex - dr.startX);
+        const sh = Math.abs(ey - dr.startY);
+        marq.setAttribute('x', String(sx));
+        marq.setAttribute('y', String(sy));
+        marq.setAttribute('width', String(sw));
+        marq.setAttribute('height', String(sh));
+      }
     } else if (dr.kind === 'resize' && dr.resize) {
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       const z = viewRef.current.z;
@@ -675,6 +718,25 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       /* already released */
     }
     if (!dr) return;
+    if (dr.kind === 'marquee') {
+      const marq = document.querySelector('.cn-marquee');
+      if (marq) marq.setAttribute('display', 'none');
+      if (dr.moved) {
+        const cur = docRef.current;
+        const ex = dr.endX ?? dr.startX;
+        const ey = dr.endY ?? dr.startY;
+        const sx = Math.min(dr.startX, ex);
+        const sy = Math.min(dr.startY, ey);
+        const sw = Math.abs(ex - dr.startX);
+        const sh = Math.abs(ey - dr.startY);
+        const hit = (cur?.nodes ?? []).filter(
+          (n) =>
+            n.x < sx + sw && n.x + n.w > sx && n.y < sy + sh && n.y + n.h > sy
+        );
+        if (hit.length) setSelNodes(hit.map((n) => n.id));
+      }
+      return;
+    }
     if (dr.kind === 'resize' && dr.resize && dr.moved) {
       const cur = docRef.current;
       if (cur && dr.resize.pre) {
@@ -811,6 +873,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             </g>
           );
         })}
+        <rect class="cn-marquee" x="0" y="0" width="0" height="0" display="none" />
       </svg>
     );
   };
@@ -1023,6 +1086,18 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                       e.stopPropagation();
                       if (readOnly) return;
                       startResize(n.id, e);
+                    }}
+                  />
+                )}
+                {isSel && !readOnly && (
+                  <div
+                    class="cn-port"
+                    title="Drag to another node to connect"
+                    aria-hidden="true"
+                    onPointerDown={(e: any) => {
+                      e.stopPropagation();
+                      if (readOnly) return;
+                      setConnectFrom(n.id);
                     }}
                   />
                 )}

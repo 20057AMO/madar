@@ -2395,6 +2395,33 @@ input[type="file"].modern-file::file-selector-button {
 .cn-tb-btn:disabled { opacity: 0.35; pointer-events: none; }
 .cn-tb-hint { font-size: 0.72rem; color: var(--text-3); }
 .cn-zoom-btn { min-width: 44px; font-variant-numeric: tabular-nums; }
+.cn-marquee { fill: rgba(125, 211, 252, 0.12); stroke: rgba(125, 211, 252, 0.7); stroke-width: 1; pointer-events: none; }
+.cn-port {
+  position: absolute;
+  top: 50%;
+  right: -8px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--panel-bg);
+  border: 2px solid #7dd3fc;
+  cursor: crosshair;
+  z-index: 5;
+}
+.cn-port:hover { background: #7dd3fc; box-shadow: 0 0 8px rgba(125, 211, 252, 0.7); }
+.cn-port::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1px dashed rgba(125, 211, 252, 0.5);
+  animation: cn-port-pulse 1.6s ease-in-out infinite;
+}
+@keyframes cn-port-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50% { transform: scale(1.25); opacity: 0.25; }
+}
 .cn-save-state {
   display: inline-flex;
   align-items: center;
