@@ -48,6 +48,7 @@ import type {
 import { NotesPanel } from '../components/NotesPanel';
 import { fmtCpu, fmtMem, limitsPending } from '../lib/limits';
 import { ProjectChat } from '../components/ProjectChat';
+import { ProjectTerminal } from '../components/ProjectTerminal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { TeamPanel } from '../components/TeamPanel';
 import { SnapshotsPanel } from '../components/SnapshotsPanel';
@@ -57,15 +58,16 @@ import { useAuth } from '../auth';
 import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
 
-type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'notes' | 'scripts' | 'team' | 'snapshots' | 'canvas';
+type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'snapshots' | 'canvas';
 
-const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'logs', 'notes', 'scripts', 'team', 'snapshots', 'canvas'];
+const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'logs', 'terminal', 'notes', 'scripts', 'team', 'snapshots', 'canvas'];
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'Overview',
   chat: 'AI Chat',
   files: 'Files',
   logs: 'Logs',
+  terminal: 'Terminal',
   notes: 'Notes',
   scripts: 'Scripts',
   team: 'Team',
@@ -513,7 +515,6 @@ export function Project({ params }: { params: { slug: string } }) {
         </div>
         <div class="detail-actions">
           <div class="header-overflow">
-            <button class="btn-ghost sm" onClick={() => setLocation(`/terminals/${slug}`)}>Terminals</button>
             <button class="btn-ghost sm" onClick={openIde}><ExternalLink width={13} height={13} class="icon" /> Open Code</button>
             <span class="detail-action-sep" aria-hidden="true" />
             <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — backup requires editor access' : 'Download a snapshot of the project as tar.gz'}>
@@ -536,7 +537,6 @@ export function Project({ params }: { params: { slug: string } }) {
             </button>
             {moreOpen && (
               <div class="header-menu" role="menu">
-                <button role="menuitem" onClick={() => { setMoreOpen(false); setLocation(`/terminals/${slug}`); }}>Terminals</button>
                 <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><ExternalLink width={13} height={13} class="icon" /> Open Code</button>
                 <div class="header-menu-sep" role="separator" />
                 <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title="Download snapshot as tar.gz">
@@ -607,6 +607,7 @@ export function Project({ params }: { params: { slug: string } }) {
         {tab === 'chat' && <ProjectChat slug={slug} readOnly={readOnly} />}
         {tab === 'files' && <FilesPanel slug={slug} />}
         {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
+        {tab === 'terminal' && <ProjectTerminal slug={slug} />}
         {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
         {tab === 'scripts' && <ScriptsPanel slug={slug} />}
         {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}

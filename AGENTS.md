@@ -102,9 +102,9 @@ Dockerfile.workspace — Ubuntu 24.04 base image for project containers
 | `/login` | Login | Setup + login (unauthenticated only) |
 | `/` | Dashboard | Minimal overview: stats + quick actions |
 | `/projects` | Projects | Cards/table, search, filter, sort, bulk ops |
-| `/project/:slug` | Project | Detail: overview, AI chat, files, logs, **notes**, **canvas** (visual planning whiteboard), scripts (per-project terminal moved to global Terminals page) |
+| `/project/:slug` | Project | Detail: overview, AI chat, files, logs, **Terminal** (per-project shell, the SAME `ProjectTerminal` component — tabs/project+control modes/history/zoom/reconnect/quick commands), notes, scripts, **canvas** (visual planning whiteboard) |
 | `/planner` | Planner | Visual planning hub: cards for every project with canvas state + last-edit recency, filter + sort; card opens the project straight on its Canvas tab (`?tab=canvas` deep link) |
-| `/terminals[/:slug]` | Terminals | Global terminal hub: all projects in one page — project picker (live status dots + search + last-used memory) driving the SAME ProjectTerminal component (tabs, project/control modes, history, zoom, reconnect, quick commands); deep-linkable via `/terminals/<slug>` |
+| `/terminals[/:slug]` | Terminals | Legacy global terminal hub (still routable + reachable from the Dashboard quick-action tile, but no longer in the Sidebar — per-project terminals live on each project's own **Terminal** tab driving the SAME ProjectTerminal component: project picker, tabs, project/control modes, history, zoom, reconnect, quick commands); deep-linkable via `/terminals/<slug>` |
 | `/agents` | Agents | AI agents with chat, RTL/LTR, presets |
 | `/providers` | Providers | LLM provider config |
 | `/settings` | Settings | Change password, account info, logout |

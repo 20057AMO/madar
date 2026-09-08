@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   FolderOpen,
   Bot,
-  SquareTerminal,
   KeyRound,
   Settings as SettingsIcon,
   Unlock,
@@ -209,7 +208,6 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <NavButton href="/" label="Dashboard" icon={LayoutDashboard} />
         <NavButton href="/projects" label="Projects" icon={FolderOpen} />
         <NavButton href="/planner" label="Planner" icon={PencilRuler} />
-        <NavButton href="/terminals" label="Terminals" icon={SquareTerminal} />
         <NavButton href="/agents" label="Agents" icon={Bot} />
         <NavButton label="opencode" icon={OpencodeIcon} newTabUrl={`${toolBase}:${ocPort}/`} />
         <NavButton href="/opencode-studio" label="OC Studio" icon={OpencodeIcon} />
