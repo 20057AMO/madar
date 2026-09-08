@@ -694,7 +694,7 @@ function OverviewPanel({
   // Which config section is currently in edit mode (view/edit pattern).
   const [editSection, setEditSection] = useState<'env' | 'ports' | 'limits' | null>(null);
 
-  // Quick-nav: smooth-scroll to an overview section and track the visible one.
+  // Quick-nav: exclusive overview tab — exactly one card shows at a time; Danger zone stays pinned.
   const [activeSec, setActiveSec] = useState<string>('');
 
   const visible = useDocumentVisible();
@@ -1093,6 +1093,12 @@ function OverviewPanel({
           <button type="button" class={`ov-nav-btn${activeSec === 'ov-ctx' ? ' active' : ''}`} onClick={() => setActiveSec('ov-ctx')}>
             AI Context
           </button>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-links' ? ' active' : ''}`} onClick={() => setActiveSec('ov-links')}>
+            Links &amp; health
+          </button>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-info' ? ' active' : ''}`} onClick={() => setActiveSec('ov-info')}>
+            Project info
+          </button>
           <button type="button" class={`ov-nav-btn${activeSec === 'ov-config' ? ' active' : ''}`} onClick={() => setActiveSec('ov-config')}>
             Configuration
           </button>
@@ -1105,6 +1111,7 @@ function OverviewPanel({
         </nav>
 
       {/* ── Links & health ── */}
+      {activeSec === 'ov-links' && (
       <div class="panel" id="ov-links">
         <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
           <span>Links &amp; health</span>
@@ -1315,8 +1322,10 @@ function OverviewPanel({
           <div class="empty-state" style="padding: 16px">No published ports. Add one above to open this project in the browser.</div>
         )}
       </div>
+      )}
 
       {/* ── Project info ── */}
+      {activeSec === 'ov-info' && (
       <div class="panel" id="ov-info">
         <h2 class="panel-title">Project info</h2>
           <div class="kv-list">
@@ -1369,6 +1378,7 @@ function OverviewPanel({
                 </div>
                 </div>
         </div>
+        )}
 
         {/* ── Runtime ── */}
         {activeSec === 'ov-runtime' && (
