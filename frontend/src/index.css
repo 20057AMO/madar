@@ -1280,13 +1280,13 @@ textarea.agent-prompt-input {
 
 #ov-info, #ov-runtime, #ov-ctx, #ov-links, #ov-config, #ov-activity, #ov-danger { scroll-margin-top: 76px; }
 .ov-view { display: flex; flex-direction: column; gap: 16px; }
-.ov-view .panel { animation: ov-view-in 0.18s ease-out; }
+.overview-stack .panel { animation: ov-view-in 0.28s ease-out both; }
 @keyframes ov-view-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
+  0% { opacity: 0; transform: translateY(8px) scale(0.985); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ov-view .panel { animation: none; }
+  .overview-stack .panel { animation: none; }
 }
 .stat-bar { height: 6px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
 .stat-fill { height: 100%; background: var(--blue); border-radius: 4px; transition: width 0.4s; }

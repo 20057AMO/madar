@@ -694,8 +694,8 @@ function OverviewPanel({
   // Which config section is currently in edit mode (view/edit pattern).
   const [editSection, setEditSection] = useState<'env' | 'ports' | 'limits' | null>(null);
 
-  // Quick-nav: exclusive overview tab — exactly one card shows at a time; Danger zone stays pinned.
-  const [activeSec, setActiveSec] = useState<string>('');
+  // Quick-nav: exclusive overview tab — Links & health is the default; Danger zone stays pinned.
+  const [activeSec, setActiveSec] = useState<string>('ov-links');
 
   const visible = useDocumentVisible();
   const visibleRef = useRef(visible);
