@@ -539,10 +539,6 @@ input.detail-title {
   color: var(--text); background: var(--panel-2);
   border-color: var(--border-2); font-weight: 600;
 }
-.ov-nav-sep {
-  width: 1px; align-self: stretch; margin: 2px 4px;
-  background: var(--border-2); border-radius: 1px;
-}
 
 .detail-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
 .tab-btn {

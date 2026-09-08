@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'preact/hooks';
+import { useState, useEffect, useMemo, useRef } from 'preact/hooks';
 import { Plus, Trash2, Check, RotateCcw, StickyNote, Lightbulb, Bug, Target } from 'lucide-preact';
 import { getProjectNotes, saveProjectNotes, type NoteItem, type NoteKind } from '../api';
 
@@ -20,30 +20,45 @@ export function NotesPanel({ slug, readOnly }: { slug: string; readOnly?: boolea
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Source of truth for rapid successive mutations: `add`/`toggle`/`remove`
+  // read the ref synchronously and update it before enqueueing a save, so a
+  // fast second Ctrl+Enter never captures a stale `items` closure and a
+  // last-arriving PUT can't clobber a newer state (P0-2).
+  const itemsRef = useRef<NoteItem[]>([]);
+  const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+
   useEffect(() => {
     setLoading(true);
     getProjectNotes(slug)
-      .then((r) => setItems(r.items || []))
+      .then((r) => {
+        itemsRef.current = r.items || [];
+        setItems(itemsRef.current);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [slug]);
 
-  const persist = async (next: NoteItem[]) => {
+  const persist = () => {
     setSaving(true);
-    try {
-      const r = await saveProjectNotes(slug, next);
-      setItems(r.items || next);
-      setError('');
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setSaving(false);
-    }
+    saveChainRef.current = saveChainRef.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          const r = await saveProjectNotes(slug, itemsRef.current);
+          itemsRef.current = r.items || itemsRef.current;
+          setItems(itemsRef.current);
+          setError('');
+        } catch (e: any) {
+          setError(e.message);
+        } finally {
+          setSaving(false);
+        }
+      });
   };
 
   const add = () => {
     const text = draft.trim();
-    if (!text || text.length > 2000) return;
+    if (!text || text.length > 2000 || saving) return;
     const item: NoteItem = {
       id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
@@ -51,14 +66,23 @@ export function NotesPanel({ slug, readOnly }: { slug: string; readOnly?: boolea
       done: false,
       createdAt: new Date().toISOString(),
     };
+    itemsRef.current = [item, ...itemsRef.current];
+    setItems(itemsRef.current);
     setDraft('');
-    persist([item, ...items]);
+    persist();
   };
 
-  const toggle = (id: string) =>
-    persist(items.map((n) => (n.id === id ? { ...n, done: !n.done } : n)));
+  const toggle = (id: string) => {
+    itemsRef.current = itemsRef.current.map((n) => (n.id === id ? { ...n, done: !n.done } : n));
+    setItems(itemsRef.current);
+    persist();
+  };
 
-  const remove = (id: string) => persist(items.filter((n) => n.id !== id));
+  const remove = (id: string) => {
+    itemsRef.current = itemsRef.current.filter((n) => n.id !== id);
+    setItems(itemsRef.current);
+    persist();
+  };
 
   const visible = useMemo(
     () =>

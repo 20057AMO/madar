@@ -38,7 +38,7 @@ import {
 import { type ProjectLimits, getHostInfo } from './services/project-limits';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
-import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir } from './services/workspace-files';
+import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
 import { loadMeta, saveMeta } from './services/projects-meta';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
@@ -1989,6 +1989,24 @@ app.get('/api/projects/:slug/file', requireProjectAccess('viewer'), (req, res) =
     const rel = String(req.query.path || '').trim();
     if (!rel) return res.status(400).json({ error: 'Missing path query' });
     res.json(readWorkspaceFile(req.params.slug, rel));
+  } catch (err: any) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Stream a workspace file's raw bytes (images, binaries, downloads).
+app.get('/api/projects/:slug/file/raw', requireProjectAccess('viewer'), (req, res) => {
+  try {
+    const rel = String(req.query.path || '').trim();
+    if (!rel) return res.status(400).json({ error: 'Missing path query' });
+    const { stream, size, mime } = streamWorkspaceFile(req.params.slug, rel);
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', String(size));
+    if (req.query.download === '1') {
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(rel))}"`);
+    }
+    stream.on('error', () => res.destroy());
+    stream.on('open', () => stream.pipe(res));
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }

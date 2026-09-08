@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { ExternalLink, Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive } from 'lucide-preact';
+import { ExternalLink, Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -19,6 +19,7 @@ import {
   getIdeStatus,
   listProjectFiles,
   getProjectFile,
+  fetchProjectFileRaw,
   saveProjectFile,
   renameProjectPath,
   deleteProjectFile,
@@ -602,7 +603,7 @@ export function Project({ params }: { params: { slug: string } }) {
       </nav>
 
       <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
-        {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} onNavigateTab={setTab} />}
+        {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
         {tab === 'chat' && <ProjectChat slug={slug} />}
         {tab === 'files' && <FilesPanel slug={slug} />}
         {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
@@ -634,7 +635,6 @@ function OverviewPanel({
   readOnly,
   onChanged,
   onError,
-  onNavigateTab,
 }: {
   slug: string;
   project: Project | null;
@@ -642,7 +642,6 @@ function OverviewPanel({
   readOnly: boolean;
   onChanged: () => void;
   onError: (msg: string) => void;
-  onNavigateTab?: (tab: Tab) => void;
 }) {
   const [, setLocation] = useHashLocation();
   const [stats, setStats] = useState<ProjectStats | null>(null);
@@ -1110,16 +1109,6 @@ function OverviewPanel({
           <button type="button" class={`ov-nav-btn${activeSec === 'ov-activity' ? ' active' : ''}`} onClick={() => setActiveSec('ov-activity')}>
             Activity
           </button>
-          {onNavigateTab && (
-            <>
-              <span class="ov-nav-sep" aria-hidden="true" />
-              {VALID_TABS.filter((t) => t !== 'overview').map((t) => (
-                <button type="button" class="ov-nav-btn" key={t} onClick={() => onNavigateTab(t)}>
-                  {TAB_LABELS[t]}
-                </button>
-              ))}
-            </>
-          )}
         </nav>
 
       {/* ── Links & health ── */}
@@ -1646,6 +1635,24 @@ function OverviewPanel({
 }
 
 // ── Files ─────────────────────────────────────────────────────
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif', 'tif', 'tiff']);
+const isImagePath = (p: string) => {
+  const ext = p.toLowerCase().split('.').pop() || '';
+  return IMAGE_EXTS.has(ext);
+};
+
+/** Professional type icon for a file/dir name: folder / image / code / json / archive / text / plain. */
+function fileTypeMeta(name: string, type: 'file' | 'dir'): { Icon: any; color: string } {
+  if (type === 'dir') return { Icon: Folder, color: 'var(--blue)' };
+  const ext = (name.toLowerCase().split('.').pop() || '').trim();
+  if (IMAGE_EXTS.has(ext)) return { Icon: FileImage, color: '#a78bfa' };
+  if (ext === 'json' || ext === 'jsonc' || ext === 'yaml' || ext === 'yml' || ext === 'toml') return { Icon: FileJson, color: '#eab308' };
+  if (['zip', 'gz', 'tar', 'tgz', 'rar', '7z', 'bz2', 'xz'].includes(ext)) return { Icon: FileArchive, color: '#fb923c' };
+  if (['js', 'jsx', 'ts', 'tsx', 'py', 'rb', 'go', 'rs', 'c', 'cpp', 'h', 'hpp', 'java', 'cs', 'php', 'sh', 'bash', 'sql', 'html', 'css', 'scss', 'vue', 'svelte', 'astro', 'swift', 'kt', 'wasm'].includes(ext)) return { Icon: FileCode, color: '#38bdf8' };
+  if (['md', 'markdown', 'txt', 'log', 'csv', 'yml', 'rst', 'rtf'].includes(ext)) return { Icon: FileText, color: '#4ade80' };
+  return { Icon: FileText, color: 'var(--text-3)' };
+}
+
 function FilesPanel({ slug }: { slug: string }) {
   const [cwd, setCwd] = useState('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -1655,6 +1662,8 @@ function FilesPanel({ slug }: { slug: string }) {
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [previewName, setPreviewName] = useState('');
   const [editContent, setEditContent] = useState<string | null>(null);
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [imgLoading, setImgLoading] = useState(false);
   const [savingFile, setSavingFile] = useState(false);
   const [fileMsg, setFileMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -1669,6 +1678,16 @@ function FilesPanel({ slug }: { slug: string }) {
   const newFileInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
 
+  const imgUrlRef = useRef<string | null>(null);
+  const setImgUrlSafe = (url: string | null) => {
+    if (imgUrlRef.current && imgUrlRef.current !== url) URL.revokeObjectURL(imgUrlRef.current);
+    imgUrlRef.current = url;
+    setImgUrl(url);
+  };
+
+  useEffect(() => () => {
+    if (imgUrlRef.current) URL.revokeObjectURL(imgUrlRef.current);
+  }, []);
   useEffect(() => {
     if (showNewFile && newFileInputRef.current) newFileInputRef.current.focus();
   }, [showNewFile]);
@@ -1706,14 +1725,45 @@ function FilesPanel({ slug }: { slug: string }) {
       const fp = await getProjectFile(slug, p);
       setPreview(fp);
       setPreviewName(p);
-      setEditContent(fp.binary ? null : fp.content);
+      // P0 fix: never open a truncated preview for editing — saving it would
+      // overwrite the whole file with ~200KB of cut-off text + the truncation
+      // marker. Truncated files stay read-only.
+      setEditContent(fp.binary || fp.truncated ? null : fp.content);
       setFileMsg(null);
+      setImgUrlSafe(null);
+      if (fp.binary && isImagePath(p)) {
+        setImgLoading(true);
+        try {
+          const blob = await fetchProjectFileRaw(slug, p);
+          setImgUrlSafe(URL.createObjectURL(blob));
+        } catch (err: any) {
+          setFileMsg(`Image failed to load: ${err.message}`);
+        } finally {
+          setImgLoading(false);
+        }
+      }
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const downloadFile = async (name: string) => {
+    const p = cwd ? `${cwd}/${name}` : name;
+    try {
+      const blob = await fetchProjectFileRaw(slug, p, true);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = p.split('/').pop() || 'download';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (err: any) {
       setError(err.message);
     }
   };
 
   const closePreview = () => {
+    setImgUrlSafe(null);
     setPreview(null);
     setPreviewName('');
     setEditContent(null);
@@ -1878,39 +1928,49 @@ function FilesPanel({ slug }: { slug: string }) {
         {entries.length === 0 && !loading && (
           <div class="empty-state" role="status" style="padding: 32px">{cwd ? 'Empty directory.' : 'Workspace is empty. Upload files or clone a repository.'}</div>
         )}
-        {entries.map((e) => (
-          <div class="file-row" key={e.path}>
-            <button
-              class="file-name"
-              onClick={() => (e.type === 'dir' ? setCwd(cwd ? `${cwd}/${e.path}` : e.path) : openFile(e.path))}
-            >
-              <span class={`file-icon ${e.type}`}>{e.type === 'dir' ? '▸' : '·'}</span>
-              <span class="mono">{e.path}</span>
-            </button>
-            <span class="file-size">{e.type === 'file' ? fmtBytes(e.size) : ''}</span>
-            <div class="file-actions">
-              {e.type === 'file' && (
-                <button class="btn-ghost sm" onClick={() => openFile(e.path)}>view</button>
-              )}
-              {renaming === e.path ? (
-                <input
-                  class="modern-input compact"
-                  ref={renameInputRef}
-                  aria-label={`Rename ${e.path} to`}
-                  value={renameValue}
-                  onInput={(ev: any) => setRenameValue(ev.target.value)}
-                  onKeyDown={(ev: any) => {
-                    if (ev.key === 'Enter') doRename(e.path);
-                    else if (ev.key === 'Escape') { setRenaming(null); setRenameValue(''); }
-                  }}
-                />
-              ) : (
-                <button class="btn-ghost sm" onClick={() => startRename(e.path)}>rename</button>
-              )}
-              <button class="btn-danger sm" onClick={() => remove(e.path)}>delete</button>
+        {entries.map((e) => {
+          const { Icon: EIcon, color: eColor } = fileTypeMeta(e.path, e.type);
+          return (
+            <div class="file-row" key={e.path}>
+              <button
+                class="file-name"
+                onClick={() => (e.type === 'dir' ? setCwd(cwd ? `${cwd}/${e.path}` : e.path) : openFile(e.path))}
+              >
+                <span class={`file-icon ${e.type}`} style={`color:${eColor};display:inline-flex;align-items:center;justify-content:center`}>
+                  <EIcon width={15} height={15} />
+                </span>
+                <span class="mono">{e.path}</span>
+              </button>
+              <span class="file-size">{e.type === 'file' ? fmtBytes(e.size) : ''}</span>
+              <div class="file-actions">
+                {e.type === 'file' && (
+                  <>
+                    <button class="btn-ghost sm" onClick={() => openFile(e.path)}>view</button>
+                    <button class="btn-ghost sm" onClick={() => downloadFile(e.path)} title="Download file" aria-label={`Download ${e.path}`}>
+                      <Download width={12} height={12} class="icon" />
+                    </button>
+                  </>
+                )}
+                {renaming === e.path ? (
+                  <input
+                    class="modern-input compact"
+                    ref={renameInputRef}
+                    aria-label={`Rename ${e.path} to`}
+                    value={renameValue}
+                    onInput={(ev: any) => setRenameValue(ev.target.value)}
+                    onKeyDown={(ev: any) => {
+                      if (ev.key === 'Enter') doRename(e.path);
+                      else if (ev.key === 'Escape') { setRenaming(null); setRenameValue(''); }
+                    }}
+                  />
+                ) : (
+                  <button class="btn-ghost sm" onClick={() => startRename(e.path)}>rename</button>
+                )}
+                <button class="btn-danger sm" onClick={() => remove(e.path)}>delete</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {preview && (
@@ -1928,6 +1988,9 @@ function FilesPanel({ slug }: { slug: string }) {
                 {savingFile ? 'Saving…' : 'Save'}
               </button>
             )}
+            <button class="btn-ghost sm" onClick={() => downloadFile(previewName)} title="Download file" aria-label="Download file">
+              <Download width={12} height={12} class="icon" /> Download
+            </button>
             <button class="btn-ghost sm" onClick={closePreview}>Close</button>
           </div>
           {fileMsg && (
@@ -1938,7 +2001,17 @@ function FilesPanel({ slug }: { slug: string }) {
             >{fileMsg}</div>
           )}
           {preview.binary ? (
-            <div class="empty-state" style="padding: 24px">Binary file — not previewable.</div>
+            imgUrl ? (
+              <div class="file-image-view" style="max-height:480px;overflow:auto;padding:14px;display:flex;justify-content:center;background:#0a0b0e">
+                <img src={imgUrl} alt={previewName} style="max-width:100%;height:auto;border-radius:6px;object-fit:contain" />
+              </div>
+            ) : imgLoading ? (
+              <div class="empty-state" style="padding: 24px">Loading image…</div>
+            ) : isImagePath(previewName) ? (
+              <div class="empty-state" style="padding: 24px">Could not load this image.</div>
+            ) : (
+              <div class="empty-state" style="padding: 24px">Binary file — not previewable. Use the Download button.</div>
+            )
           ) : editContent !== null && !preview.truncated ? (
             <textarea
               class="file-editor mono scrollbar"

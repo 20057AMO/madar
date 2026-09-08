@@ -905,6 +905,25 @@ export const listProjectFiles = (slug: string, path?: string) =>
   api<FileListing>(`/api/projects/${slug}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`);
 export const getProjectFile = (slug: string, path: string) =>
   api<FilePreview>(`/api/projects/${slug}/file?path=${encodeURIComponent(path)}`);
+/** Fetch a workspace file's raw bytes (image preview / per-file download). */
+export async function fetchProjectFileRaw(slug: string, path: string, download = false): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  const token = getAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(slug)}/file/raw?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`,
+    { headers }
+  );
+  if (!res.ok) {
+    let msg = `Request failed (HTTP ${res.status})`;
+    try {
+      const d = await res.json();
+      if (d?.error) msg = d.error;
+    } catch { /* non-JSON */ }
+    throw new Error(msg);
+  }
+  return res.blob();
+}
 export const deleteProjectFile = (slug: string, path: string) =>
   api<{ ok: boolean; type: 'file' | 'dir' }>(
     `/api/projects/${slug}/file?path=${encodeURIComponent(path)}`,

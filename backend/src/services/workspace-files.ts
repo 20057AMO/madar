@@ -192,6 +192,60 @@ export function readWorkspaceFile(slug: string, rel: string): FilePreview {
   return { content: text, truncated, size, binary: false };
 }
 
+const MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.tiff': 'image/tiff',
+  '.tif': 'image/tiff',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.cjs': 'text/javascript',
+  '.ts': 'text/typescript',
+  '.tsx': 'text/typescript',
+  '.css': 'text/css',
+  '.html': 'text/html',
+  '.csv': 'text/csv',
+  '.xml': 'application/xml',
+  '.wasm': 'application/wasm',
+  '.zip': 'application/zip',
+  '.gz': 'application/gzip',
+  '.tar': 'application/x-tar',
+  '.tgz': 'application/gzip',
+};
+
+/** Stream a workspace file's raw bytes (images, binaries, downloads). */
+export function streamWorkspaceFile(
+  slug: string,
+  rel: string
+): { stream: fs.ReadStream; size: number; mime: string } {
+  const target = resolveWorkspacePath(slug, rel);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(target);
+  } catch {
+    throw new HttpError(404, 'File not found');
+  }
+  if (stat.isDirectory()) throw new HttpError(400, 'Is a directory');
+
+  const ext = path.extname(target).toLowerCase();
+  return {
+    stream: fs.createReadStream(target),
+    size: stat.size,
+    mime: MIME_BY_EXT[ext] || 'application/octet-stream',
+  };
+}
+
 export function deleteWorkspacePath(slug: string, rel: string): { ok: boolean; type: 'file' | 'dir' } {
   const base = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
   const target = resolveWorkspacePath(slug, rel);
