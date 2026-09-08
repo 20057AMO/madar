@@ -295,3 +295,60 @@ test('saving a board mirrors a flat WSD_CANVAS.md into the workspace (removed wh
   const gone = await api('GET', `/projects/${slug}/file?path=WSD_CANVAS.md`);
   assert.strictEqual(gone.status, 404, 'empty board removes the stale mirror');
 });
+
+test('swimlane sections: persist, normalize dangling refs, and tag the canvas mirror', async () => {
+  const slug = await createTestProject('canvas-sections');
+
+  const doc = {
+    version: 1,
+    nodes: [
+      node('s1', 'Planned in backend', { section: 'sec-backend' }),
+      node('s2', 'Planned in frontend', { section: 'sec-frontend' }),
+      node('s3', 'Unassigned'),
+    ],
+    edges: [],
+    sections: [
+      { id: 'sec-backend', name: 'Backend', color: 'blue' },
+      { id: 'sec-frontend', name: 'Frontend', color: 'green' },
+    ],
+    updatedAt: null,
+  };
+
+  const put = await api('PUT', `/projects/${slug}/canvas`, doc);
+  assert.strictEqual(put.status, 200, `save sections failed: ${put.status}`);
+  assert.strictEqual(put.json.sections.length, 2, 'sections persisted');
+  assert.strictEqual(put.json.nodes[0].section, 'sec-backend');
+
+  const get = await api('GET', `/projects/${slug}/canvas`);
+  assert.strictEqual(get.status, 200);
+  assert.strictEqual(get.json.sections.length, 2);
+
+  // Dangling section refs are dropped on the way back.
+  const dirty = {
+    version: 1,
+    nodes: [
+      node('d1', 'Ref dangling', { section: 'ghost' }),
+      node('d2', 'Fine'),
+    ],
+    edges: [],
+    sections: [],
+    updatedAt: null,
+  };
+  const dirtyPut = await api('PUT', `/projects/${slug}/canvas`, dirty);
+  assert.strictEqual(dirtyPut.status, 200);
+  assert.strictEqual(dirtyPut.json.nodes[0].section, undefined, 'dangling section ref removed');
+
+  // Re-add a real section + assignment, then verify the mirror tags the line.
+  await api('PUT', `/projects/${slug}/canvas`, {
+    version: 1,
+    nodes: [
+      node('r1', 'Planned in infra', { section: 'sec-0' }),
+    ],
+    edges: [],
+    sections: [{ id: 'sec-0', name: 'Infra', color: 'blue' }],
+    updatedAt: null,
+  });
+  const mirror = await api('GET', `/projects/${slug}/file?path=WSD_CANVAS.md`);
+  assert.strictEqual(mirror.status, 200, 'mirror exists with a sectioned board');
+  assert.match(mirror.json.content, /- \[note\] \[Infra\] Planned in infra/);
+});
