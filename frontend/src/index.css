@@ -2424,6 +2424,8 @@ input[type="file"].modern-file::file-selector-button {
   padding: 3px 6px;
   border-radius: var(--radius-sm);
 }
+.cn-selbar-edge { gap: 6px; }
+.cn-sel-label { font-size: 0.72rem; color: var(--text-3); margin-right: 2px; }
 .cn-selbar .dim { font-size: 0.72rem; }
 .cn-sel-sep { width: 1px; height: 16px; background: var(--border-2); margin: 0 3px; }
 .cn-dot {
@@ -2569,6 +2571,30 @@ input[type="file"].modern-file::file-selector-button {
 .cn-node.cn-selected { border-color: #7dd3fc; box-shadow: 0 0 0 1.5px rgba(125, 211, 252, 0.35), 0 4px 14px rgba(0, 0, 0, 0.35); }
 .cn-node.cn-connect-src { outline: 2px dashed #7dd3fc; outline-offset: 2px; }
 .cn-node.cn-connectable { outline: 2px dashed #fbbf24; outline-offset: 2px; }
+
+.cn-resize-handle {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.cn-resize-handle::before {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #7dd3fc;
+  border-bottom: 2px solid #7dd3fc;
+  border-bottom-right-radius: 3px;
+  opacity: 0.85;
+}
+.cn-resize-handle:hover::before { opacity: 1; }
 
 .cn-node.c-yellow { background: #3a3122; border-color: #6b5726; }
 .cn-node.c-blue { background: #1f2b44; border-color: #2f4a7a; }

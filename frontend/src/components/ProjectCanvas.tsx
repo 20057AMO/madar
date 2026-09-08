@@ -15,6 +15,8 @@ import {
   Lock,
   Copy,
   CopyPlus,
+  BringToFront,
+  SendToBack,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -83,10 +85,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const saveTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const dragRef = useRef<null | {
-    kind: 'node' | 'pan';
+    kind: 'node' | 'pan' | 'resize';
     ids?: string[];
     /** World positions of every dragged node at drag start. */
     startPos?: Record<string, { x: number; y: number }>;
+    resize?: { id: string; w: number; h: number; pre: string };
     cX: number;
     cY: number;
     startX: number;
@@ -344,6 +347,42 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
   };
 
+  const bringToFront = () => {
+    if (!selNodes.length || readOnly) return;
+    mutate((d) => {
+      const moved = d.nodes.filter((n) => selNodes.includes(n.id));
+      const rest = d.nodes.filter((n) => !selNodes.includes(n.id));
+      return { ...d, nodes: [...rest, ...moved] };
+    });
+  };
+
+  const sendToBack = () => {
+    if (!selNodes.length || readOnly) return;
+    mutate((d) => {
+      const moved = d.nodes.filter((n) => selNodes.includes(n.id));
+      const rest = d.nodes.filter((n) => !selNodes.includes(n.id));
+      return { ...d, nodes: [...moved, ...rest] };
+    });
+  };
+
+  const startResize = (id: string, e: any) => {
+    const node = docRef.current?.nodes.find((n) => n.id === id);
+    if (!node) return;
+    // Re-assert selection so the resize handle belongs to the primary node.
+    setSelNodes([id]);
+    setSelEdge(null);
+    dragRef.current = {
+      kind: 'resize',
+      resize: { id, w: node.w, h: node.h, pre: JSON.stringify(docRef.current) },
+      cX: e.clientX,
+      cY: e.clientY,
+      startX: node.w,
+      startY: node.h,
+      moved: false,
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+
   // ── seed from project notes ──────────────────────────────────
   const seedFromNotes = async () => {
     try {
@@ -571,6 +610,21 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const dy = e.clientY - dr.cY;
     if (dr.kind === 'pan') {
       setViewState({ ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy });
+    } else if (dr.kind === 'resize' && dr.resize) {
+      if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+      const z = viewRef.current.z;
+      dr.moved = true;
+      const nw = clamp(dr.startX + dx / z, 60, 900);
+      const nh = clamp(dr.startY + dy / z, 40, 900);
+      const node = docRef.current?.nodes.find((n) => n.id === dr.resize!.id);
+      if (!node) return;
+      node.w = nw;
+      node.h = nh;
+      const el = containerRef.current?.querySelector<HTMLElement>(`.cn-node[data-id="${dr.resize.id}"]`);
+      if (el) {
+        el.style.width = `${nw}px`;
+        el.style.height = `${nh}px`;
+      }
     } else if (dr.ids && dr.ids.length) {
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       const z = viewRef.current.z;
@@ -602,7 +656,23 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     } catch {
       /* already released */
     }
-    if (!dr || dr.kind !== 'node' || !dr.ids?.length || !dr.moved) return;
+    if (!dr) return;
+    if (dr.kind === 'resize' && dr.resize && dr.moved) {
+      const cur = docRef.current;
+      if (cur && dr.resize.pre) {
+        histRef.current = [...histRef.current.slice(-(HISTORY_DEPTH - 1)), dr.resize.pre];
+        setCanUndo(true);
+      }
+      redoRef.current = [];
+      setCanRedo(false);
+      if (cur) {
+        docRef.current = { ...cur, nodes: cur.nodes.map((n) => n) };
+        setDoc(docRef.current);
+        scheduleSave();
+      }
+      return;
+    }
+    if (dr.kind !== 'node' || !dr.ids?.length || !dr.moved) return;
     const cur = docRef.current;
     if (!cur) return;
     // A real drag: commit exactly ONE undo entry from the pre-drag snapshot,
@@ -774,6 +844,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             />
           ))}
           <span class="cn-sel-sep" />
+          <button class="cn-tb-btn" title="Bring to front" aria-label="Bring selected to front" onClick={bringToFront}>
+            <BringToFront width={14} height={14} />
+          </button>
+          <button class="cn-tb-btn" title="Send to back" aria-label="Send selected to back" onClick={sendToBack}>
+            <SendToBack width={14} height={14} />
+          </button>
           <button class="cn-tb-btn" title="Duplicate (Ctrl+D)" aria-label="Duplicate selected" onClick={duplicateSelected}>
             <CopyPlus width={14} height={14} />
           </button>
@@ -781,6 +857,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <Copy width={14} height={14} />
           </button>
           <button class="cn-tb-btn" title="Delete (Del)" aria-label="Delete selected" onClick={removeSelected}>
+            <Trash2 width={14} height={14} />
+          </button>
+        </div>
+      )}
+      {selEdge && !readOnly && (
+        <div class="cn-selbar cn-selbar-edge">
+          <span class="cn-sel-label">Selected arrow</span>
+          <span class="cn-sel-sep" />
+          <button class="cn-tb-btn" title="Delete arrow (Del)" aria-label="Delete selected arrow" onClick={removeSelected}>
             <Trash2 width={14} height={14} />
           </button>
         </div>
@@ -891,6 +976,17 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                       />
                     ))}
                   </div>
+                )}
+                {isSel && !readOnly && (
+                  <div
+                    class="cn-resize-handle"
+                    aria-hidden="true"
+                    onPointerDown={(e: any) => {
+                      e.stopPropagation();
+                      if (readOnly) return;
+                      startResize(n.id, e);
+                    }}
+                  />
                 )}
               </div>
             );
