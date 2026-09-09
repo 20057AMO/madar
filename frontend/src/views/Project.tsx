@@ -35,7 +35,6 @@ import {
   startServe,
   stopServe,
   clearProjectCrash,
-  avatarUrl,
 } from '../api';
 import type {
   Project,
@@ -55,7 +54,6 @@ import { TeamPanel } from '../components/TeamPanel';
 import { SnapshotsPanel } from '../components/SnapshotsPanel';
 import { ProjectCanvas } from '../components/ProjectCanvas';
 import { CrashBadge } from '../components/CrashBadge';
-import { Avatar } from '../components/Avatar';
 import { useAuth } from '../auth';
 import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
@@ -127,8 +125,6 @@ function fmtAction(action: string): string {
     case 'stopped': return 'Stopped';
     case 'recreated': return 'Recreated';
     case 'cloned': return 'Git cloned';
-    case 'duplicated': return 'Duplicated from';
-    case 'restored': return 'Restored from backup';
     case 'env_updated': return 'Env updated';
     case 'ports_updated': return 'Ports updated';
     case 'limits_updated': return 'Limits updated';
@@ -518,10 +514,10 @@ export function Project({ params }: { params: { slug: string } }) {
               {project?.crash && <CrashBadge crash={project.crash} />}
               {wsConnected && <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" />}
               {onlineUsers.length > 0 && (
-                <span class="presence-indicator" role="status" title={onlineUsers.map(u => u.displayName || u.username).join(', ')}>
+                <span class="presence-indicator" role="status" title={onlineUsers.map(u => u.username).join(', ')}>
                   {onlineUsers.map(u => (
                     <span class="presence-dot" key={u.id}>
-                      <Avatar name={u.displayName || u.username} avatar={avatarUrl(u.id, u.avatarExt)} size={22} />
+                      <span class="presence-avatar">{u.username.charAt(0).toUpperCase()}</span>
                       <span class="presence-online-dot" />
                     </span>
                   ))}
@@ -1603,26 +1599,15 @@ function OverviewPanel({
           <h2 class="panel-title">Activity</h2>
           {project?.activity && project.activity.length > 0 ? (
             <div class="activity-list">
-              {project.activity.slice().reverse().slice(0, 15).map((a, i) => {
-                const who = a.userId
-                  ? (project?.members || []).find((m) => m.userId === a.userId)
-                    || (project?.ownerId === a.userId ? { displayName: undefined, username: 'owner' } : null)
-                  : null;
-                return (
-                  <div class="activity-row" key={i}>
-                    <span class="activity-dot-wrap">
-                      <span class={`activity-dot ${a.action}`} />
-                      <span class="activity-act">{fmtAction(a.action)}</span>
-                    </span>
-                    <span class="activity-at">{relTime(a.at)} ago</span>
-                    {who && (
-                      <span class="activity-who">
-                        by {who.displayName || who.username}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+              {project.activity.slice().reverse().slice(0, 15).map((a, i) => (
+                <div class="activity-row" key={i}>
+                  <span class="activity-dot-wrap">
+                    <span class={`activity-dot ${a.action}`} />
+                    <span class="activity-act">{fmtAction(a.action)}</span>
+                  </span>
+                  <span class="activity-at">{relTime(a.at)} ago</span>
+                </div>
+              ))}
             </div>
           ) : (
             <div class="empty-state" style="padding: 24px">No activity yet.</div>

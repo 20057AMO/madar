@@ -275,20 +275,13 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       idMap[s.id] = id;
       return { ...s, id, x: s.x + 24, y: s.y + 24 };
     });
-    // Duplicate any internal edges between the selected nodes — respecting the
-    // edge cap just like the node budget above (a doc past MAX_EDGES would be
-    // rejected by saveCanvas and brick autosave until Undo).
+    // Duplicate any internal edges between the selected nodes.
     const srcIds = src.map((n) => n.id);
-    const maxEdges = Math.max(0, MAX_EDGES - d.edges.length);
-    const internal = internalEdges(srcIds);
-    const newEdges: CanvasEdge[] = internal.slice(0, maxEdges).map((e) => ({
+    const newEdges: CanvasEdge[] = internalEdges(srcIds).map((e) => ({
       id: freshId('e'),
       from: idMap[e.from],
       to: idMap[e.to],
     }));
-    if (newEdges.length < internal.length) {
-      setNotice(`Canvas limit — duplicated ${newEdges.length} of ${internal.length} edges`);
-    }
     const newIds = nodes.map((n) => n.id);
     mutate((prev) => ({
       ...prev,
@@ -334,18 +327,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       idMap[n.id] = id;
       return { ...n, id, x: n.x + off, y: n.y + off };
     });
-    // Re-wire edges whose both endpoints were pasted — clamped to the
-    // remaining edge budget so autosave can never exceed MAX_EDGES.
-    const maxEdges = Math.max(0, MAX_EDGES - d.edges.length);
-    const wired = edges.filter((e) => idMap[e.from] && idMap[e.to]);
-    const newEdges: CanvasEdge[] = wired.slice(0, maxEdges).map((e) => ({
-      id: freshId('e'),
-      from: idMap[e.from],
-      to: idMap[e.to],
-    }));
-    if (newEdges.length < wired.length) {
-      setNotice(`Canvas limit — pasted ${newEdges.length} of ${wired.length} edges`);
-    }
+    // Re-wire edges whose both endpoints were pasted.
+    const newEdges: CanvasEdge[] = edges
+      .filter((e) => idMap[e.from] && idMap[e.to])
+      .map((e) => ({ id: freshId('e'), from: idMap[e.from], to: idMap[e.to] }));
     mutate((prev) => ({
       ...prev,
       nodes: [...prev.nodes, ...newNodes],
