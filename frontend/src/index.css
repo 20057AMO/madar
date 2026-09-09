@@ -183,6 +183,41 @@ select:focus-visible {
 .nav-btn.active { background: var(--panel-2); color: var(--text); }
 .nav-btn.active svg { opacity: 1; }
 .sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border); }
+.sidebar-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s, color 0.12s;
+}
+.sidebar-profile-row:hover { background: var(--panel-2); }
+.sidebar-profile-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.sidebar-profile-row .user-avatar { flex-shrink: 0; }
+.nav-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.nav-icon-btn:hover { background: var(--panel-2); color: var(--text); }
 .sys-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 0.72rem; color: var(--text-3); }
 .sys-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
 .sys-dot.ok { background: var(--green); box-shadow: 0 0 6px rgba(63,185,80,0.6); }

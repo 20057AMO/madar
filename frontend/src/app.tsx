@@ -9,6 +9,7 @@ import {
   Bot,
   KeyRound,
   Settings as SettingsIcon,
+  LogOut,
   Unlock,
   Users,
   PencilRuler,
@@ -39,6 +40,7 @@ const EmbeddedIDE = lazy(() => import('./views/EmbeddedIDE').then(m => ({ defaul
 const Terminals = lazy(() => import('./views/Terminals').then(m => ({ default: m.Terminals })));
 const Providers = lazy(() => import('./views/Providers').then(m => ({ default: m.Providers })));
 const Settings = lazy(() => import('./views/Settings').then(m => ({ default: m.Settings })));
+const Profile = lazy(() => import('./views/Profile').then(m => ({ default: m.Profile })));
 const Team = lazy(() => import('./views/Team').then(m => ({ default: m.Team })));
 const Planner = lazy(() => import('./views/Planner').then(m => ({ default: m.Planner })));
 
@@ -173,7 +175,7 @@ function ProvidersUnlockBadge() {
 }
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [ocPort, setOcPort] = useState(4096);
 
   useEffect(() => {
@@ -215,15 +217,34 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <NavButton href="/opencode-studio" label="OC Studio" icon={OpencodeIcon} />
         <NavButton href="/providers" label="Providers" icon={KeyRound} />
         {user?.role === 'admin' && <NavButton href="/team" label="Team" icon={Users} />}
-        <NavButton href="/settings" label="Settings" icon={SettingsIcon} />
+        {user?.role === 'admin' && <NavButton href="/settings" label="Settings" icon={SettingsIcon} />}
         <NavButton href="/ide" label="VS Code" icon={VSCodeIcon} />
       </nav>
       <div class="sidebar-footer">
         <ProvidersUnlockBadge />
+        <div
+          class="sidebar-profile-row"
+          role="button"
+          tabIndex={0}
+          onClick={() => { navigate('/profile'); onClose(); }}
+          onKeyDown={(e: KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/profile'); onClose(); }
+          }}
+          title="Open profile"
+        >
+          <span class="sidebar-profile-label">{user?.profile?.displayName || user?.username || 'Profile'}</span>
+          {user && <Avatar name={user.profile?.displayName || user.username} avatar={avatarUrl(user.id, user.profile?.avatarExt)} size={20} />}
+        </div>
         <div class="sys-row">
           <span class="sys-dot ok" />
-          {user?.profile?.displayName || user?.username || 'authenticated'}
-          {user && <Avatar name={user.profile?.displayName || user.username} avatar={avatarUrl(user.id, user.profile?.avatarExt)} size={20} />}
+          <button
+            class="nav-icon-btn"
+            title="Sign out"
+            aria-label="Sign out"
+            onClick={(e: Event) => { e.stopPropagation(); logout(); window.location.hash = '/login'; }}
+          >
+            <LogOut width={15} height={15} class="icon" />
+          </button>
           <span class="beta-chip" title="Beta software — features and data format may change">BETA</span>
         </div>
       </div>
@@ -290,6 +311,7 @@ function Shell() {
           <Route path="/terminals/:slug" component={Terminals} />
           <Route path="/providers" component={Providers} />
           <Route path="/settings" component={Settings} />
+          <Route path="/profile" component={Profile} />
           <Route path="/team" component={Team} />
         </Suspense>
       </main>
