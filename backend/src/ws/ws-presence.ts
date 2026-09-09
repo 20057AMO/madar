@@ -3,15 +3,17 @@
  * Madar — Real-time presence tracking per project.
  * Broadcasts the list of online users to all connected clients in a project room.
  * Protocol (server → client, JSON):
- *   { type: "presence", users: [{ id, username, role }] }
+ *   { type: "presence", users: [{ id, username, role, displayName?, avatarExt? }] }
  */
 import { WebSocket } from 'ws';
-import { verifyToken } from '../services/user-store';
+import { verifyToken, getUserInfo } from '../services/user-store';
 
 interface PresenceUser {
   id: string;
   username: string;
   role: string;
+  displayName?: string;
+  avatarExt?: string;
 }
 
 /** slug → userId → { ws, user } */
@@ -59,10 +61,13 @@ export function handlePresenceSocket(
     return;
   }
 
+  const profile = getUserInfo(decoded.id);
   const user: PresenceUser = {
     id: decoded.id,
     username: decoded.username,
-    role: decoded.role
+    role: decoded.role,
+    displayName: profile?.profile?.displayName,
+    avatarExt: profile?.profile?.avatarExt,
   };
 
   // If user already connected from another tab/connection, remove old entry

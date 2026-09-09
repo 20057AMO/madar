@@ -21,6 +21,13 @@ interface TotpConfig {
   createdAt: string;
 }
 
+export interface UserProfile {
+  displayName?: string;
+  email?: string;
+  bio?: string;
+  avatarExt?: 'png' | 'jpg' | 'webp';
+}
+
 export interface StoredUser {
   id: string;
   username: string;
@@ -32,6 +39,7 @@ export interface StoredUser {
   providersPasswordVersion?: number;
   tokenVersion?: number;
   totp?: TotpConfig;
+  profile?: UserProfile;
 }
 
 // ── In-memory store ─────────────────────────────────────────────
@@ -96,7 +104,7 @@ export function getUserCount(): number {
 }
 
 /** List all users (safe fields only — no hashes). */
-export function listUsers(): Array<{ id: string; username: string; role: UserRole; createdAt: string; passwordChangedAt?: string }> {
+export function listUsers(): Array<{ id: string; username: string; role: UserRole; createdAt: string; passwordChangedAt?: string; profile?: UserProfile }> {
   if (usersMap.size === 0) loadUsers();
   return Array.from(usersMap.values()).map((u) => ({
     id: u.id,
@@ -104,14 +112,68 @@ export function listUsers(): Array<{ id: string; username: string; role: UserRol
     role: u.role,
     createdAt: u.createdAt,
     passwordChangedAt: u.passwordChangedAt,
+    profile: u.profile,
   }));
 }
 
 /** Get a single user by id (safe fields). */
-export function getUserInfo(id: string): { id: string; username: string; role: UserRole; createdAt: string; passwordChangedAt?: string } | null {
+export function getUserInfo(id: string): { id: string; username: string; role: UserRole; createdAt: string; passwordChangedAt?: string; profile?: UserProfile } | null {
   const u = getUserById(id);
   if (!u) return null;
-  return { id: u.id, username: u.username, role: u.role, createdAt: u.createdAt, passwordChangedAt: u.passwordChangedAt };
+  return { id: u.id, username: u.username, role: u.role, createdAt: u.createdAt, passwordChangedAt: u.passwordChangedAt, profile: u.profile };
+}
+
+// ── Profile (display name / email / bio / avatar) ─────────────
+
+const DISPLAY_NAME_MAX = 60;
+const EMAIL_MAX = 200;
+const BIO_MAX = 500;
+
+/** Validated, additive patch of a user's profile. `null` values clear a field. */
+export function updateUserProfile(
+  userId: string,
+  patch: { displayName?: string | null; email?: string | null; bio?: string | null }
+): { id: string; username: string; profile?: UserProfile } | null {
+  const user = getUserById(userId);
+  if (!user) return null;
+  const profile = user.profile || (user.profile = {});
+
+  if (patch.displayName !== undefined) {
+    const v = String(patch.displayName ?? '').trim();
+    if (v.length > DISPLAY_NAME_MAX) throw new Error(`Display name must be at most ${DISPLAY_NAME_MAX} characters.`);
+    if (/[\u0000-\u001f\u007f]/.test(v)) throw new Error('Display name contains invalid characters.');
+    profile.displayName = v || undefined;
+  }
+  if (patch.email !== undefined) {
+    const v = String(patch.email ?? '').trim().toLowerCase();
+    if (v.length > EMAIL_MAX) throw new Error(`Email must be at most ${EMAIL_MAX} characters.`);
+    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new Error('Invalid email address.');
+    profile.email = v || undefined;
+  }
+  if (patch.bio !== undefined) {
+    const v = String(patch.bio ?? '').trim();
+    if (v.length > BIO_MAX) throw new Error(`Bio must be at most ${BIO_MAX} characters.`);
+    profile.bio = v || undefined;
+  }
+
+  if (!Object.keys(profile).length) delete user.profile;
+  saveUsers();
+  return { id: user.id, username: user.username, profile: user.profile };
+}
+
+/** Record the stored avatar extension (or clear it) — no file I/O here. */
+export function setUserAvatarExt(userId: string, ext: 'png' | 'jpg' | 'webp' | null): boolean {
+  const user = getUserById(userId);
+  if (!user) return false;
+  if (ext) {
+    user.profile = user.profile || {};
+    user.profile.avatarExt = ext;
+  } else if (user.profile) {
+    delete user.profile.avatarExt;
+    if (!Object.keys(user.profile).length) delete user.profile;
+  }
+  saveUsers();
+  return true;
 }
 
 // ── Setup (first user = admin) ────────────────────────────────

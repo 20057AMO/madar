@@ -102,6 +102,8 @@ import {
   createUser,
   updateUserRole,
   deleteUser,
+  updateUserProfile,
+  setUserAvatarExt,
   verifyToken,
   hasProvidersPassword,
   setProvidersPassword,
@@ -125,6 +127,7 @@ import { checkUserWrite, sweepUserWriteBuckets } from './services/user-write-lim
 import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkProjectAccess } from './middleware/auth';
 import { attachWebSockets } from './ws/ws-server';
 import { getPresence } from './ws/ws-presence';
+import { saveAvatar, deleteAvatar, getAvatarPath, validAvatarUserId } from './services/avatar-store';
 
 dotenv.config();
 
@@ -280,6 +283,12 @@ const upload = multer({
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}-${file.originalname}`),
   }),
   limits: { fileSize: 200 * 1024 * 1024, files: 50 },
+});
+
+// Avatar uploads are tiny and validated by magic bytes — keep in memory.
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
 });
 
 // ── Auth: setup / login / status / change-password ───────────
@@ -588,8 +597,88 @@ app.delete('/api/users/:userId', requireAdmin, userAdminLimiter, (req: any, res)
   }
   const ok = deleteUser(req.params.userId);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
+  deleteAvatar(req.params.userId); // best-effort avatar cleanup
   recordAudit('user-deleted', true, req.ip);
   res.json({ ok: true });
+});
+
+// ── User profile & avatars ────────────────────────────────────
+
+app.get('/api/users/me/profile', (req: any, res) => {
+  const info = getUserInfo(req.user?.id);
+  if (!info) return res.status(404).json({ error: 'User not found' });
+  res.json({ profile: info.profile || {} });
+});
+
+app.get('/api/users/:userId/profile', (req: any, res) => {
+  if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
+  const info = getUserInfo(req.params.userId);
+  if (!info) return res.status(404).json({ error: 'User not found' });
+  res.json({ profile: info.profile || {} });
+});
+
+app.put('/api/users/me/profile', userWriteLimiter, (req: any, res) => {
+  try {
+    const { displayName, email, bio } = req.body || {};
+    const updated = updateUserProfile(req.user?.id, { displayName, email, bio });
+    if (!updated) return res.status(404).json({ error: 'User not found.' });
+    recordAudit('profile-update', true, req.ip);
+    res.json(updated);
+  } catch (err: any) {
+    recordAudit('profile-update', false, req.ip);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/users/:userId/profile', requireAdmin, userWriteLimiter, (req: any, res) => {
+  try {
+    if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
+    const { displayName, email, bio } = req.body || {};
+    const updated = updateUserProfile(req.params.userId, { displayName, email, bio });
+    if (!updated) return res.status(404).json({ error: 'User not found.' });
+    recordAudit('profile-update', true, req.ip);
+    res.json(updated);
+  } catch (err: any) {
+    recordAudit('profile-update', false, req.ip);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/users/me/avatar', userWriteLimiter, avatarUpload.single('avatar'), (req: any, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image file provided.' });
+    const ext = saveAvatar(req.user?.id, req.file.buffer);
+    if (!setUserAvatarExt(req.user?.id, ext)) return res.status(404).json({ error: 'User not found.' });
+    recordAudit('avatar-upload', true, req.ip);
+    res.json({ avatarUrl: `/api/users/${req.user?.id}/avatar` });
+  } catch (err: any) {
+    recordAudit('avatar-upload', false, req.ip);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/me/avatar', userWriteLimiter, (req: any, res) => {
+  try {
+    if (deleteAvatar(req.user?.id)) {
+      setUserAvatarExt(req.user?.id, null);
+      recordAudit('avatar-remove', true, req.ip);
+    }
+    res.json({ ok: true });
+  } catch (err: any) {
+    recordAudit('avatar-remove', false, req.ip);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/users/:userId/avatar', (req: any, res) => {
+  if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
+  const p = getAvatarPath(req.params.userId);
+  if (!p) return res.status(404).json({ error: 'No avatar' });
+  const ext = p.endsWith('.png') ? 'png' : p.endsWith('.webp') ? 'webp' : 'jpeg';
+  res.setHeader('Content-Type', `image/${ext}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(p);
 });
 
 // ── Server info / networking ─────────────────────────────────
@@ -1377,7 +1466,7 @@ app.get('/api/projects/:slug/members', requireProjectAccess('viewer'), async (re
     // Enrich with usernames
     const enriched = members.map((m) => {
       const info = getUserInfo(m.userId);
-      return { ...m, username: info?.username || 'unknown' };
+      return { ...m, username: info?.username || 'unknown', displayName: info?.profile?.displayName, avatarExt: info?.profile?.avatarExt };
     });
     res.json({ members: enriched });
   } catch (err: any) {
@@ -2147,6 +2236,10 @@ app.use((err: any, _req: any, res: any, next: any) => {
   // client errors — surface them as 400, not 500.
   if (err?.type === 'entity.parse.failed' || err?.type === 'entity.too.large') {
     return res.status(400).json({ error: err.type === 'entity.parse.failed' ? 'Invalid JSON body' : 'Request body too large' });
+  }
+  // multer rejections (oversized uploads, unexpected fields) are client errors.
+  if (typeof err?.code === 'string' && err.code.startsWith('LIMIT_')) {
+    return res.status(400).json({ error: 'Upload rejected' });
   }
   console.error('[Madar] Unhandled error:', err?.stack || err);
   res.status(500).json({ error: 'Internal server error' });

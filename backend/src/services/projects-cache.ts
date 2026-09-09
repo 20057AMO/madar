@@ -32,19 +32,24 @@ export type { ProjectsCache };
  *  access each project. Fields are added, never removed, and every member is
  *  rebuilt as a fresh object so the stored meta reference is never mutated. */
 type PeopleEnriched = ProjectInfo & {
-  owner?: { id: string; username: string } | null;
-  members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string; username: string }[];
+  owner?: { id: string; username: string; displayName?: string; avatarExt?: string } | null;
+  members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string; username: string; displayName?: string; avatarExt?: string }[];
 };
 
 function enrichPeople(projects: ProjectInfo[]): PeopleEnriched[] {
-  const usersById = new Map(listUsers().map((u) => [u.id, u.username]));
-  const resolve = (id?: string) => (id ? usersById.get(id) ?? '(deleted user)' : null);
+  const usersById = new Map(listUsers().map((u) => [u.id, u]));
+  const resolve = (id?: string) => (id ? usersById.get(id) ?? null : null);
+  const shape = (u?: { username: string; profile?: { displayName?: string; avatarExt?: string } } | null) => ({
+    username: u?.username ?? '(deleted user)',
+    displayName: u?.profile?.displayName,
+    avatarExt: u?.profile?.avatarExt,
+  });
 
   return projects.map((p) => {
     const out = p as PeopleEnriched;
-    out.owner = p.ownerId ? { id: p.ownerId, username: resolve(p.ownerId)! } : null;
+    out.owner = p.ownerId ? { id: p.ownerId, ...shape(resolve(p.ownerId)) } : null;
     if (Array.isArray(p.members)) {
-      out.members = p.members.map((m) => ({ ...m, username: resolve(m.userId)! }));
+      out.members = p.members.map((m) => ({ ...m, ...shape(resolve(m.userId)) }));
     }
     return out;
   });
