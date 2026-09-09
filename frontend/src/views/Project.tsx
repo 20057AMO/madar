@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
+import { OpencodeIcon, VSCodeIcon } from '../components/brand-icons';
 import {
   getProject,
   startProject,
@@ -31,6 +32,7 @@ import {
   wsUrl,
   exportProjectSnapshot,
   exportProjectZip,
+  openOpencodeProject,
   crashTitle,
   startServe,
   stopServe,
@@ -57,7 +59,6 @@ import { CrashBadge } from '../components/CrashBadge';
 import { useAuth } from '../auth';
 import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
-import { VSCodeIcon } from '../components/brand-icons';
 
 type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'snapshots' | 'canvas';
 
@@ -332,6 +333,7 @@ export function Project({ params }: { params: { slug: string } }) {
   const [nameDraft, setNameDraft] = useState('');
   const [copied, setCopied] = useState(false);
   const [zipping, setZipping] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
 
   const [moreOpen, setMoreOpen] = useState(false);
   const headerMoreWrap = useRef<HTMLDivElement | null>(null);
@@ -447,6 +449,15 @@ export function Project({ params }: { params: { slug: string } }) {
     }
   };
 
+  const openOpencode = async () => {
+    try {
+      await openOpencodeProject(slug);
+      window.location.hash = `/opencode?project=${encodeURIComponent(slug)}`;
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   // Escape/blur both cancel — never commit a draft on accidental blur. The
   // input unmounts right after Escape, firing onBlur; routing it here instead
   // of handleSaveName is what keeps a stale keystroke from being PATCHed.
@@ -498,11 +509,10 @@ export function Project({ params }: { params: { slug: string } }) {
                 <span class="detail-rename-hint">Enter to save · Esc to cancel</span>
               </div>
             ) : (
-              <h1 class="detail-title" style="display:inline-flex;align-items:center;gap:6px; margin-bottom:10px;">
-                <span class="detail-avatar" aria-hidden="true">
-                  {(project?.name || 'P').trim().charAt(0).toUpperCase()}
-                </span>
-                {project?.name || 'Loading…'}
+              <div class="detail-name-row">
+                <h1 class="detail-title">
+                  <span class="detail-title-text">{project?.name || 'Loading…'}</span>
+                </h1>
                 {!readOnly && (
                   <button
                     class="btn-ghost sm icon-only"
@@ -514,7 +524,7 @@ export function Project({ params }: { params: { slug: string } }) {
                     <Pencil width={13} height={13} class="icon" />
                   </button>
                 )}
-              </h1>
+              </div>
             )}
             <div class="detail-meta-line">
               <span class="detail-slug" title={`Project slug: ${slug}`}>{slug}</span>
@@ -549,12 +559,11 @@ export function Project({ params }: { params: { slug: string } }) {
               <VSCodeIcon width={13} height={13} class="icon" /> Open With 
             </button>
             <span class="detail-action-sep" aria-hidden="true" />
-            <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — backup requires editor access' : 'Download a snapshot of the project as tar.gz'}>
-              <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
+            <button class="btn-ghost sm" onClick={() => setBackupOpen(true)} disabled={readOnly} title={readOnly ? 'Viewer — backup requires editor access' : 'Choose a backup format'}>
+              <Download width={13} height={13} class="icon" /> Backup
             </button>
-            <span class="detail-action-sep" aria-hidden="true" />
-            <button class="btn-ghost sm" onClick={handleZip} disabled={zipping || readOnly} title={readOnly ? 'Viewer — download requires editor access' : 'Download workspace as ZIP'}>
-              <FileArchive width={13} height={13} class="icon" /> {zipping ? 'Zipping…' : 'ZIP'}
+            <button class="btn-ghost sm" onClick={openOpencode} title="Open this project in opencode">
+              <OpencodeIcon width={13} height={13} class="icon" /> opencode
             </button>
           </div>
           <span class="header-more-wrap" ref={headerMoreWrap}>
@@ -572,15 +581,38 @@ export function Project({ params }: { params: { slug: string } }) {
               <div ref={headerMenuRef} class="header-menu" role="menu" aria-label="Project actions">
                 <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><VSCodeIcon width={13} height={13} class="icon" /> Open With</button>
                 <div class="header-menu-sep" role="separator" />
-                <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title="Download snapshot as tar.gz">
-                  <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
+                <button role="menuitem" onClick={() => { setMoreOpen(false); setBackupOpen(true); }} disabled={readOnly}>
+                  <Download width={13} height={13} class="icon" /> Backup
                 </button>
-                <button role="menuitem" onClick={() => { setMoreOpen(false); handleZip(); }} disabled={zipping || readOnly} title="Download workspace as ZIP">
-                  <FileArchive width={13} height={13} class="icon" /> {zipping ? 'Zipping…' : 'ZIP'}
+                <button role="menuitem" onClick={() => { setMoreOpen(false); openOpencode(); }}>
+                  <OpencodeIcon width={13} height={13} class="icon" /> opencode
                 </button>
               </div>
             )}
           </span>
+          {backupOpen && (
+            <div class="modal-overlay" role="presentation" onClick={() => setBackupOpen(false)}>
+              <div class="modal-card backup-format-card" role="dialog" aria-modal="true" aria-labelledby="backup-format-title" onClick={(e) => e.stopPropagation()}>
+                <div class="modal-head">
+                  <div>
+                    <h2 id="backup-format-title">Download project</h2>
+                    <p class="settings-hint">Choose the format that fits your workflow.</p>
+                  </div>
+                  <button class="btn-ghost sm icon-only" aria-label="Close backup format dialog" onClick={() => setBackupOpen(false)}>×</button>
+                </div>
+                <div class="backup-format-options">
+                  <button class="backup-format-option" disabled={exporting} onClick={() => { setBackupOpen(false); void handleExport(); }}>
+                    <Download width={20} height={20} class="icon" />
+                    <span><strong>Project snapshot</strong><small>Tar.gz with files, notes, canvas and project configuration</small></span>
+                  </button>
+                  <button class="backup-format-option" disabled={zipping} onClick={() => { setBackupOpen(false); void handleZip(); }}>
+                    <FileArchive width={20} height={20} class="icon" />
+                    <span><strong>Workspace ZIP</strong><small>ZIP archive containing the workspace files</small></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           <button
             class={project?.status === 'running' ? 'btn-danger sm' : 'btn-primary sm'}
             onClick={() => (project?.status === 'running' ? handleStop() : handleStart())}
