@@ -82,6 +82,18 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
     }
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    const stored = localStorage.getItem('wsd.token');
+    if (!stored) return;
+    try {
+      const res = await fetch('/api/auth/status', { headers: { Authorization: `Bearer ${stored}` } });
+      const data = await res.json();
+      if (data?.user) setUser(data.user);
+    } catch {
+      /* keep the current user — a fresh leak here is not worth a logout */
+    }
+  }, []);
+
   const doLogin = useCallback(async (username: string, password: string) => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
@@ -100,8 +112,9 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
     setToken(data.token);
     setUser({ id: data.id, username: data.username, role: data.role || 'editor', createdAt: '' });
     setHasUser(true);
+    await refreshUser();
     return {};
-  }, []);
+  }, [refreshUser]);
 
   const verify2fa = useCallback(async (code: string) => {
     if (!pending2faToken) throw new Error('No pending sign-in. Start again.');
@@ -117,7 +130,8 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
     setToken(data.token);
     setUser({ id: data.id, username: data.username, role: data.role || 'editor', createdAt: '' });
     setHasUser(true);
-  }, [pending2faToken]);
+    await refreshUser();
+  }, [pending2faToken, refreshUser]);
 
   const cancel2fa = useCallback(() => setPending2faToken(null), []);
 
@@ -133,24 +147,13 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
     setToken(data.token);
     setUser({ id: data.id, username: data.username, role: data.role || 'admin', createdAt: '' });
     setHasUser(true);
-  }, []);
+    await refreshUser();
+  }, [refreshUser]);
 
   const logout = useCallback(() => {
     localStorage.removeItem('wsd.token');
     setToken(null);
     setUser(null);
-  }, []);
-
-  const refreshUser = useCallback(async () => {
-    const stored = localStorage.getItem('wsd.token');
-    if (!stored) return;
-    try {
-      const res = await fetch('/api/auth/status', { headers: { Authorization: `Bearer ${stored}` } });
-      const data = await res.json();
-      if (data?.user) setUser(data.user);
-    } catch {
-      /* keep the current user — a fresh leak here is not worth a logout */
-    }
   }, []);
 
   // ── Auto-logout on inactivity ─────────────────────────────────
