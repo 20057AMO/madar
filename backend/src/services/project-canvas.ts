@@ -34,6 +34,9 @@ export interface CanvasNode {
   y: number;
   w: number;
   h: number;
+  textX?: number;
+  textY?: number;
+  textSize?: number;
   color: CanvasColor;
   done?: boolean;
   /** Optional swimlane/section id this node belongs to. */
@@ -124,6 +127,9 @@ function normalizeNode(raw: unknown): CanvasNode | null {
     y: clampNum(r.y, -100_000, 100_000, 0),
     w: clampNum(r.w, 60, 900, 220),
     h: clampNum(r.h, 40, 900, type === 'card' ? 120 : 100),
+    textX: clampNum(r.textX, 0, 899, 10),
+    textY: clampNum(r.textY, 0, 899, 10),
+    textSize: clampNum(r.textSize, 10, 48, 14),
     color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
     done: r.done === true,
     section,

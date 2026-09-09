@@ -92,6 +92,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [confirmDelSection, setConfirmDelSection] = useState<string | null>(null);
   /** Cascade counter so rapid adds never stack new nodes on the viewport center. */
   const addSeqRef = useRef(0);
+  const nodeElsRef = useRef(new Map<string, HTMLElement>());
+  const panFrameRef = useRef<number | null>(null);
+  const pendingPanRef = useRef<{ x: number; y: number } | null>(null);
 
   const [view, setView] = useState<ViewState>({ x: 40, y: 40, z: 1 });
   const [canUndo, setCanUndo] = useState(false);
@@ -428,6 +431,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       y: cy - 50 + offY,
       w: 220,
       h: type === 'card' ? 120 : 100,
+      textX: 10,
+      textY: 10,
+      textSize: 14,
       color: type === 'card' ? 'blue' : 'yellow',
       done: false,
     };
@@ -505,6 +511,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFs);
     return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  useEffect(() => () => {
+    if (panFrameRef.current !== null) cancelAnimationFrame(panFrameRef.current);
   }, []);
 
   useEffect(() => {
@@ -908,7 +918,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const dx = e.clientX - dr.cX;
     const dy = e.clientY - dr.cY;
     if (dr.kind === 'pan') {
-      setViewState({ ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy });
+      pendingPanRef.current = { x: dr.startX + dx, y: dr.startY + dy };
+      if (panFrameRef.current === null) {
+        panFrameRef.current = requestAnimationFrame(() => {
+          panFrameRef.current = null;
+          const pending = pendingPanRef.current;
+          if (!pending) return;
+          setViewState({ ...viewRef.current, x: pending.x, y: pending.y });
+        });
+      }
     } else if (dr.kind === 'marquee') {
       const { x, y, z } = viewRef.current;
       const rr = containerRef.current?.getBoundingClientRect();
@@ -941,7 +959,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       if (!node) return;
       node.w = nw;
       node.h = nh;
-      const el = containerRef.current?.querySelector<HTMLElement>(`.cn-node[data-id="${dr.resize.id}"]`);
+      const el = nodeElsRef.current.get(dr.resize.id);
       if (el) {
         el.style.width = `${nw}px`;
         el.style.height = `${nh}px`;
@@ -960,7 +978,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         const ny = sp.y + dy / z;
         node.x = nx;
         node.y = ny;
-        const el = containerRef.current?.querySelector<HTMLElement>(`.cn-node[data-id="${id}"]`);
+        const el = nodeElsRef.current.get(id);
         if (el) {
           el.style.left = `${nx}px`;
           el.style.top = `${ny}px`;
@@ -1276,6 +1294,45 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               onClick={() => setColor(selected.id, c)}
             />
           ))}
+          <label class="cn-text-control">
+            <span>Size</span>
+            <input
+              type="number"
+              min="10"
+              max="48"
+              step="1"
+              value={selected.textSize ?? 14}
+              aria-label="Text size"
+              onPointerDown={(e: any) => e.stopPropagation()}
+              onChange={(e: any) => patchNode(selected.id, { textSize: clamp(Number(e.currentTarget.value) || 14, 10, 48) })}
+            />
+          </label>
+          <label class="cn-text-control">
+            <span>X</span>
+            <input
+              type="number"
+              min="0"
+              max={Math.max(0, selected.w - 20)}
+              step="1"
+              value={Math.round(selected.textX ?? 10)}
+              aria-label="Text horizontal position"
+              onPointerDown={(e: any) => e.stopPropagation()}
+              onChange={(e: any) => patchNode(selected.id, { textX: clamp(Number(e.currentTarget.value) || 0, 0, Math.max(0, selected.w - 20)) })}
+            />
+          </label>
+          <label class="cn-text-control">
+            <span>Y</span>
+            <input
+              type="number"
+              min="0"
+              max={Math.max(0, selected.h - 20)}
+              step="1"
+              value={Math.round(selected.textY ?? 10)}
+              aria-label="Text vertical position"
+              onPointerDown={(e: any) => e.stopPropagation()}
+              onChange={(e: any) => patchNode(selected.id, { textY: clamp(Number(e.currentTarget.value) || 0, 0, Math.max(0, selected.h - 20)) })}
+            />
+          </label>
           {doc?.sections?.length ? (
             <select
               class="cn-section-select"
@@ -1477,6 +1534,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 key={n.id}
                 class={`cn-node ${n.type} c-${n.color} ${isSel ? 'cn-selected' : ''} ${connectFrom === n.id ? 'cn-connect-src' : ''} ${connectFrom && connectFrom !== n.id ? 'cn-connectable' : ''}`}
                 data-id={n.id}
+                ref={(el: HTMLElement | null) => {
+                  if (el) nodeElsRef.current.set(n.id, el);
+                  else nodeElsRef.current.delete(n.id);
+                }}
                 style={`left: ${n.x}px; top: ${n.y}px; width: ${n.w}px; height: ${n.h}px;`}
                 onDblClick={() => { if (!readOnly) startEdit(n.id); }}
               >
@@ -1506,11 +1567,17 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                     onInput={(e: any) => patchNode(n.id, { text: e.currentTarget.value }, false)}
                     onBlur={commitEdit}
                     onKeyDown={onEditorKey}
+                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; width: calc(100% - ${(n.textX ?? 10) + 10}px); height: calc(100% - ${(n.textY ?? 10) + 10}px); font-size: ${n.textSize ?? 14}px;`}
                     onClick={(e: any) => e.stopPropagation()}
                     onPointerDown={(e: any) => e.stopPropagation()}
                   />
                 ) : (
-                  <div class="cn-text">{n.text || <span class="cn-placeholder">Double-click to edit</span>}</div>
+                  <div
+                    class="cn-text"
+                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; right: 10px; bottom: 10px; font-size: ${n.textSize ?? 14}px;`}
+                  >
+                    {n.text || <span class="cn-placeholder">Double-click to edit</span>}
+                  </div>
                 )}
                 {!isEditing && !readOnly && (
                   <div class="cn-node-colors">

@@ -548,6 +548,9 @@ export interface CanvasNode {
   y: number;
   w: number;
   h: number;
+  textX?: number;
+  textY?: number;
+  textSize?: number;
   color: CanvasColor;
   done?: boolean;
   section?: string;

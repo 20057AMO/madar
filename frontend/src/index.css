@@ -2672,6 +2672,26 @@ input[type="file"].modern-file::file-selector-button {
 .cn-sel-label { font-size: 0.72rem; color: var(--text-3); margin-right: 2px; }
 .cn-selbar .dim { font-size: 0.72rem; }
 .cn-sel-sep { width: 1px; height: 16px; background: var(--border-2); margin: 0 3px; }
+.cn-text-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.cn-text-control input {
+  width: 42px;
+  min-height: 24px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+.cn-text-control input:focus { outline: none; border-color: var(--accent); }
 .cn-dot {
   width: 14px;
   height: 14px;
@@ -2810,6 +2830,7 @@ input[type="file"].modern-file::file-selector-button {
   transition: border-color 0.12s, box-shadow 0.12s;
   touch-action: none;
   box-sizing: border-box;
+  will-change: left, top, width, height;
 }
 .cn-node:hover { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04); }
 .cn-node.cn-selected {
@@ -2849,11 +2870,11 @@ input[type="file"].modern-file::file-selector-button {
 .cn-node.c-green { background: #1c3329; border-color: #2f5c41; }
 
 .cn-text {
-  flex: 1;
+  position: absolute;
   white-space: pre-wrap;
   word-break: break-word;
   overflow: hidden;
-  max-height: 100%;
+  line-height: 1.4;
 }
 .cn-placeholder { font-style: italic; opacity: 0.55; }
 
@@ -2894,16 +2915,12 @@ input[type="file"].modern-file::file-selector-button {
 
 .cn-editor {
   position: absolute;
-  inset: 4px;
-  width: calc(100% - 8px);
-  height: calc(100% - 8px);
   background: rgba(15, 16, 20, 0.92);
   color: var(--text);
   border: 1px solid #7dd3fc;
   border-radius: 6px;
   padding: 7px 9px;
   font: inherit;
-  font-size: 0.8rem;
   line-height: 1.4;
   resize: none;
   outline: none;
