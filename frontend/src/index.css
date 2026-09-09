@@ -2926,7 +2926,9 @@ input[type="file"].modern-file::file-selector-button {
 .cn-node.shape-diamond { clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); border-radius: 0; }
 .cn-node.shape-pill { border-radius: 999px; }
 .cn-node.shape-diamond .cn-node-colors,
-.cn-node.shape-diamond .cn-resize { display: none; }
+.cn-node.shape-diamond .cn-resize,
+.cn-node.shape-diamond .cn-check,
+.cn-node.shape-diamond .cn-port { display: none; }
 .cn-shape-control {
   display: inline-flex;
   align-items: center;
@@ -2999,6 +3001,26 @@ input[type="file"].modern-file::file-selector-button {
   word-break: break-word;
   overflow: hidden;
   line-height: 1.4;
+}
+.cn-node.shape-ellipse .cn-text,
+.cn-node.shape-ellipse .cn-editor {
+  left: 18% !important;
+  right: 18% !important;
+  top: 24% !important;
+  bottom: 24% !important;
+}
+.cn-node.shape-diamond .cn-text,
+.cn-node.shape-diamond .cn-editor {
+  left: 24% !important;
+  right: 24% !important;
+  top: 28% !important;
+  bottom: 28% !important;
+  text-align: center !important;
+}
+.cn-node.shape-pill .cn-text,
+.cn-node.shape-pill .cn-editor {
+  left: 16% !important;
+  right: 16% !important;
 }
 .cn-placeholder { font-style: italic; opacity: 0.55; }
 
