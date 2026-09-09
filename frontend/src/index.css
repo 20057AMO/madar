@@ -2691,6 +2691,11 @@ input[type="file"].modern-file::file-selector-button {
   pointer-events: none;
 }
 .cn-selbar > * {
+  pointer-events: none;
+}
+.cn-selbar button,
+.cn-selbar input,
+.cn-selbar select {
   pointer-events: auto;
 }
 .cn-selbar-edge { gap: 6px; }
