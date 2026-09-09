@@ -357,7 +357,7 @@ app.post('/api/auth/login/verify', totpLimiter, (req: any, res) => {
 
 // ── User avatars (public by design: <img> tags carry no auth header) ──
 app.get('/api/users/:userId/avatar', (req: any, res) => {
-  if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
+  if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'No avatar' });
   const p = getAvatarPath(req.params.userId);
   if (!p) return res.status(404).json({ error: 'No avatar' });
   const ext = p.endsWith('.png') ? 'png' : p.endsWith('.webp') ? 'webp' : 'jpeg';

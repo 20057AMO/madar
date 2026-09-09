@@ -153,6 +153,7 @@ export function updateUserProfile(
   if (patch.bio !== undefined) {
     const v = String(patch.bio ?? '').trim();
     if (v.length > BIO_MAX) throw new Error(`Bio must be at most ${BIO_MAX} characters.`);
+    if (/[\u0000-\u001f\u007f]/.test(v)) throw new Error('Bio contains invalid characters.');
     profile.bio = v || undefined;
   }
 

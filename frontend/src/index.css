@@ -2213,16 +2213,10 @@ input[type="file"].modern-file::file-selector-button {
 .member-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
 
 .member-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #1f6feb;
-  color: #fff;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 0.85rem;
   flex-shrink: 0;
 }
 
@@ -2274,20 +2268,6 @@ input[type="file"].modern-file::file-selector-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.presence-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #2a2c33;
-  color: #9ba0a8;
-  font-size: 0.7rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1.5px solid #1a1b20;
 }
 
 .presence-online-dot {

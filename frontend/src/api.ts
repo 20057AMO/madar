@@ -29,8 +29,8 @@ export interface Project {
   activity?: { action: string; at: string }[];
   ownerId?: string;
   /** Resolved owner identity (enriched on the project list). */
-  owner?: { id: string; username: string; displayName?: string; avatarExt?: string } | null;
-  members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string; username?: string; displayName?: string; avatarExt?: string }[];
+  owner?: { id: string; username: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' } | null;
+  members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string; username?: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' }[];
   canvasEditedAt?: string | null;
   tags?: string[];
   /** Last detected container crash — red chip/banner until cleared. */
@@ -985,7 +985,7 @@ export interface UserProfile {
   email?: string;
   bio?: string;
   /** Avatar image type stored on disk (data/avatars/<userId>.<ext>). */
-  avatarExt?: string;
+  avatarExt?: 'png' | 'jpg' | 'webp';
 }
 
 export interface TeamUser {
@@ -1046,7 +1046,7 @@ export const deleteMyAvatar = () =>
  * Avatar image URL for a user, or null when they have no stored image.
  * The image itself is served by GET /api/users/:userId/avatar.
  */
-export const avatarUrl = (userId: string, avatarExt?: string | null): string | null =>
+export const avatarUrl = (userId: string, avatarExt?: 'png' | 'jpg' | 'webp' | null): string | null =>
   avatarExt ? `/api/users/${userId}/avatar` : null;
 
 // ── Project membership ──────────────────────────────────────
@@ -1057,7 +1057,7 @@ export interface ProjectMember {
   role: 'admin' | 'editor' | 'viewer';
   addedAt: string;
   displayName?: string;
-  avatarExt?: string;
+  avatarExt?: 'png' | 'jpg' | 'webp';
 }
 
 export const listProjectMembers = (slug: string) =>

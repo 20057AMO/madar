@@ -3,9 +3,6 @@ import {
   Users,
   UserPlus,
   Trash2,
-  ShieldCheck,
-  Shield,
-  Eye,
   Loader2,
   AlertTriangle,
 } from 'lucide-preact';
@@ -21,10 +18,10 @@ import {
 } from '../api';
 import { Avatar } from '../components/Avatar';
 
-const ROLE_CONFIG: Record<UserRole, { label: string; color: string; icon: typeof ShieldCheck }> = {
-  admin: { label: 'Admin', color: '#f59e0b', icon: ShieldCheck },
-  editor: { label: 'Editor', color: '#3b82f6', icon: Shield },
-  viewer: { label: 'Viewer', color: '#6b7280', icon: Eye },
+const ROLE_CONFIG: Record<UserRole, { label: string; color: string }> = {
+  admin: { label: 'Admin', color: '#f59e0b' },
+  editor: { label: 'Editor', color: '#3b82f6' },
+  viewer: { label: 'Viewer', color: '#6b7280' },
 };
 
 export function Team() {

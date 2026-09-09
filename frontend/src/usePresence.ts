@@ -11,7 +11,7 @@ export interface PresenceUser {
   username: string;
   role: string;
   displayName?: string;
-  avatarExt?: string;
+  avatarExt?: 'png' | 'jpg' | 'webp';
 }
 
 export function usePresence(slug: string | null): PresenceUser[] {
