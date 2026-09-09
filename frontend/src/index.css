@@ -2331,6 +2331,7 @@ input[type="file"].modern-file::file-selector-button {
 
 /* ── Project Canvas ─────────────────────────────────────────── */
 .canvas-wrap {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2662,6 +2663,11 @@ input[type="file"].modern-file::file-selector-button {
 @keyframes cn-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 
 .cn-selbar {
+  position: absolute;
+  top: 102px;
+  left: 10px;
+  right: 10px;
+  z-index: 8;
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
@@ -2671,6 +2677,14 @@ input[type="file"].modern-file::file-selector-button {
   max-width: 100%;
   box-sizing: border-box;
   overflow: hidden;
+  background: rgba(22, 24, 31, 0.92);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+.cn-selbar > * {
+  pointer-events: auto;
 }
 .cn-selbar-edge { gap: 6px; }
 .cn-sel-label { font-size: 0.72rem; color: var(--text-3); margin-right: 2px; }
@@ -3087,7 +3101,10 @@ input[type="file"].modern-file::file-selector-button {
 }
 @media (max-width: 900px) {
   .cn-selbar {
-    width: 100%;
+    top: 108px;
+    left: 6px;
+    right: 6px;
+    width: auto;
     padding: 6px;
     gap: 6px;
     background: var(--panel-2);

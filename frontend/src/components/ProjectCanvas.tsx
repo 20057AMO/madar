@@ -316,14 +316,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     return d.edges.filter((e) => set.has(e.from) && set.has(e.to));
   };
 
-  const duplicateSelected = () => {
-    if (!selNodes.length || readOnly) return;
+  const duplicateSelected = (ids = selNodes) => {
+    if (!ids.length || readOnly) return;
     const d = docRef.current;
     if (!d) return;
     const maxNew = MAX_NODES - d.nodes.length;
     if (maxNew <= 0) { setNotice(`Canvas limit reached (${MAX_NODES} nodes)`); return; }
-    const budget = Math.min(selNodes.length, maxNew);
-    const src = selNodes.slice(0, budget).map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
+    const budget = Math.min(ids.length, maxNew);
+    const src = ids.slice(0, budget).map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
     if (!src.length) return;
     // Map old id → new id so internal edges can be re-wired.
     const idMap: Record<string, string> = {};
@@ -349,12 +349,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     pasteCountRef.current = 0;
   };
 
-  const copySelected = () => {
-    if (!selNodes.length) return;
+  const copySelected = (ids = selNodes) => {
+    if (!ids.length) return;
     const d = docRef.current;
     if (!d) return;
-    const nodes = selNodes.map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
-    const edges = internalEdges(selNodes);
+    const nodes = ids.map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
+    const edges = internalEdges(ids);
     copyRef.current = { nodes, edges };
     // Write a portable JSON to the system clipboard so the user can paste
     // across tabs or after a page refresh.
@@ -538,7 +538,13 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const edgeEl = t.closest?.('.cn-edge') as HTMLElement | null;
     if (nodeEl) {
       const id = nodeEl.dataset.id ?? '';
-      setSelNodes((prev) => (prev.includes(id) ? prev : [id]));
+      setSelNodes([id]);
+      setSelEdge(null);
+    } else if (edgeEl) {
+      setSelNodes([]);
+      setSelEdge(edgeEl.dataset.id ?? null);
+    } else {
+      setSelNodes([]);
       setSelEdge(null);
     }
     setCtxMenu({ x: e.clientX, y: e.clientY, nodeId: nodeEl?.dataset.id ?? undefined, edgeId: edgeEl?.dataset.id ?? undefined });
@@ -614,20 +620,20 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     setSelEdge(null);
   };
 
-  const bringToFront = () => {
-    if (!selNodes.length || readOnly) return;
+  const bringToFront = (ids = selNodes) => {
+    if (!ids.length || readOnly) return;
     mutate((d) => {
-      const moved = d.nodes.filter((n) => selNodes.includes(n.id));
-      const rest = d.nodes.filter((n) => !selNodes.includes(n.id));
+      const moved = d.nodes.filter((n) => ids.includes(n.id));
+      const rest = d.nodes.filter((n) => !ids.includes(n.id));
       return { ...d, nodes: [...rest, ...moved] };
     });
   };
 
-  const sendToBack = () => {
-    if (!selNodes.length || readOnly) return;
+  const sendToBack = (ids = selNodes) => {
+    if (!ids.length || readOnly) return;
     mutate((d) => {
-      const moved = d.nodes.filter((n) => selNodes.includes(n.id));
-      const rest = d.nodes.filter((n) => !selNodes.includes(n.id));
+      const moved = d.nodes.filter((n) => ids.includes(n.id));
+      const rest = d.nodes.filter((n) => !ids.includes(n.id));
       return { ...d, nodes: [...moved, ...rest] };
     });
   };
@@ -913,6 +919,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     // Background
     if (connectFrom) {
       setConnectFrom(null);
+      setSelNodes([]);
+      setSelEdge(null);
       return;
     }
     if (e.button === 1 || e.button === 2) {
@@ -926,6 +934,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       el.setPointerCapture(e.pointerId);
     } else if (e.button === 0) {
       // Drag the empty canvas to pan. Hold Shift for marquee selection.
+      if (!e.shiftKey) {
+        setSelNodes([]);
+        setSelEdge(null);
+        setConnectFrom(null);
+      }
       const { x, y, z } = viewRef.current;
       const rr = containerRef.current?.getBoundingClientRect();
       const ox = rr ? rr.left : 0;
@@ -1334,17 +1347,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       {/* Selection toolbar (active while a node is selected) */}
       {selected && !readOnly && (
         <div class="cn-selbar">
-          {COLORS.map((c) => (
-            <button
-              key={c}
-              class={`cn-dot c-${c} ${selected.color === c ? 'cn-dot-active' : ''}`}
-              title={`${c} color`}
-              aria-label={`${c} color`}
-              aria-pressed={selected.color === c}
-              onClick={() => setColor(selected.id, c)}
-            />
-          ))}
-          <span class="cn-sel-sep" />
           <span class="cn-shape-control" role="group" aria-label="Change selected shape">
             <span class="cn-shape-label">Shape</span>
             {SHAPES.map(({ value, label, hint, icon: Icon }) => (
@@ -1455,16 +1457,16 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             </select>
           ) : null}
           <span class="cn-sel-sep" />
-          <button class="cn-tb-btn" title="Bring to front" aria-label="Bring selected to front" onClick={bringToFront}>
+          <button class="cn-tb-btn" title="Bring to front" aria-label="Bring selected to front" onClick={() => bringToFront()}>
             <BringToFront width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Send to back" aria-label="Send selected to back" onClick={sendToBack}>
+          <button class="cn-tb-btn" title="Send to back" aria-label="Send selected to back" onClick={() => sendToBack()}>
             <SendToBack width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Duplicate (Ctrl+D)" aria-label="Duplicate selected" onClick={duplicateSelected}>
+          <button class="cn-tb-btn" title="Duplicate (Ctrl+D)" aria-label="Duplicate selected" onClick={() => duplicateSelected()}>
             <CopyPlus width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Copy (Ctrl+C)" aria-label="Copy selected" onClick={copySelected}>
+          <button class="cn-tb-btn" title="Copy (Ctrl+C)" aria-label="Copy selected" onClick={() => copySelected()}>
             <Copy width={14} height={14} />
           </button>
           <button class="cn-tb-btn" title="Delete (Del)" aria-label="Delete selected" onClick={removeSelected}>
@@ -1524,7 +1526,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           class="cn-ctx"
           role="menu"
           aria-label="Canvas menu"
-          style={{ left: Math.min(ctxMenu.x, window.innerWidth - 230), top: Math.min(ctxMenu.y, window.innerHeight - 320) }}
+          style={{
+            left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 238)),
+            top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 368)),
+          }}
           onContextMenu={(e: any) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1539,20 +1544,20 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 </button>
               )}
               {!readOnly && (
-                <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); duplicateSelected(); closeCtxMenu(); }}>
+                <button class="cn-ctx-item" role="menuitem" onClick={() => { duplicateSelected([ctxMenu.nodeId!]); closeCtxMenu(); }}>
                   <CopyPlus width={14} height={14} /> Duplicate <span class="dim">Ctrl+D</span>
                 </button>
               )}
               {!readOnly && (
                 <>
-                  <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); copySelected(); closeCtxMenu(); }}>
+                  <button class="cn-ctx-item" role="menuitem" onClick={() => { copySelected([ctxMenu.nodeId!]); closeCtxMenu(); }}>
                     <Copy width={14} height={14} /> Copy <span class="dim">Ctrl+C</span>
                   </button>
                   <span class="cn-ctx-sep" />
-                  <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); bringToFront(); closeCtxMenu(); }}>
+                  <button class="cn-ctx-item" role="menuitem" onClick={() => { bringToFront([ctxMenu.nodeId!]); closeCtxMenu(); }}>
                     <BringToFront width={14} height={14} /> Bring to front
                   </button>
-                  <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); sendToBack(); closeCtxMenu(); }}>
+                  <button class="cn-ctx-item" role="menuitem" onClick={() => { sendToBack([ctxMenu.nodeId!]); closeCtxMenu(); }}>
                     <SendToBack width={14} height={14} /> Send to back
                   </button>
                   <span class="cn-ctx-sep" />
