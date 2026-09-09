@@ -335,12 +335,22 @@ export function Project({ params }: { params: { slug: string } }) {
 
   const [moreOpen, setMoreOpen] = useState(false);
   const headerMoreWrap = useRef<HTMLDivElement | null>(null);
+  const headerMoreButton = useRef<HTMLButtonElement | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!moreOpen) return;
+    requestAnimationFrame(() => {
+      headerMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    });
     const onDoc = (e: MouseEvent) => {
       if (headerMoreWrap.current && !headerMoreWrap.current.contains(e.target as Node)) setMoreOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMoreOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMoreOpen(false);
+        headerMoreButton.current?.focus();
+      }
+    };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
     return () => {
@@ -471,21 +481,27 @@ export function Project({ params }: { params: { slug: string } }) {
         <div class="detail-title-wrap">
           <div>
             {renaming ? (
-              <input
-                type="text"
-                class="detail-title"
-                value={nameDraft}
-                onInput={(e: any) => setNameDraft((e.target as HTMLInputElement).value)}
-                onBlur={cancelRename}
-                onKeyDown={(e: KeyboardEvent) => {
-                  if (e.key === 'Enter') { e.preventDefault(); handleSaveName(); }
-                  if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                }}
-                autoFocus
-                aria-label="Project name"
-              />
+              <div class="detail-rename-wrap">
+                <input
+                  type="text"
+                  class="detail-title"
+                  value={nameDraft}
+                  onInput={(e: any) => setNameDraft((e.target as HTMLInputElement).value)}
+                  onBlur={cancelRename}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter') { e.preventDefault(); handleSaveName(); }
+                    if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                  }}
+                  autoFocus
+                  aria-label="Project name"
+                />
+                <span class="detail-rename-hint">Enter to save · Esc to cancel</span>
+              </div>
             ) : (
               <h1 class="detail-title" style="display:inline-flex;align-items:center;gap:6px; margin-bottom:10px;">
+                <span class="detail-avatar" aria-hidden="true">
+                  {(project?.name || 'P').trim().charAt(0).toUpperCase()}
+                </span>
                 {project?.name || 'Loading…'}
                 {!readOnly && (
                   <button
@@ -501,7 +517,7 @@ export function Project({ params }: { params: { slug: string } }) {
               </h1>
             )}
             <div class="detail-meta-line">
-              <span class="detail-slug">{slug}</span>
+              <span class="detail-slug" title={`Project slug: ${slug}`}>{slug}</span>
               <button
                 class={`btn-ghost sm${copied ? ' copied-flash' : ''}`}
                 style="padding: 4px 8px"
@@ -512,7 +528,7 @@ export function Project({ params }: { params: { slug: string } }) {
               </button>
               <span class={`status-badge ${project?.status || 'missing'}`}>{project?.status || '…'}</span>
               {project?.crash && <CrashBadge crash={project.crash} />}
-              {wsConnected && <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" />}
+              {wsConnected &&               <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" role="status" />}
               {onlineUsers.length > 0 && (
                 <span class="presence-indicator" role="status" title={onlineUsers.map(u => u.username).join(', ')}>
                   {onlineUsers.map(u => (
@@ -543,6 +559,7 @@ export function Project({ params }: { params: { slug: string } }) {
           </div>
           <span class="header-more-wrap" ref={headerMoreWrap}>
             <button
+              ref={headerMoreButton}
               class="btn-ghost sm icon-only header-more"
               aria-label="More actions"
               aria-haspopup="menu"
@@ -552,11 +569,14 @@ export function Project({ params }: { params: { slug: string } }) {
               <Ellipsis width={15} height={15} class="icon" />
             </button>
             {moreOpen && (
-              <div class="header-menu" role="menu">
+              <div ref={headerMenuRef} class="header-menu" role="menu" aria-label="Project actions">
                 <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><VSCodeIcon width={13} height={13} class="icon" /> Open With</button>
                 <div class="header-menu-sep" role="separator" />
                 <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title="Download snapshot as tar.gz">
                   <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
+                </button>
+                <button role="menuitem" onClick={() => { setMoreOpen(false); handleZip(); }} disabled={zipping || readOnly} title="Download workspace as ZIP">
+                  <FileArchive width={13} height={13} class="icon" /> {zipping ? 'Zipping…' : 'ZIP'}
                 </button>
               </div>
             )}
