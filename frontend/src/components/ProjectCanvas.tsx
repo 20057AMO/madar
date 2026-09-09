@@ -1148,12 +1148,22 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   return (
     <div class={`canvas-wrap ${isFullscreen ? 'cn-fullscreen' : ''}`} ref={wrapRef}>
-      <h2 class="panel-title" style="display:flex;align-items:center;gap:6px">
-        Planning canvas
-        {!readOnly && <span class="dim" style="font-weight:400;font-size:0.7rem">— drag the board to pan, Shift+drag to select, double-click to edit, Ctrl+Z to undo</span>}
-      </h2>
+      <div class="cn-heading">
+        <div>
+          <h2 class="panel-title">Planning canvas</h2>
+          <p class="cn-heading-help">
+            {!readOnly
+              ? 'Drag to pan · Shift+drag to select · Double-click to edit'
+              : 'View-only canvas · Drag to pan and scroll to zoom'}
+          </p>
+        </div>
+        <div class="cn-heading-meta">
+          <span class="cn-board-stat">{doc?.nodes.length ?? 0} {doc?.nodes.length === 1 ? 'item' : 'items'}</span>
+          {isFullscreen && <span class="cn-fullscreen-label">Focus mode</span>}
+        </div>
+      </div>
       {/* Top toolbar: view controls + mode + save status */}
-      <div class="cn-toolbar">
+      <div class={`cn-toolbar ${isFullscreen ? 'cn-toolbar-floating' : ''}`}>
         <div class="cn-tb-group">
           <button class="cn-tb-btn" title="Zoom out (scroll to zoom)" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)}>
             <ZoomOut width={15} height={15} />

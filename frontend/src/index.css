@@ -2337,6 +2337,49 @@ input[type="file"].modern-file::file-selector-button {
   height: min(72vh, 760px);
   min-height: 480px;
 }
+.cn-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 36px;
+}
+.cn-heading .panel-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
+}
+.cn-heading-help {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+.cn-heading-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.cn-board-stat,
+.cn-fullscreen-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+.cn-fullscreen-label {
+  color: #7dd3fc;
+  border-color: rgba(125, 211, 252, 0.28);
+  background: rgba(125, 211, 252, 0.08);
+}
 .canvas-root {
   position: relative;
   flex: 1;
@@ -2353,9 +2396,61 @@ input[type="file"].modern-file::file-selector-button {
 }
 .canvas-root.cn-panning { cursor: grabbing; }
 .canvas-wrap.cn-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  box-sizing: border-box;
   height: 100vh;
   max-height: 100vh;
   min-height: 100vh;
+  padding: 18px 20px 20px;
+  gap: 12px;
+  background:
+    radial-gradient(circle at 50% -20%, rgba(86, 142, 255, 0.12), transparent 42%),
+    var(--bg);
+}
+.cn-fullscreen .cn-heading {
+  min-height: 38px;
+}
+.cn-fullscreen .cn-heading .panel-title {
+  font-size: 0.95rem;
+  letter-spacing: 0.03em;
+}
+.cn-fullscreen .cn-heading-help {
+  font-size: 0.74rem;
+}
+.cn-fullscreen .cn-toolbar {
+  flex-shrink: 0;
+}
+.cn-toolbar-floating {
+  align-self: flex-start;
+  width: auto;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  background: rgba(22, 24, 31, 0.92);
+  backdrop-filter: blur(14px);
+}
+.cn-fullscreen .canvas-root {
+  border-color: rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 18px 50px rgba(0, 0, 0, 0.22);
+}
+.cn-fullscreen .cn-add-wrap {
+  right: 18px;
+  bottom: 18px;
+}
+@media (max-width: 700px) {
+  .cn-heading {
+    align-items: flex-start;
+  }
+  .cn-heading-meta {
+    display: none;
+  }
+  .cn-fullscreen {
+    padding: 12px;
+  }
+  .cn-fullscreen .cn-heading-help {
+    max-width: 240px;
+  }
 }
 
 .cn-ctx {
