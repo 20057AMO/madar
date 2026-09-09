@@ -201,7 +201,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <div class="brand-mark"><img class="brand-logo" src="/logo.png" alt="Madar" /></div>
         <div class="brand-text">
           <span class="brand-name">Madar</span>
-          <span class="brand-tag">مدار · orbit</span>
+          <span class="brand-tag">Developers Environment</span>
         </div>
       </div>
       <nav class="sidebar-nav" onClick={onClose}>

@@ -247,8 +247,17 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
   };
 
-  const copyRef = useRef<CanvasNode[] | null>(null);
+  /** In-memory clipboard: nodes + internal edges between them. */
+  const copyRef = useRef<{ nodes: CanvasNode[]; edges: CanvasEdge[] } | null>(null);
   const pasteCountRef = useRef(0);
+
+  /** Return only the edges whose both endpoints are in `nodeIds`. */
+  const internalEdges = (nodeIds: string[]): CanvasEdge[] => {
+    const d = docRef.current;
+    if (!d) return [];
+    const set = new Set(nodeIds);
+    return d.edges.filter((e) => set.has(e.from) && set.has(e.to));
+  };
 
   const duplicateSelected = () => {
     if (!selNodes.length || readOnly) return;
@@ -259,14 +268,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const budget = Math.min(selNodes.length, maxNew);
     const src = selNodes.slice(0, budget).map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
     if (!src.length) return;
-    const ids: string[] = [];
+    // Map old id → new id so internal edges can be re-wired.
+    const idMap: Record<string, string> = {};
     const nodes: CanvasNode[] = src.map((s) => {
       const id = freshId('n');
-      ids.push(id);
+      idMap[s.id] = id;
       return { ...s, id, x: s.x + 24, y: s.y + 24 };
     });
-    mutate((prev) => ({ ...prev, nodes: [...prev.nodes, ...nodes] }));
-    setSelNodes(ids);
+    // Duplicate any internal edges between the selected nodes.
+    const srcIds = src.map((n) => n.id);
+    const newEdges: CanvasEdge[] = internalEdges(srcIds).map((e) => ({
+      id: freshId('e'),
+      from: idMap[e.from],
+      to: idMap[e.to],
+    }));
+    const newIds = nodes.map((n) => n.id);
+    mutate((prev) => ({
+      ...prev,
+      nodes: [...prev.nodes, ...nodes],
+      edges: [...prev.edges, ...newEdges],
+    }));
+    setSelNodes(newIds);
     pasteCountRef.current = 0;
   };
 
@@ -275,32 +297,68 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const d = docRef.current;
     if (!d) return;
     const nodes = selNodes.map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
-    copyRef.current = nodes;
-    try { navigator.clipboard.writeText(JSON.stringify(nodes)); } catch { /* best-effort */ }
+    const edges = internalEdges(selNodes);
+    copyRef.current = { nodes, edges };
+    // Write a portable JSON to the system clipboard so the user can paste
+    // across tabs or after a page refresh.
+    try {
+      navigator.clipboard.writeText(JSON.stringify({ nodes, edges }));
+    } catch { /* best-effort — in-memory ref still works */ }
     pasteCountRef.current = 0;
     setNotice(`Copied ${nodes.length} node(s)`);
   };
 
-  const pasteFromClipboard = () => {
-    const nodes = copyRef.current;
-    if (!nodes || !nodes.length) return;
+  /** Core paste logic — shared by the keyboard shortcut and context menu. */
+  const doPaste = (payload: { nodes: CanvasNode[]; edges: CanvasEdge[] }) => {
     if (readOnly) return;
     const d = docRef.current;
     if (!d) return;
+    const { nodes, edges } = payload;
+    if (!nodes.length) return;
     const maxNew = MAX_NODES - d.nodes.length;
     if (maxNew <= 0) { setNotice(`Canvas limit reached (${MAX_NODES} nodes)`); return; }
     const budget = Math.min(nodes.length, maxNew);
     if (budget < nodes.length) setNotice(`Canvas limit — pasted ${budget} of ${nodes.length}`);
     const off = 24 + pasteCountRef.current * 20;
     pasteCountRef.current += 1;
-    const newIds: string[] = [];
+    const idMap: Record<string, string> = {};
     const newNodes: CanvasNode[] = nodes.slice(0, budget).map((n) => {
       const id = freshId('n');
-      newIds.push(id);
+      idMap[n.id] = id;
       return { ...n, id, x: n.x + off, y: n.y + off };
     });
-    mutate((prev) => ({ ...prev, nodes: [...prev.nodes, ...newNodes] }));
-    setSelNodes(newIds);
+    // Re-wire edges whose both endpoints were pasted.
+    const newEdges: CanvasEdge[] = edges
+      .filter((e) => idMap[e.from] && idMap[e.to])
+      .map((e) => ({ id: freshId('e'), from: idMap[e.from], to: idMap[e.to] }));
+    mutate((prev) => ({
+      ...prev,
+      nodes: [...prev.nodes, ...newNodes],
+      edges: [...prev.edges, ...newEdges],
+    }));
+    setSelNodes(newNodes.map((n) => n.id));
+  };
+
+  const pasteFromClipboard = async () => {
+    if (readOnly) return;
+    // Try the system clipboard first so paste works across tabs / after refresh.
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        const parsed = JSON.parse(text);
+        // Accept both the new {nodes, edges} shape and the legacy nodes-only array.
+        if (Array.isArray(parsed)) {
+          doPaste({ nodes: parsed as CanvasNode[], edges: [] });
+          return;
+        }
+        if (Array.isArray(parsed?.nodes)) {
+          doPaste({ nodes: parsed.nodes, edges: parsed.edges ?? [] });
+          return;
+        }
+      }
+    } catch { /* fall through to in-memory ref */ }
+    // Fallback: use the in-memory ref (same tab, still valid).
+    if (copyRef.current) doPaste(copyRef.current);
   };
 
   const patchNode = (id: string, patch: Partial<CanvasNode>, withHistory = true) => {
@@ -685,6 +743,19 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
     if (e.button === 2) return;
 
+    // ── Fix: Space held → always pan, even if clicking over a node ──────────
+    if (e.button === 0 && spaceHeld) {
+      dragRef.current = {
+        kind: 'pan',
+        cX: e.clientX,
+        cY: e.clientY,
+        startX: viewRef.current.x,
+        startY: viewRef.current.y,
+      };
+      el.setPointerCapture(e.pointerId);
+      return;
+    }
+
     if (edgeEl && !readOnly) {
       const id = (edgeEl as HTMLElement).dataset.id!;
       setSelEdge(id);
@@ -708,16 +779,28 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         setSelEdge(null);
         return;
       }
-      setSelNodes([id]);
+
+      // ── Fix: Multi-selection drag ──────────────────────────────────────────
+      // If the clicked node is already in the current selection keep all of
+      // them selected so the drag moves the whole group. Otherwise reset to
+      // just the clicked node (normal single-click behaviour).
+      const isInSel = selNodes.includes(id);
+      const dragIds = isInSel && selNodes.length > 1 ? selNodes : [id];
+
+      if (!isInSel) setSelNodes([id]);
       setSelEdge(null);
+
       if (e.button === 0) {
-        // Don't push history on pointer-down: a plain click (no movement)
-        // must not leave an empty undo entry. Stage the pre-drag snapshot
-        // instead; endDrag appends it only when the node actually moved.
+        // Build startPos for every node that will be dragged.
+        const startPos: Record<string, { x: number; y: number }> = {};
+        for (const nid of dragIds) {
+          const n = docRef.current?.nodes.find((nn) => nn.id === nid);
+          if (n) startPos[nid] = { x: n.x, y: n.y };
+        }
         dragRef.current = {
           kind: 'node',
-          ids: [id],
-          startPos: { [id]: { x: node.x, y: node.y } },
+          ids: dragIds,
+          startPos,
           cX: e.clientX,
           cY: e.clientY,
           startX: node.x,
@@ -735,7 +818,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       setConnectFrom(null);
       return;
     }
-    if (e.button === 1 || spaceHeld || e.button === 2) {
+    if (e.button === 1 || e.button === 2) {
       dragRef.current = {
         kind: 'pan',
         cX: e.clientX,
@@ -1289,7 +1372,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   <CheckSquare width={14} height={14} /> Task card <span class="dim">C</span>
                 </button>
               )}
-              {!readOnly && copyRef.current?.length ? (
+              {!readOnly && copyRef.current?.nodes.length ? (
                 <button class="cn-ctx-item" role="menuitem" onClick={() => { pasteFromClipboard(); closeCtxMenu(); }}>
                   <ClipboardPaste width={14} height={14} /> Paste <span class="dim">Ctrl+V</span>
                 </button>

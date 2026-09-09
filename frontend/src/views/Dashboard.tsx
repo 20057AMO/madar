@@ -6,12 +6,12 @@ import {
   Play,
   Square,
   TriangleAlert,
-  ChevronRight,
   Globe,
   Plus,
   Upload,
   TerminalSquare,
   LayoutDashboard,
+  ExternalLink,
 } from 'lucide-preact';
 import { CrashBadge } from '../components/CrashBadge';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -439,7 +439,7 @@ export function Dashboard() {
                   {acting === p.slug ? '…' : p.status === 'running' ? 'Stop' : 'Start'}
                 </button>
                 <button class="btn-ghost sm" onClick={(e) => openProject(e, p)}>
-                  Open <ChevronRight width={13} height={13} class="icon" />
+                  Open <ExternalLink width={13} height={13} class="icon" />
                 </button>
               </div>
             </div>

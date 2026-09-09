@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { ExternalLink, Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -57,6 +57,7 @@ import { CrashBadge } from '../components/CrashBadge';
 import { useAuth } from '../auth';
 import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
+import { VSCodeIcon } from '../components/brand-icons';
 
 type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'snapshots' | 'canvas';
 
@@ -64,7 +65,7 @@ const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'logs', 'termin
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'Overview',
-  chat: 'AI Chat',
+  chat: 'Bot',
   files: 'Files',
   logs: 'Logs',
   terminal: 'Terminal',
@@ -528,7 +529,9 @@ export function Project({ params }: { params: { slug: string } }) {
         </div>
         <div class="detail-actions">
           <div class="header-overflow">
-            <button class="btn-ghost sm" onClick={openIde}><ExternalLink width={13} height={13} class="icon" /> Open Code</button>
+            <button class="btn-ghost sm" onClick={openIde} >
+              <VSCodeIcon width={13} height={13} class="icon" /> Open With 
+            </button>
             <span class="detail-action-sep" aria-hidden="true" />
             <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — backup requires editor access' : 'Download a snapshot of the project as tar.gz'}>
               <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
@@ -550,7 +553,7 @@ export function Project({ params }: { params: { slug: string } }) {
             </button>
             {moreOpen && (
               <div class="header-menu" role="menu">
-                <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><ExternalLink width={13} height={13} class="icon" /> Open Code</button>
+                <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><VSCodeIcon width={13} height={13} class="icon" /> Open With</button>
                 <div class="header-menu-sep" role="separator" />
                 <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title="Download snapshot as tar.gz">
                   <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
@@ -621,7 +624,7 @@ export function Project({ params }: { params: { slug: string } }) {
 
       <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
         {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
-        {tab === 'chat' && <ProjectChat slug={slug} readOnly={readOnly} />}
+        {tab === 'chat' && <ProjectChat slug={slug} readOnly={readOnly}  />}
         {tab === 'files' && <FilesPanel slug={slug} />}
         {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
         {tab === 'terminal' && <ProjectTerminal slug={slug} />}
@@ -1910,7 +1913,7 @@ function FilesPanel({ slug }: { slug: string }) {
             </span>
           ))}
         </div>
-        <div style="display:flex; gap:8px; align-items:center">
+        <div style="display:flex; gap:10px; align-items:center; flex-direction:row-reverse;">
           {meta && (
             <span class="dim" style="color: var(--text-3); font-size:0.72rem">
               {meta.fileCount} files · {fmtBytes(meta.totalBytes)}

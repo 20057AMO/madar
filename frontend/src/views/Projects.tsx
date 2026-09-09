@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'preact/hooks';
-import { FolderSearch, FolderOpen, Copy, Upload, Globe, Trash2, Loader2, Clock, Users, HardDrive, X } from 'lucide-preact';
+import { FolderSearch,ExternalLink, FolderOpen, Copy, Upload, Globe, Trash2, Loader2, Clock, Users, HardDrive, X } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { CrashBadge } from '../components/CrashBadge';
@@ -759,7 +759,7 @@ export function Projects() {
                   {p.status === 'running' ? 'Stop' : 'Start'}
                 </button>
                 <button class="btn-ghost sm" onClick={(e) => openProjectCard(e, p)}>
-                  <FolderOpen width={13} height={13} class="icon" /> Preview
+                  <ExternalLink width={13} height={13} class="icon" /> Preview
                 </button>
                 <button class="btn-ghost sm" title="Duplicate this project (copy files + notes)" onClick={(e) => openDuplicate(e, p)}>
                   <Copy width={13} height={13} class="icon" /> Duplicate

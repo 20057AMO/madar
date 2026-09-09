@@ -153,7 +153,7 @@ export function ProjectChat({ slug, readOnly = false }: { slug: string; readOnly
 
   return (
     <div class="project-chat">
-      <h2 class="panel-title" style="margin-bottom:10px">AI Chat</h2>
+      <h2 class="panel-title" style="margin-bottom:10px"> Chat</h2>
       <div class="agents-sessions-bar scrollbar" role="list">
         <input
           class="session-search-input"

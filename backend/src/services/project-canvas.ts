@@ -238,7 +238,7 @@ export function refreshCanvasMirror(slug: unknown): void {
     const target = path.join(WORKSPACES_ROOT, clean, CANVAS_MIRROR_FILE);
     const dir = path.dirname(target);
     if (!fs.existsSync(dir)) return;
-    const text = formatCanvasForContext(clean);
+    const text = formatCanvasForContext(clean, 500_000); // no practical limit for the mirror file
     if (!text) {
       if (fs.existsSync(target)) fs.unlinkSync(target);
       return;
