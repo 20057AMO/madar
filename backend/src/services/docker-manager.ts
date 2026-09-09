@@ -76,7 +76,7 @@ export interface ProjectInfo {
   image?: string;
   ports?: number[];
   env?: Record<string, string>;
-  activity?: { action: string; at: string }[];
+  activity?: { action: string; at: string; userId?: string }[];
   ownerId?: string;
   members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string }[];
   /** User-defined labels for organizing/filtering projects. */
@@ -300,7 +300,7 @@ async function ensureImage(image: string): Promise<void> {
 /**
  * Create a project: provision workspace dir + launch container.
  */
-export async function createProject(spec: ProjectSpec): Promise<ProjectInfo> {
+export async function createProject(spec: ProjectSpec, userId?: string): Promise<ProjectInfo> {
   const clean = validateProjectSpec(spec);
   // Compute effective limits: request > previous meta > defaults (if any).
   const rawLimits = spec.limits || {};
@@ -480,7 +480,7 @@ export async function createProject(spec: ProjectSpec): Promise<ProjectInfo> {
     env: clean.env,
     activity: [
       ...(prev?.activity || []),
-      { action: 'created', at: new Date().toISOString() },
+      { action: 'created', at: new Date().toISOString(), ...(userId ? { userId } : {}) },
     ].slice(-200),
   };
   delete savedMeta.crash;
@@ -652,7 +652,7 @@ export async function getProject(slug: string): Promise<ProjectInfo | null> {
 /**
  * Start a stopped project container.
  */
-export async function startProject(slug: string): Promise<ProjectInfo> {
+export async function startProject(slug: string, userId?: string): Promise<ProjectInfo> {
   const projectSlug = validateProjectSlug(slug);
   await requireContainer(projectSlug);
   const container = docker.getContainer(`wsd-${projectSlug}`);
@@ -660,7 +660,7 @@ export async function startProject(slug: string): Promise<ProjectInfo> {
   // An explicit start clears any prior crash and the requestedStop marker the
   // detector uses to tell intentional stops apart from crashes.
   clearCrashState(projectSlug);
-  touchActivity(projectSlug, 'started');
+  touchActivity(projectSlug, 'started', userId);
   // Re-run the static-site serve process now that the container is back up.
   // Never throws — a failed serve must not break the start.
   await ensureServeRunning(projectSlug).catch((e) =>
@@ -683,7 +683,7 @@ export async function startProject(slug: string): Promise<ProjectInfo> {
 /**
  * Stop a running project container.
  */
-export async function stopProject(slug: string): Promise<ProjectInfo> {
+export async function stopProject(slug: string, userId?: string): Promise<ProjectInfo> {
   const projectSlug = validateProjectSlug(slug);
   await requireContainer(projectSlug);
   // Mark the stop as INTENTIONAL *before* the container exits, so a crash
@@ -693,7 +693,7 @@ export async function stopProject(slug: string): Promise<ProjectInfo> {
   markRequestedStop(projectSlug);
   const container = docker.getContainer(`wsd-${projectSlug}`);
   await container.stop();
-  touchActivity(projectSlug, 'stopped');
+  touchActivity(projectSlug, 'stopped', userId);
   const info = await getProject(projectSlug);
   if (!info) throw new HttpError(500, 'Project not found after stop');
   info.status = 'stopped';
@@ -856,7 +856,7 @@ export async function checkProjectPorts(slug: string): Promise<PortHealth[]> {
 }
 
 /** Stop + recreate a project container from its stored meta (env/image/ports). */
-export async function recreateProject(slug: string): Promise<ProjectInfo> {
+export async function recreateProject(slug: string, userId?: string): Promise<ProjectInfo> {
   const projectSlug = validateProjectSlug(slug);
   const proj = await requireContainer(projectSlug);
   const meta: ProjectMeta = loadMeta(projectSlug) || { activity: [] };
@@ -875,7 +875,7 @@ export async function recreateProject(slug: string): Promise<ProjectInfo> {
     ports: meta.ports,
     env: meta.env,
     limits: meta.limits,
-  });
+  }, userId);
 
   // createProject already fired 'created'; the recreate gets its own event on
   // top (a genuine teardown + rebuild worth distinguishing in receivers).
@@ -1033,7 +1033,8 @@ export async function runProjectScript(slug: string, script: string): Promise<Sc
 /** git clone into the project workspace (empty workspace → root, else subdir). */
 export async function cloneIntoWorkspace(
   slug: string,
-  url: string
+  url: string,
+  userId?: string
 ): Promise<{ target: string; output: string }> {
   const projectSlug = validateProjectSlug(slug);
   const base = path.resolve(WORKSPACES_ROOT, projectSlug);
@@ -1081,7 +1082,7 @@ export async function cloneIntoWorkspace(
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) {
-        touchActivity(projectSlug, 'cloned');
+        touchActivity(projectSlug, 'cloned', userId);
         resolve({ target: path.relative(base, target).split(path.sep).join('/'), output });
       } else {
         reject(new Error(`git clone failed (exit ${code}): ${output.slice(-2000)}`));
@@ -1137,7 +1138,8 @@ export interface DuplicateSpec {
  */
 export async function duplicateProject(
   sourceSlug: string,
-  spec: DuplicateSpec = {}
+  spec: DuplicateSpec = {},
+  userId?: string
 ): Promise<ProjectInfo> {
   const srcSlug = validateProjectSlug(sourceSlug);
   const srcMeta = loadMeta(srcSlug);
@@ -1173,7 +1175,7 @@ export async function duplicateProject(
     ports: (spec.ports && spec.ports.length > 0) ? spec.ports : undefined,
     env: srcMeta.env,
     limits: srcMeta.limits,
-  });
+  }, userId);
 
   // Carry the source workspace files into the new project.
   const dstDir = path.join(WORKSPACES_ROOT, created.slug);
@@ -1199,7 +1201,7 @@ export async function duplicateProject(
     }
   }
 
-  touchActivity(created.slug, 'duplicated');
+  touchActivity(created.slug, 'duplicated', userId);
   // Workspace files + canvas landed after createProject's own invalidation —
   // refresh once more so the copy's canvasEditedAt is immediately accurate.
   invalidateProjectsCache();

@@ -19,6 +19,8 @@ const META_DIR = path.join(DATA_DIR, 'projects');
 export interface ActivityEntry {
   action: string;
   at: string;
+  /** The user who performed the action — legacy entries have none. */
+  userId?: string;
 }
 
 export interface ProjectMember {
@@ -136,11 +138,14 @@ export function listMetaSlugs(): string[] {
   }
 }
 
-export function touchActivity(slug: string, action: string): ProjectMeta | null {
+export function touchActivity(slug: string, action: string, userId?: string): ProjectMeta | null {
   const clean = String(slug ?? '');
   return withFileLock(`meta:${clean}`, () => {
     const meta = loadMeta(clean) || { activity: [] };
-    meta.activity = [...(meta.activity || []), { action, at: new Date().toISOString() }].slice(-200);
+    meta.activity = [
+      ...(meta.activity || []),
+      { action, at: new Date().toISOString(), ...(userId ? { userId } : {}) },
+    ].slice(-200);
     saveMetaRaw(clean, meta);
     return meta;
   });

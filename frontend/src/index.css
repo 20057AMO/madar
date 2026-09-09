@@ -1368,6 +1368,7 @@ textarea.agent-prompt-input {
 .activity-dot.cloned { background: var(--accent); }
 .activity-act { color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-at { color: var(--text-3); flex-shrink: 0; margin-left: 10px; }
+.activity-who { color: var(--text-3); flex-shrink: 0; margin-left: 10px; max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .danger-zone { border-color: rgba(248,81,73,0.3); }
 .danger-desc { display: flex; align-items: flex-start; gap: 8px; color: var(--text-2); font-size: 0.78rem; line-height: 1.5; }

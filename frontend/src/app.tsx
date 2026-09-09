@@ -216,7 +216,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <NavButton label="opencode" icon={OpencodeIcon} newTabUrl={`${toolBase}:${ocPort}/`} />
         <NavButton href="/opencode-studio" label="OC Studio" icon={OpencodeIcon} />
         <NavButton href="/providers" label="Providers" icon={KeyRound} />
-        {user?.role === 'admin' && <NavButton href="/team" label="Team" icon={Users} />}
+        <NavButton href="/team" label="Team" icon={Users} />
         {user?.role === 'admin' && <NavButton href="/settings" label="Settings" icon={SettingsIcon} />}
         <NavButton href="/ide" label="VS Code" icon={VSCodeIcon} />
       </nav>

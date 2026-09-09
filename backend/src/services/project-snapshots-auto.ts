@@ -133,8 +133,8 @@ export function downloadSnapshot(slug: string, file: string): fs.ReadStream {
 }
 
 /** Restore a stored snapshot as a brand-new project (never overwrites). */
-export function restoreStoredSnapshot(slug: string, file: string): Promise<Awaited<ReturnType<typeof importProjectSnapshot>>> {
-  return importProjectSnapshot(resolveStoredFile(slug, file));
+export function restoreStoredSnapshot(slug: string, file: string, userId?: string): Promise<Awaited<ReturnType<typeof importProjectSnapshot>>> {
+  return importProjectSnapshot(resolveStoredFile(slug, file), userId);
 }
 
 /**

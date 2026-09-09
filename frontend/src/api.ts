@@ -26,7 +26,7 @@ export interface Project {
   env?: Record<string, string>;
   limits?: ProjectLimits;
   liveLimits?: ProjectLimits;
-  activity?: { action: string; at: string }[];
+  activity?: { action: string; at: string; userId?: string }[];
   ownerId?: string;
   /** Resolved owner identity (enriched on the project list). */
   owner?: { id: string; username: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' } | null;
@@ -1001,7 +1001,21 @@ export interface TeamUser {
   profile?: UserProfile;
 }
 
+export interface TeamMembership {
+  slug: string;
+  name: string;
+  role: string;
+  isOwner: boolean;
+}
+
+export interface TeamUserWithMemberships extends TeamUser {
+  memberships: TeamMembership[];
+}
+
 export const listUsers = () => api<TeamUser[]>('/api/users');
+
+export const getTeamMemberships = () =>
+  api<{ users: TeamUserWithMemberships[] }>('/api/users/with-memberships');
 
 export const createUser = (username: string, password: string, role: UserRole = 'editor') =>
   api<{ id: string; username: string; role: UserRole }>('/api/users', {

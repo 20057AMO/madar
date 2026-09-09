@@ -127,6 +127,8 @@ function fmtAction(action: string): string {
     case 'stopped': return 'Stopped';
     case 'recreated': return 'Recreated';
     case 'cloned': return 'Git cloned';
+    case 'duplicated': return 'Duplicated from';
+    case 'restored': return 'Restored from backup';
     case 'env_updated': return 'Env updated';
     case 'ports_updated': return 'Ports updated';
     case 'limits_updated': return 'Limits updated';
@@ -1601,15 +1603,26 @@ function OverviewPanel({
           <h2 class="panel-title">Activity</h2>
           {project?.activity && project.activity.length > 0 ? (
             <div class="activity-list">
-              {project.activity.slice().reverse().slice(0, 15).map((a, i) => (
-                <div class="activity-row" key={i}>
-                  <span class="activity-dot-wrap">
-                    <span class={`activity-dot ${a.action}`} />
-                    <span class="activity-act">{fmtAction(a.action)}</span>
-                  </span>
-                  <span class="activity-at">{relTime(a.at)} ago</span>
-                </div>
-              ))}
+              {project.activity.slice().reverse().slice(0, 15).map((a, i) => {
+                const who = a.userId
+                  ? (project?.members || []).find((m) => m.userId === a.userId)
+                    || (project?.ownerId === a.userId ? { displayName: undefined, username: 'owner' } : null)
+                  : null;
+                return (
+                  <div class="activity-row" key={i}>
+                    <span class="activity-dot-wrap">
+                      <span class={`activity-dot ${a.action}`} />
+                      <span class="activity-act">{fmtAction(a.action)}</span>
+                    </span>
+                    <span class="activity-at">{relTime(a.at)} ago</span>
+                    {who && (
+                      <span class="activity-who">
+                        by {who.displayName || who.username}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div class="empty-state" style="padding: 24px">No activity yet.</div>

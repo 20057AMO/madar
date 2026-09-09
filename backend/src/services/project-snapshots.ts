@@ -356,7 +356,7 @@ async function uniqueProjectSlug(base: string): Promise<string> {
  * Returns the created ProjectInfo (owner is attributed by the route, mirroring
  * the create-project flow).
  */
-export async function importProjectSnapshot(uploadPath: string): Promise<ProjectInfo> {
+export async function importProjectSnapshot(uploadPath: string, userId?: string): Promise<ProjectInfo> {
   let raw: Buffer;
   try {
     raw = await fs.promises.readFile(uploadPath);
@@ -394,7 +394,7 @@ export async function importProjectSnapshot(uploadPath: string): Promise<Project
       image: typeof src.image === 'string' && src.image ? src.image : undefined,
       ports,
       env: src.env && typeof src.env === 'object' ? src.env : undefined,
-    });
+    }, userId);
 
     // Copy verified workspace files (extraction already pruned traversal + exclusions).
     const srcWork = path.join(staging, 'workspace');

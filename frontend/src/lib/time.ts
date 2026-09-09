@@ -17,7 +17,7 @@ export function relTime(iso: string | null | undefined): string {
 /** Latest "touched" timestamp (ISO) for a project: newest activity entry vs
  *  the last canvas save, whichever is more recent. Null when neither exists. */
 export function lastTouched(input: {
-  activity?: { action: string; at: string }[] | null;
+  activity?: { action: string; at: string; userId?: string }[] | null;
   canvasEditedAt?: string | null;
   createdAt?: string | null;
 }): string | null {

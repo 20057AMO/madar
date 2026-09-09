@@ -158,6 +158,7 @@ export interface RestoreOptions {
 export async function restoreArchive(
   entry: string,
   opts: RestoreOptions = {},
+  userId?: string,
 ): Promise<ProjectInfo> {
   const root = archiveRoot();
   const srcDir = archiveEntryPath(root, entry);
@@ -208,7 +209,7 @@ export async function restoreArchive(
     slug: newSlug,
     description: opts.description !== undefined ? String(opts.description).trim() || undefined : undefined,
     ports: opts.ports,
-  });
+  }, userId);
 
   // COPY the archived files into the fresh workspace (never move — see header).
   const dstDir = path.join(root, created.slug);
@@ -221,7 +222,7 @@ export async function restoreArchive(
     /* leftover source handled by the janitor's next sweep — restore already done */
   }
 
-  touchActivity(created.slug, 'restored');
+  touchActivity(created.slug, 'restored', userId);
   invalidateArchiveCache();
   invalidateStorageCache();
   invalidateProjectsCache();

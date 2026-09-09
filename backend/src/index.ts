@@ -39,7 +39,7 @@ import { type ProjectLimits, getHostInfo } from './services/project-limits';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
-import { loadMeta, saveMeta } from './services/projects-meta';
+import { loadMeta, saveMeta, listMetaSlugs } from './services/projects-meta';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
 import { exportProjectZip } from './services/project-zip';
@@ -598,6 +598,38 @@ app.get('/api/users', (req: any, res) => {
   res.json(listUsers());
 });
 
+// Team overview — every user + their project memberships (owner/admin/editor/
+// viewer). Any authenticated user may view the roster (like GET /api/users);
+// project membership data is already visible via the per-project members route.
+app.get('/api/users/with-memberships', (req: any, res) => {
+  const users = listUsers();
+  const memberships = new Map<string, Array<{ slug: string; name: string; role: string; isOwner: boolean }>>();
+  for (const slug of listMetaSlugs()) {
+    const meta = loadMeta(slug);
+    if (!meta) continue;
+    const ownerId = meta.ownerId;
+    const projectName = meta.name || slug;
+    const seen = new Set<string>([ownerId || '']);
+    if (ownerId) {
+      const list = memberships.get(ownerId) || [];
+      list.push({ slug, name: projectName, role: 'admin', isOwner: true });
+      memberships.set(ownerId, list);
+    }
+    for (const m of meta.members || []) {
+      if (!m.userId || seen.has(m.userId)) continue;
+      seen.add(m.userId);
+      const list = memberships.get(m.userId) || [];
+      list.push({ slug, name: projectName, role: m.role, isOwner: false });
+      memberships.set(m.userId, list);
+    }
+  }
+  const enriched = users.map((u) => ({
+    ...u,
+    memberships: (memberships.get(u.id) || []).slice(0, 50),
+  }));
+  res.json({ users: enriched });
+});
+
 app.post('/api/users', requireAdmin, userAdminLimiter, async (req: any, res) => {
   try {
     const { username, password, role } = req.body || {};
@@ -614,6 +646,11 @@ app.patch('/api/users/:userId/role', requireAdmin, (req: any, res) => {
   const { role } = req.body || {};
   if (!['admin', 'editor', 'viewer'].includes(String(role))) {
     return res.status(400).json({ error: 'Invalid role. Must be admin, editor, or viewer.' });
+  }
+  // An admin must never demote their own system role — the platform would be
+  // left without an admin (mirrors the self-delete guard below).
+  if (req.params.userId === req.user?.id && String(role) !== 'admin') {
+    return res.status(400).json({ error: 'Cannot change your own role.' });
   }
   const ok = updateUserRole(req.params.userId, role as any);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
@@ -1148,7 +1185,7 @@ app.post('/api/archive/:entry/restore', requireRole('editor'), userWriteLimiter,
       name,
       description,
       ports,
-    });
+    }, req.user?.id);
     // The restoring user becomes the owner (matches import/duplicate).
     const userId = req.user?.id;
     if (userId) setArchiveOwner(project.slug, userId);
@@ -1175,7 +1212,7 @@ app.post('/api/projects', async (req: any, res) => {
       ports,
       env,
       limits: limits && typeof limits === 'object' && !Array.isArray(limits) ? limits : undefined,
-    });
+    }, req.user?.id);
     // Set owner to the creating user
     const userId = req.user?.id;
     if (userId) {
@@ -1221,7 +1258,7 @@ app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async 
       slug,
       description: description !== undefined ? String(description) : undefined,
       ports: cleanPorts,
-    });
+    }, req.user?.id);
     // The duplicating user becomes the owner of the copy.
     const userId = req.user?.id;
     if (userId) {
@@ -1283,7 +1320,7 @@ app.get('/api/projects/:slug/zip', requireProjectAccess('editor'), (req: any, re
 app.post('/api/projects/import', requireRole('editor'), upload.single('file'), async (req: any, res) => {
   if (!req.file) return res.status(400).json({ error: 'Please attach a snapshot file (.tar.gz)' });
   try {
-    const project = await importProjectSnapshot(req.file.path);
+    const project = await importProjectSnapshot(req.file.path, req.user?.id);
     // The restoring user becomes the owner of the recreated copy.
     const userId = req.user?.id;
     if (userId) {
@@ -1457,7 +1494,7 @@ app.delete('/api/projects/:slug/snapshots/:file', requireProjectAccess('editor')
 // Restore a stored snapshot as a NEW project (never overwrites an existing one).
 app.post('/api/projects/:slug/snapshots/:file/restore', requireProjectAccess('editor'), async (req: any, res) => {
   try {
-    const project = await snapAuto.restoreStoredSnapshot(req.params.slug, req.params.file);
+    const project = await snapAuto.restoreStoredSnapshot(req.params.slug, req.params.file, req.user?.id);
     const userId = req.user?.id;
     if (userId) {
       const meta = loadMeta(project.slug) || { activity: [] };
@@ -1522,13 +1559,16 @@ app.post('/api/projects/:slug/members', (req: any, res) => {
 
     if (!meta.members) meta.members = [];
     const existing = meta.members.find((m) => m.userId === userId);
+    let action: 'member-added' | 'member-role-changed' = 'member-added';
     if (existing) {
       existing.role = memberRole;
+      action = 'member-role-changed';
     } else {
       meta.members.push({ userId, role: memberRole, addedAt: new Date().toISOString() });
     }
     saveMeta(req.params.slug, meta);
     invalidateProjectsCache();
+    recordAudit(action, true, req.ip, userId);
     res.json({ member: { userId, role: memberRole } });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1564,6 +1604,7 @@ app.delete('/api/projects/:slug/members/:userId', (req: any, res) => {
     }
     saveMeta(req.params.slug, meta);
     invalidateProjectsCache();
+    recordAudit('member-removed', true, req.ip, targetUserId);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1599,6 +1640,7 @@ app.post('/api/projects/:slug/transfer-owner', (req: any, res) => {
     meta.ownerId = userId;
     saveMeta(req.params.slug, meta);
     invalidateProjectsCache();
+    recordAudit('ownership-transferred', true, req.ip, userId);
     res.json({ ok: true, ownerId: userId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1627,9 +1669,9 @@ app.post('/api/projects/:slug/crash-clear', requireProjectAccess('editor'), user
 });
 
 // Start project
-app.post('/api/projects/:slug/start', requireProjectAccess('editor'), async (req, res) => {
+app.post('/api/projects/:slug/start', requireProjectAccess('editor'), async (req: any, res) => {
   try {
-    const project = await startProject(req.params.slug);
+    const project = await startProject(req.params.slug, req.user?.id);
     res.json({ project });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -1637,9 +1679,9 @@ app.post('/api/projects/:slug/start', requireProjectAccess('editor'), async (req
 });
 
 // Stop project
-app.post('/api/projects/:slug/stop', requireProjectAccess('editor'), async (req, res) => {
+app.post('/api/projects/:slug/stop', requireProjectAccess('editor'), async (req: any, res) => {
   try {
-    const project = await stopProject(req.params.slug);
+    const project = await stopProject(req.params.slug, req.user?.id);
     res.json({ project });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -1919,7 +1961,7 @@ app.post('/api/projects/:slug/upload', requireProjectAccess('editor'), (req, res
 });
 
 // Edit project metadata (name / description)
-app.patch('/api/projects/:slug', requireProjectAccess('editor'), async (req, res) => {
+app.patch('/api/projects/:slug', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const project = await getProject(req.params.slug);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -1929,7 +1971,7 @@ app.patch('/api/projects/:slug', requireProjectAccess('editor'), async (req, res
     if (typeof description === 'string') meta.description = description.trim().slice(0, 2000);
     meta.activity = [
       ...(meta.activity || []),
-      { action: 'updated', at: new Date().toISOString() },
+      { action: 'updated', at: new Date().toISOString(), ...(req.user?.id ? { userId: req.user?.id } : {}) },
     ].slice(-200);
     saveMeta(project.slug, meta);
     res.json({ project: await getProject(project.slug) });
@@ -1939,11 +1981,11 @@ app.patch('/api/projects/:slug', requireProjectAccess('editor'), async (req, res
 });
 
 // Recreate the container from stored meta (image / ports / env)
-app.post('/api/projects/:slug/recreate', requireProjectAccess('editor'), async (req, res) => {
+app.post('/api/projects/:slug/recreate', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const project = await getProject(req.params.slug);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const recreated = await recreateProject(project.slug);
+    const recreated = await recreateProject(project.slug, req.user?.id);
     res.json({ project: recreated });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -2052,13 +2094,13 @@ app.post('/api/projects/:slug/serve/stop', requireProjectAccess('editor'), userW
 });
 
 // git clone into the workspace
-app.post('/api/projects/:slug/clone', requireProjectAccess('editor'), async (req, res) => {
+app.post('/api/projects/:slug/clone', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const { url } = req.body || {};
     if (!url || !String(url).trim()) {
       return res.status(400).json({ error: 'Git repository URL is required' });
     }
-    const result = await cloneIntoWorkspace(req.params.slug, url);
+    const result = await cloneIntoWorkspace(req.params.slug, url, req.user?.id);
     res.status(201).json(result);
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
