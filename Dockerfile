@@ -5,7 +5,7 @@
 FROM node:22-bookworm AS frontend-build
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install --no-fund --no-audit
+RUN npm ci --no-fund --no-audit
 COPY frontend ./
 RUN npm run build
 
@@ -13,7 +13,7 @@ RUN npm run build
 FROM node:22-bookworm AS backend-build
 WORKDIR /src
 COPY backend/package.json backend/package-lock.json* ./
-RUN npm install --no-fund --no-audit
+RUN npm ci --no-fund --no-audit
 COPY backend ./
 RUN npm run build
 
@@ -60,7 +60,7 @@ WORKDIR /app
 # App
 COPY --from=backend-build /src/package*.json ./backend/
 COPY --from=backend-build /src/dist ./backend/dist
-RUN cd backend && npm install --omit=dev --no-fund --no-audit
+RUN cd backend && npm ci --omit=dev --no-fund --no-audit
 
 # Frontend (served statically by the backend)
 COPY --from=frontend-build /src/dist ./frontend/dist

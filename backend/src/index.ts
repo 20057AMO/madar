@@ -1260,6 +1260,7 @@ app.get('/api/projects/:slug/canvas', requireProjectAccess('viewer'), (req, res)
 app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req, res) => {
   try {
     const doc = canvas.saveCanvas(req.params.slug, req.body);
+    invalidateProjectsCache();
     recordAudit('canvas-save', true, req.ip);
     res.json(doc);
   } catch (err: any) {
@@ -1386,29 +1387,41 @@ app.get('/api/projects/:slug/members', requireProjectAccess('viewer'), async (re
 });
 
 // Add member
-app.post('/api/projects/:slug/members', (req: any, res) => {
+app.post('/api/projects/:slug/members', async (req: any, res) => {
   try {
-    const meta = loadMeta(req.params.slug);
-    if (!meta) return res.status(404).json({ error: 'Project not found' });
-
+    const callerId = req.user?.id;
+    const callerRole = req.user?.role;
     const { userId, role } = req.body || {};
     if (!userId || !String(userId).trim()) {
       return res.status(400).json({ error: 'userId is required' });
     }
     const memberRole = ['admin', 'editor', 'viewer'].includes(role) ? role : 'viewer';
-
-    // Only project admins and system admins can add members
-    const callerId = req.user?.id;
-    const callerRole = req.user?.role;
-    const isProjectAdmin = meta.ownerId === callerId || meta.members?.some((m) => m.userId === callerId && m.role === 'admin');
-    if (callerRole !== 'admin' && !isProjectAdmin) {
-      return res.status(403).json({ error: 'Only project or system admins can add members' });
-    }
-
-    // Validate user exists
     const targetUser = getUserInfo(userId);
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
+    }
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(req.params.slug) ||
+        !(await getProject(req.params.slug))) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    let meta = loadMeta(req.params.slug);
+    if (!meta) {
+      if (callerRole !== 'admin' || !callerId) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+      meta = {
+        activity: [],
+        ownerId: callerId,
+        members: [{ userId: callerId, role: 'admin', addedAt: new Date().toISOString() }],
+      };
+      saveMeta(req.params.slug, meta);
+    }
+
+    // Only project admins and system admins can add members
+    const isProjectAdmin = meta.ownerId === callerId || meta.members?.some((m) => m.userId === callerId && m.role === 'admin');
+    if (callerRole !== 'admin' && !isProjectAdmin) {
+      return res.status(403).json({ error: 'Only project or system admins can add members' });
     }
 
     if (!meta.members) meta.members = [];
@@ -2174,6 +2187,3 @@ snapAuto.startSnapshotAutomation();
 // Container-crash detection (boot + every WSD_ALERT_SWEEP_MS) — WebSocket-
 // independent, so crashes are caught even with zero browsers connected.
 startAlertsAutomation();
-
-
-

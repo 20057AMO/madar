@@ -421,7 +421,7 @@ export async function importProjectSnapshot(uploadPath: string): Promise<Project
       const parsed = tryJson<unknown>(readIfPresent(canvasPath));
       if (parsed) {
         try {
-          saveCanvas(created.slug, parsed);
+          saveCanvas(created.slug, { ...parsed, updatedAt: null });
         } catch {
           /* invalid canvas doc — keep fresh empty board */
         }

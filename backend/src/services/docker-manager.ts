@@ -1193,7 +1193,7 @@ export async function duplicateProject(
   const srcCanvas = loadCanvas(srcSlug);
   if (srcCanvas.nodes.length > 0 || srcCanvas.edges.length > 0 || (srcCanvas.sections?.length ?? 0) > 0) {
     try {
-      saveCanvas(created.slug, srcCanvas);
+      saveCanvas(created.slug, { ...srcCanvas, updatedAt: null });
     } catch {
       /* canvas is best-effort — never fail the duplicate over it */
     }
