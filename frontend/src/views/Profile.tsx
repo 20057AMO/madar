@@ -12,7 +12,7 @@ import {
 import { useAuth } from '../auth';
 import {
   apiLogoutAll,
-  getAuditLog,
+  getMyActivity,
   getTotpStatus,
   totpSetup,
   totpEnable,
@@ -102,7 +102,7 @@ export function Profile() {
       setTotpCode('');
       setTotpMsg({ type: 'ok', text: 'Two-factor authentication is now active.' });
       setTimeout(() => setTotpMsg(null), 4000);
-      getAuditLog(AUDIT_PAGE, 0).then((r) => { setAudit(r.entries || []); setAuditTotal(r.total || 0); }).catch(() => {});
+      getMyActivity(AUDIT_PAGE, 0).then((r) => { setAudit(r.entries || []); setAuditTotal(r.total || 0); }).catch(() => {});
     } catch (err: any) {
       setTotpMsg({ type: 'err', text: err.message || 'Invalid code.' });
     } finally {
@@ -176,7 +176,7 @@ export function Profile() {
   const [auditLoadingMore, setAuditLoadingMore] = useState(false);
 
   useEffect(() => {
-    getAuditLog(AUDIT_PAGE, 0)
+    getMyActivity(AUDIT_PAGE, 0)
       .then((r) => { setAudit(r.entries || []); setAuditTotal(r.total || 0); })
       .catch(() => { setAudit([]); setAuditTotal(0); });
   }, []);
@@ -185,7 +185,7 @@ export function Profile() {
     if (!audit) return;
     setAuditLoadingMore(true);
     try {
-      const r = await getAuditLog(AUDIT_PAGE, audit.length);
+      const r = await getMyActivity(AUDIT_PAGE, audit.length);
       setAudit((prev) => [...(prev || []), ...(r.entries || [])]);
       setAuditTotal(r.total || 0);
     } catch { /* ignore */ }
@@ -230,7 +230,7 @@ export function Profile() {
         }
       }
       setPendingAction(null);
-      getAuditLog(AUDIT_PAGE, 0)
+      getMyActivity(AUDIT_PAGE, 0)
         .then((r) => { setAudit(r.entries || []); setAuditTotal(r.total || 0); })
         .catch(() => {});
     } catch (err: any) {
@@ -650,10 +650,10 @@ export function Profile() {
         </button>
       </div>
 
-      {/* Security Activity */}
+      {/* Account Activity */}
       <div class="panel settings-section">
-        <h2 class="panel-title">Security Activity</h2>
-        <p class="settings-hint">Recent security-related events (newest first, last 50).</p>
+        <h2 class="panel-title">Account Activity</h2>
+        <p class="settings-hint">Events on your account: sign-ins, security changes, and profile edits (newest first, last 50).</p>
         {audit === null ? (
           <div class="inline-loading" role="status"><Loader2 width={12} height={12} class="icon spin" /> Loading…</div>
         ) : audit.length === 0 ? (

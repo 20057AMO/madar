@@ -251,4 +251,61 @@ describe('User profile & avatar (real Docker)', () => {
       await reqAuth('DELETE', `/projects/${slug}`);
     }
   });
+
+  test('account activity is scoped to the user; global audit is admin-only', async () => {
+    // The editor read-only view: GET /api/auth/audit must now be ADMIN ONLY —
+    // a plain editor must get a 403, never the global log with other users'
+    // events + IPs.
+    const glob = await req('GET', '/auth/audit', undefined, { Authorization: `Bearer ${myTok}` });
+    assert.strictEqual(glob.status, 403, 'global audit must reject non-admins (was a leak)');
+
+    // The admin (forged token) can still read the global security log.
+    const adminGlob = await reqAuth('GET', '/auth/audit');
+    assert.strictEqual(adminGlob.status, 200);
+    assert.ok(Array.isArray((await adminGlob.json()).entries));
+
+    // Account Activity for the editor: 200 + only OWN events. This suite's
+    // profile updates and avatar ops above were all on myId, so 'profile-update'
+    // must appear and NO entry may be tagged to someone else.
+    const mine = await req('GET', '/auth/me/activity', undefined, { Authorization: `Bearer ${myTok}` });
+    assert.strictEqual(mine.status, 200);
+    const act = await mine.json();
+    assert.ok(Array.isArray(act.entries));
+    assert.ok(
+      act.entries.some((e: any) => e.event === 'profile-update'),
+      'own profile edits land in account activity'
+    );
+    // The editor's account activity must never contain an entry tagged to a
+    // DIFFERENT user id — every event concerns the signed-in account.
+    assert.ok(
+      act.entries.every((e: any) => e.userId === myId),
+      'account activity never leaks another user\'s events'
+    );
+  });
+
+  test('setup user cannot read global audit, but sees own login events after re-login', async () => {
+    // 'login' events carry the resolved userId — after this suite's own login
+    // attempt (provision used the admin API, not login), do a REAL login with
+    // the editor and assert the entry shows up in their account activity.
+    const loginRes = await req('POST', '/auth/login', { username: myName, password: pw });
+    assert.strictEqual(loginRes.status, 200);
+    const session = await loginRes.json();
+    assert.ok(session.token, 'real login mints a session');
+
+    const mine = await req('GET', '/auth/me/activity', undefined, { Authorization: `Bearer ${session.token}` });
+    assert.strictEqual(mine.status, 200);
+    const act = await mine.json();
+    assert.ok(
+      act.entries.some((e: any) => e.event === 'login' && e.ok === true),
+      'own successful sign-in shows up in account activity'
+    );
+
+    // A failed login against THIS username must also be tracked on the account.
+    await req('POST', '/auth/login', { username: myName, password: 'wrong-pass-zzz' });
+    const mine2 = await (await req('GET', '/auth/me/activity', undefined, { Authorization: `Bearer ${session.token}` })).json();
+    assert.ok(
+      mine2.entries.some((e: any) => e.event === 'login-failed' && e.ok === false),
+      'failed sign-in attempts on the account are visible in account activity'
+    );
+  });
 });

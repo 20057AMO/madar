@@ -815,15 +815,19 @@ export const removeProvidersPassword = (accountPassword: string) =>
     skipAuthRedirect: true,
   });
 
-// ── Security activity log ─────────────────────────────────────
+// ── Security activity / account activity ──────────────────────
 export interface AuditEntry {
   ts: string;
   event: string;
   ok: boolean;
   ip?: string;
 }
+// Global security log — admin only (Settings → Security Activity).
 export const getAuditLog = (limit = 50, offset = 0) =>
   api<{ entries: AuditEntry[]; total: number }>(`/api/auth/audit?limit=${limit}&offset=${offset}`);
+// Account Activity — the signed-in user's OWN events (Profile).
+export const getMyActivity = (limit = 50, offset = 0) =>
+  api<{ entries: AuditEntry[]; total: number }>(`/api/auth/me/activity?limit=${limit}&offset=${offset}`);
 
 // ── Settings backup ───────────────────────────────────────────
 export interface BackupFile {

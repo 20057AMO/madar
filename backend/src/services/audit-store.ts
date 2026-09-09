@@ -1,8 +1,9 @@
 /**
  * audit-store.ts
- * Append-only security activity log (data/audit.json).
- * Records auth-sensitive events so the owner can review recent account
- * activity from Settings. Capped at the most recent 100 entries.
+ * Append-only activity log (data/audit.json).
+ * Records auth-sensitive events so every user can review their OWN account
+ * activity (Profile → Account Activity) while the owner reviews the full
+ * security log from Settings. Capped at the most recent 100 entries.
  */
 import fs from 'fs';
 import path from 'path';
@@ -74,6 +75,8 @@ export interface AuditEntry {
   event: AuditEvent;
   ok: boolean;
   ip?: string;
+  /** The user whose ACCOUNT this event concerns (used for Account Activity). */
+  userId?: string;
 }
 
 function loadEntries(): AuditEntry[] {
@@ -86,12 +89,23 @@ function loadEntries(): AuditEntry[] {
   }
 }
 
-/** Record an event; failures to persist are non-fatal by design. */
-export function recordAudit(event: AuditEvent, ok: boolean, ip?: string): void {
+/**
+ * Record an event; failures to persist are non-fatal by design.
+ * Pass userId for account-scoped events (logins, security changes, profile
+ * edits) so Profile → Account Activity can filter to a single user while the
+ * admin's global Security Activity log keeps everything.
+ */
+export function recordAudit(event: AuditEvent, ok: boolean, ip?: string, userId?: string): void {
   withFileLock('audit', () => {
     try {
       const entries = loadEntries();
-      entries.push({ ts: new Date().toISOString(), event, ok, ...(ip ? { ip } : {}) });
+      entries.push({
+        ts: new Date().toISOString(),
+        event,
+        ok,
+        ...(ip ? { ip } : {}),
+        ...(userId ? { userId } : {}),
+      });
       const trimmed = entries.slice(-MAX_ENTRIES);
       fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(AUDIT_FILE, JSON.stringify(trimmed, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -104,6 +118,13 @@ export function recordAudit(event: AuditEvent, ok: boolean, ip?: string): void {
 /** Most recent entries first. */
 export function listAudit(limit = 50, offset = 0): { entries: AuditEntry[]; total: number } {
   const all = loadEntries().reverse();
+  const total = all.length;
+  return { entries: all.slice(offset, offset + Math.min(Math.max(limit, 1), MAX_ENTRIES)), total };
+}
+
+/** Account-scoped activity: most recent first, filtered to one user. */
+export function listUserActivity(userId: string, limit = 50, offset = 0): { entries: AuditEntry[]; total: number } {
+  const all = loadEntries().filter((e) => e.userId === userId).reverse();
   const total = all.length;
   return { entries: all.slice(offset, offset + Math.min(Math.max(limit, 1), MAX_ENTRIES)), total };
 }

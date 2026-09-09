@@ -119,10 +119,11 @@ import {
   disableTotp,
   verifyTotpCode,
   verifyPending2faToken,
+  getUserByUsername,
 } from './services/user-store';
 import { otpauthUri } from './services/totp';
 import { buildBackup, restoreFromBackup } from './services/settings-export';
-import { recordAudit, listAudit } from './services/audit-store';
+import { recordAudit, listAudit, listUserActivity } from './services/audit-store';
 import { checkUserWrite, sweepUserWriteBuckets } from './services/user-write-limiter';
 import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkProjectAccess } from './middleware/auth';
 import { attachWebSockets } from './ws/ws-server';
@@ -311,7 +312,7 @@ app.post('/api/auth/setup', authLimiter, async (req, res) => {
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
     const result = await setup(String(username), String(password));
-    recordAudit('setup', true, req.ip);
+    recordAudit('setup', true, req.ip, result.id);
     res.status(201).json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -319,6 +320,10 @@ app.post('/api/auth/setup', authLimiter, async (req, res) => {
 });
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
+  // Resolve the attempted account up front so both the 2FA branch and failures
+  // tag the correct userId — Account Activity needs "Sign in failed" to land
+  // on the target account, not just on the global admin log.
+  const auditUser = req.body && typeof req.body.username === 'string' ? getUserByUsername(req.body.username) : undefined;
   try {
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
@@ -326,14 +331,14 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     if ('requires2fa' in result) {
       // TOTP is enabled for THIS user — no session until the code verifies.
       // Record the accepted-password step so a correct password that stops at
-      // the authenticator still leaves a trace in the security activity log.
-      recordAudit('login', true, req.ip);
+      // the authenticator still leaves a trace in the account activity log.
+      recordAudit('login', true, req.ip, auditUser?.id);
       return res.json(result);
     }
-    recordAudit('login', true, req.ip);
+    recordAudit('login', true, req.ip, auditUser?.id);
     res.json(result);
   } catch (err: any) {
-    recordAudit('login-failed', false, req.ip);
+    recordAudit('login-failed', false, req.ip, auditUser?.id);
     res.status(401).json({ error: err.message });
   }
 });
@@ -351,11 +356,11 @@ app.post('/api/auth/login/verify', totpLimiter, (req: any, res) => {
   }
   const user = getUserInfo(pendingUserId);
   if (!user || !verifyTotpCode(String(code || ''), pendingUserId)) {
-    recordAudit('login-2fa-failed', false, req.ip);
+    recordAudit('login-2fa-failed', false, req.ip, pendingUserId);
     return res.status(401).json({ error: 'Invalid authenticator code.' });
   }
   const result = signLoginSession(pendingUserId);
-  recordAudit('login', true, req.ip);
+  recordAudit('login', true, req.ip, pendingUserId);
   res.json(result);
 });
 
@@ -377,11 +382,21 @@ app.use((req, res, next) => {
   authMiddleware(req, res, next);
 });
 
-// Security activity log for the authenticated owner.
-app.get('/api/auth/audit', (req: any, res) => {
+// Global security activity log — ADMIN ONLY. Regular users get the
+// account-scoped view at /api/auth/me/activity (Profile → Account Activity).
+app.get('/api/auth/audit', requireAdmin, (req: any, res) => {
   const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 100);
   const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
   res.json(listAudit(limit, offset));
+});
+
+// Account Activity: the authenticated user's OWN events (logins, security
+// changes, profile edits). Mints only userId-tagged entries — never the
+// global log, so a viewer can't read admins' or other users' activity.
+app.get('/api/auth/me/activity', (req: any, res) => {
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 100);
+  const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+  res.json(listUserActivity(req.user?.id, limit, offset));
 });
 
 // ── Two-factor authentication (TOTP) ──────────────────────────
@@ -409,10 +424,10 @@ app.post('/api/auth/2fa/enable', authLimiter, (req: any, res) => {
   if (!userId) return res.status(401).json({ error: 'Authentication required.' });
   const { code } = req.body || {};
   if (enableTotp(String(code || ''), userId)) {
-    recordAudit('2fa-enabled', true, req.ip);
+    recordAudit('2fa-enabled', true, req.ip, userId);
     return res.json({ ok: true });
   }
-  recordAudit('2fa-enabled-failed', false, req.ip);
+  recordAudit('2fa-enabled-failed', false, req.ip, userId);
   res.status(400).json({ error: 'Invalid authenticator code.' });
 });
 
@@ -423,11 +438,11 @@ app.post('/api/auth/2fa/disable', authLimiter, async (req: any, res) => {
   const { accountPassword } = req.body || {};
   if (!accountPassword) return res.status(400).json({ error: 'Account password is required.' });
   if (!(await verifyAccountPassword(String(accountPassword), userId))) {
-    recordAudit('2fa-disabled-failed', false, req.ip);
+    recordAudit('2fa-disabled-failed', false, req.ip, userId);
     return res.status(401).json({ error: 'Account password is incorrect.' });
   }
   disableTotp(userId);
-  recordAudit('2fa-disabled', true, req.ip);
+  recordAudit('2fa-disabled', true, req.ip, userId);
   res.json({ ok: true });
 });
 
@@ -438,10 +453,10 @@ app.post('/api/auth/change-password', authLimiter, async (req: any, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required.' });
     const { token } = await changePassword(String(currentPassword), String(newPassword), userId);
-    recordAudit('password-change', true, req.ip);
+    recordAudit('password-change', true, req.ip, userId);
     res.json({ ok: true, token });
   } catch (err: any) {
-    recordAudit('password-change-failed', false, req.ip);
+    recordAudit('password-change-failed', false, req.ip, req.user?.id);
     res.status(400).json({ error: err.message });
   }
 });
@@ -452,10 +467,10 @@ app.post('/api/auth/logout-all', authLimiter, async (req: any, res) => {
     const { accountPassword } = req.body || {};
     if (!accountPassword) return res.status(400).json({ error: 'Account password is required.' });
     await revokeAllSessions(String(accountPassword));
-    recordAudit('logout-all', true, req.ip);
+    recordAudit('logout-all', true, req.ip, req.user?.id);
     res.json({ ok: true });
   } catch (err: any) {
-    recordAudit('logout-all-failed', false, req.ip);
+    recordAudit('logout-all-failed', false, req.ip, req.user?.id);
     res.status(err?.status || 400).json({ error: err.message });
   }
 });
@@ -483,14 +498,14 @@ app.post('/api/providers/unlock', unlockLimiter, async (req: any, res) => {
     if (st.count >= UNLOCK_FAIL_LIMIT) {
       st.until = Date.now() + UNLOCK_COOLDOWN_MS;
       st.count = 0;
-      recordAudit('providers-unlock-cooldown', false, req.ip);
+      recordAudit('providers-unlock-cooldown', false, req.ip, req.user?.id);
     }
     unlockFails.set(ip, st);
-    recordAudit('providers-unlock-failed', false, req.ip);
+    recordAudit('providers-unlock-failed', false, req.ip, req.user?.id);
     return res.status(401).json({ error: 'Incorrect providers password.' });
   }
   unlockFails.delete(ip);
-  recordAudit('providers-unlock', true, req.ip);
+  recordAudit('providers-unlock', true, req.ip, req.user?.id);
   res.json({ ok: true, unlockToken: result.unlockToken, expiresInSec: result.expiresInSec });
 });
 
@@ -500,7 +515,7 @@ app.post('/api/providers/unlock', unlockLimiter, async (req: any, res) => {
 app.post('/api/providers/relock', (req: any, res) => {
   if (!hasProvidersPassword()) return res.json({ ok: true, locked: false });
   revokeProvidersUnlocks();
-  recordAudit('providers-relock', true, req.ip);
+  recordAudit('providers-relock', true, req.ip, req.user?.id);
   res.json({ ok: true, locked: true });
 });
 
@@ -514,7 +529,7 @@ app.post('/api/auth/providers-password', authLimiter, async (req: any, res) => {
       return res.status(400).json({ error: 'Account password and new providers password are required.' });
     }
     await setProvidersPassword(String(accountPassword), String(newPassword), req.user?.id);
-    recordAudit('providers-lock-change', true, req.ip);
+    recordAudit('providers-lock-change', true, req.ip, req.user?.id);
     const unlock = await issueUnlockToken(String(newPassword), String(req.user?.jti || ''));
     res.json({
       ok: true,
@@ -522,7 +537,7 @@ app.post('/api/auth/providers-password', authLimiter, async (req: any, res) => {
       ...(unlock ? { unlockToken: unlock.unlockToken, expiresInSec: unlock.expiresInSec } : {}),
     });
   } catch (err: any) {
-    recordAudit('providers-lock-change-failed', false, req.ip);
+    recordAudit('providers-lock-change-failed', false, req.ip, req.user?.id);
     res.status(err?.message?.includes('incorrect') ? 401 : 400).json({ error: err.message });
   }
 });
@@ -533,10 +548,10 @@ app.delete('/api/auth/providers-password', authLimiter, async (req: any, res) =>
     const { accountPassword } = req.body || {};
     if (!accountPassword) return res.status(400).json({ error: 'Account password is required.' });
     await removeProvidersPassword(String(accountPassword), req.user?.id);
-    recordAudit('providers-lock-change', true, req.ip);
+    recordAudit('providers-lock-change', true, req.ip, req.user?.id);
     res.json({ ok: true, enabled: false });
   } catch (err: any) {
-    recordAudit('providers-lock-change-failed', false, req.ip);
+    recordAudit('providers-lock-change-failed', false, req.ip, req.user?.id);
     res.status(err?.message?.includes('not enabled') ? 409 : 401).json({ error: err.message });
   }
 });
@@ -550,7 +565,7 @@ app.post('/api/settings/export', authLimiter, async (req: any, res) => {
     return res.status(401).json({ error: 'Account password is incorrect.' });
   }
   try {
-    recordAudit('backup-export', true, req.ip);
+    recordAudit('backup-export', true, req.ip, req.user?.id);
     const backup = buildBackup('BETA');
     res.setHeader(
       'Content-Disposition',
@@ -570,7 +585,7 @@ app.post('/api/settings/import', authLimiter, async (req: any, res) => {
       return res.status(401).json({ error: 'Account password is incorrect.' });
     }
     const result = restoreFromBackup(backup);
-    recordAudit('backup-import', true, req.ip);
+    recordAudit('backup-import', true, req.ip, req.user?.id);
     res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(err?.status || 500).json({ error: err.message });
@@ -588,7 +603,7 @@ app.post('/api/users', requireAdmin, userAdminLimiter, async (req: any, res) => 
     const { username, password, role } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
     const result = await createUser(String(username), String(password), (role as any) || 'editor', req.user?.id);
-    recordAudit('user-created', true, req.ip);
+    recordAudit('user-created', true, req.ip, result.id);
     res.status(201).json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -602,7 +617,7 @@ app.patch('/api/users/:userId/role', requireAdmin, (req: any, res) => {
   }
   const ok = updateUserRole(req.params.userId, role as any);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
-  recordAudit('user-role-changed', true, req.ip);
+  recordAudit('user-role-changed', true, req.ip, req.params.userId);
   res.json({ ok: true });
 });
 
@@ -614,7 +629,7 @@ app.delete('/api/users/:userId', requireAdmin, userAdminLimiter, (req: any, res)
   const ok = deleteUser(req.params.userId);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
   deleteAvatar(req.params.userId); // best-effort avatar cleanup
-  recordAudit('user-deleted', true, req.ip);
+  recordAudit('user-deleted', true, req.ip, req.params.userId);
   res.json({ ok: true });
 });
 
@@ -638,10 +653,10 @@ app.put('/api/users/me/profile', userWriteLimiter, (req: any, res) => {
     const { displayName, email, bio } = req.body || {};
     const updated = updateUserProfile(req.user?.id, { displayName, email, bio });
     if (!updated) return res.status(404).json({ error: 'User not found.' });
-    recordAudit('profile-update', true, req.ip);
+    recordAudit('profile-update', true, req.ip, req.user?.id);
     res.json(updated);
   } catch (err: any) {
-    recordAudit('profile-update', false, req.ip);
+    recordAudit('profile-update', false, req.ip, req.user?.id);
     res.status(400).json({ error: err.message });
   }
 });
@@ -652,10 +667,10 @@ app.put('/api/users/:userId/profile', requireAdmin, userWriteLimiter, (req: any,
     const { displayName, email, bio } = req.body || {};
     const updated = updateUserProfile(req.params.userId, { displayName, email, bio });
     if (!updated) return res.status(404).json({ error: 'User not found.' });
-    recordAudit('profile-update', true, req.ip);
+    recordAudit('profile-update', true, req.ip, req.params.userId);
     res.json(updated);
   } catch (err: any) {
-    recordAudit('profile-update', false, req.ip);
+    recordAudit('profile-update', false, req.ip, req.params.userId);
     res.status(400).json({ error: err.message });
   }
 });
@@ -665,10 +680,10 @@ app.post('/api/users/me/avatar', avatarLimiter, userWriteLimiter, avatarUpload.s
     if (!req.file) return res.status(400).json({ error: 'No image file provided.' });
     const ext = saveAvatar(req.user?.id, req.file.buffer);
     if (!setUserAvatarExt(req.user?.id, ext)) return res.status(404).json({ error: 'User not found.' });
-    recordAudit('avatar-upload', true, req.ip);
+    recordAudit('avatar-upload', true, req.ip, req.user?.id);
     res.json({ avatarUrl: `/api/users/${req.user?.id}/avatar` });
   } catch (err: any) {
-    recordAudit('avatar-upload', false, req.ip);
+    recordAudit('avatar-upload', false, req.ip, req.user?.id);
     res.status(400).json({ error: err.message });
   }
 });
@@ -677,11 +692,11 @@ app.delete('/api/users/me/avatar', userWriteLimiter, (req: any, res) => {
   try {
     if (deleteAvatar(req.user?.id)) {
       setUserAvatarExt(req.user?.id, null);
-      recordAudit('avatar-remove', true, req.ip);
+      recordAudit('avatar-remove', true, req.ip, req.user?.id);
     }
     res.json({ ok: true });
   } catch (err: any) {
-    recordAudit('avatar-remove', false, req.ip);
+    recordAudit('avatar-remove', false, req.ip, req.user?.id);
     res.status(400).json({ error: err.message });
   }
 });

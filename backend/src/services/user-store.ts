@@ -82,7 +82,7 @@ function getUserById(id: string): StoredUser | undefined {
   return usersMap.get(id);
 }
 
-function getUserByUsername(username: string): StoredUser | undefined {
+export function getUserByUsername(username: string): StoredUser | undefined {
   if (usersMap.size === 0) loadUsers();
   const clean = username.trim().toLowerCase();
   for (const u of usersMap.values()) {
