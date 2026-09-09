@@ -2733,6 +2733,39 @@ input[type="file"].modern-file::file-selector-button {
   background: var(--bg-3);
   border-color: var(--border-2);
 }
+.cn-position-control {
+  gap: 5px;
+}
+.cn-position-pad {
+  position: relative;
+  display: inline-block;
+  width: 73px;
+  height: 48px;
+}
+.cn-position-btn {
+  position: absolute;
+  width: 23px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-3);
+  cursor: pointer;
+}
+.cn-position-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--bg-3);
+}
+.cn-position-btn.up { top: 0; left: 25px; }
+.cn-position-btn.left { top: 25px; left: 0; }
+.cn-position-btn.center { top: 25px; left: 25px; font-size: 1rem; line-height: 1; }
+.cn-position-btn.right { top: 25px; right: 0; }
+.cn-position-btn.down { bottom: 0; left: 25px; }
 .cn-dot {
   width: 14px;
   height: 14px;

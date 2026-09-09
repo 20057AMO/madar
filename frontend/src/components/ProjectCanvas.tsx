@@ -29,6 +29,10 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -485,6 +489,22 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     });
   const setNodeSection = (nodeId: string, section: string | undefined) =>
     patchNode(nodeId, { section });
+
+  const moveText = (node: CanvasNode, dx: number, dy: number) => {
+    const maxX = Math.max(0, node.w - 20);
+    const maxY = Math.max(0, node.h - 20);
+    patchNode(node.id, {
+      textX: clamp((node.textX ?? 10) + dx, 0, maxX),
+      textY: clamp((node.textY ?? 10) + dy, 0, maxY),
+    });
+  };
+
+  const centerText = (node: CanvasNode) => {
+    patchNode(node.id, {
+      textX: Math.max(0, Math.round((node.w - 20) / 2)),
+      textY: Math.max(0, Math.round((node.h - 20) / 2)),
+    });
+  };
 
   // ── fullscreen ──────────────────────────────────────────────
   const toggleFullscreen = () => {
@@ -1364,32 +1384,26 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               I
             </button>
           </span>
-          <label class="cn-text-control">
-            <span>X</span>
-            <input
-              type="number"
-              min="0"
-              max={Math.max(0, selected.w - 20)}
-              step="1"
-              value={Math.round(selected.textX ?? 10)}
-              aria-label="Text horizontal position"
-              onPointerDown={(e: any) => e.stopPropagation()}
-              onChange={(e: any) => patchNode(selected.id, { textX: clamp(Number(e.currentTarget.value) || 0, 0, Math.max(0, selected.w - 20)) })}
-            />
-          </label>
-          <label class="cn-text-control">
-            <span>Y</span>
-            <input
-              type="number"
-              min="0"
-              max={Math.max(0, selected.h - 20)}
-              step="1"
-              value={Math.round(selected.textY ?? 10)}
-              aria-label="Text vertical position"
-              onPointerDown={(e: any) => e.stopPropagation()}
-              onChange={(e: any) => patchNode(selected.id, { textY: clamp(Number(e.currentTarget.value) || 0, 0, Math.max(0, selected.h - 20)) })}
-            />
-          </label>
+          <span class="cn-text-control cn-position-control">
+            <span>Move text</span>
+            <span class="cn-position-pad" role="group" aria-label="Move text within node">
+              <button type="button" class="cn-position-btn up" title="Move text up" aria-label="Move text up" onClick={() => moveText(selected, 0, -8)}>
+                <ArrowUp width={13} height={13} />
+              </button>
+              <button type="button" class="cn-position-btn left" title="Move text left" aria-label="Move text left" onClick={() => moveText(selected, -8, 0)}>
+                <ArrowLeft width={13} height={13} />
+              </button>
+              <button type="button" class="cn-position-btn center" title="Center text" aria-label="Center text" onClick={() => centerText(selected)}>
+                <span>•</span>
+              </button>
+              <button type="button" class="cn-position-btn right" title="Move text right" aria-label="Move text right" onClick={() => moveText(selected, 8, 0)}>
+                <ArrowRight width={13} height={13} />
+              </button>
+              <button type="button" class="cn-position-btn down" title="Move text down" aria-label="Move text down" onClick={() => moveText(selected, 0, 8)}>
+                <ArrowDown width={13} height={13} />
+              </button>
+            </span>
+          </span>
           {doc?.sections?.length ? (
             <select
               class="cn-section-select"
