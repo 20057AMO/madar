@@ -29,8 +29,8 @@ export interface Project {
   activity?: { action: string; at: string }[];
   ownerId?: string;
   /** Resolved owner identity (enriched on the project list). */
-  owner?: { id: string; username: string } | null;
-  members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string; username?: string }[];
+  owner?: { id: string; username: string; displayName?: string; avatarExt?: string } | null;
+  members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string; username?: string; displayName?: string; avatarExt?: string }[];
   canvasEditedAt?: string | null;
   tags?: string[];
   /** Last detected container crash — red chip/banner until cleared. */
@@ -979,12 +979,22 @@ export function wsUrl(path: string): string {
 
 export type UserRole = 'admin' | 'editor' | 'viewer';
 
+/** Editable profile fields — stored on the user record (users.json). */
+export interface UserProfile {
+  displayName?: string;
+  email?: string;
+  bio?: string;
+  /** Avatar image type stored on disk (data/avatars/<userId>.<ext>). */
+  avatarExt?: string;
+}
+
 export interface TeamUser {
   id: string;
   username: string;
   role: UserRole;
   createdAt: string;
   passwordChangedAt?: string;
+  profile?: UserProfile;
 }
 
 export const listUsers = () => api<TeamUser[]>('/api/users');
@@ -1006,6 +1016,39 @@ export const updateUserRole = (userId: string, role: UserRole) =>
 export const deleteUser = (userId: string) =>
   api<{ ok: boolean }>(`/api/users/${userId}`, { method: 'DELETE' });
 
+// ── User profile & avatar ─────────────────────────────────────
+
+/** Public profile of any user (any authenticated role may read). */
+export const getUserProfile = (userId: string) =>
+  api<{ profile: UserProfile }>(`/api/users/${userId}/profile`);
+
+/** Own editable profile. */
+export const getMyProfile = () =>
+  api<{ profile: UserProfile }>('/api/users/me/profile');
+
+export const updateMyProfile = (patch: { displayName?: string | null; email?: string | null; bio?: string | null }) =>
+  api<{ id: string; username: string; profile: UserProfile }>('/api/users/me/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+
+export const uploadAvatar = (file: Blob) => {
+  const fd = new FormData();
+  fd.append('avatar', file, file instanceof File ? file.name : 'avatar');
+  return api<{ avatarUrl: string }>('/api/users/me/avatar', { method: 'POST', body: fd });
+};
+
+export const deleteMyAvatar = () =>
+  api<{ ok: boolean }>('/api/users/me/avatar', { method: 'DELETE' });
+
+/**
+ * Avatar image URL for a user, or null when they have no stored image.
+ * The image itself is served by GET /api/users/:userId/avatar.
+ */
+export const avatarUrl = (userId: string, avatarExt?: string | null): string | null =>
+  avatarExt ? `/api/users/${userId}/avatar` : null;
+
 // ── Project membership ──────────────────────────────────────
 
 export interface ProjectMember {
@@ -1013,6 +1056,8 @@ export interface ProjectMember {
   username: string;
   role: 'admin' | 'editor' | 'viewer';
   addedAt: string;
+  displayName?: string;
+  avatarExt?: string;
 }
 
 export const listProjectMembers = (slug: string) =>

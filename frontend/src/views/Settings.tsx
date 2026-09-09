@@ -16,6 +16,9 @@ import {
   Trash2,
   HardDrive,
   RefreshCw,
+  UserRound,
+  UserCheck,
+  ImagePlus,
 } from 'lucide-preact';
 import { useAuth } from '../auth';
 import {
@@ -47,6 +50,8 @@ import {
   type WebhookInput,
   type StorageMetrics,
 } from '../api';
+import { getMyProfile, updateMyProfile, uploadAvatar, deleteMyAvatar, avatarUrl, type UserProfile } from '../api';
+import { Avatar } from '../components/Avatar';
 import { PwMeter } from '../components/PwMeter';
 import { ReAuthModal } from '../components/ReAuthModal';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -83,6 +88,9 @@ const AUDIT_LABELS: Record<string, string> = {
   'webhook-send': 'Webhook delivered',
   'webhook-send-failed': 'Webhook delivery failed',
   'webhook-config-change': 'Webhooks configuration changed',
+  'profile-update': 'Profile updated',
+  'avatar-upload': 'Profile photo uploaded',
+  'avatar-remove': 'Profile photo removed',
 };
 
 type Msg = { type: 'ok' | 'err'; text: string } | null;
@@ -196,7 +204,22 @@ function WhRow({ w, onChanged, onDelete }: WhRowProps) {
 }
 
 export function Settings() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
+
+  // ── User profile (display name / email / bio / avatar) ──
+  const [profile, setProfile] = useState<UserProfile>({});
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState<Msg>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    getMyProfile()
+      .then((r) => setProfile(r.profile || {}))
+      .catch(() => {})
+      .finally(() => setProfileLoading(false));
+  }, []);
 
   // ── Change account password ──
   const [currentPw, setCurrentPw] = useState('');
@@ -647,12 +670,159 @@ export function Settings() {
     window.location.hash = '/login';
   };
 
+  // ── User profile handlers ────────────────────────────────────
+  const saveProfile = async () => {
+    setProfileSaving(true);
+    setProfileMsg(null);
+    try {
+      const r = await updateMyProfile({
+        displayName: profile.displayName?.trim() || '',
+        email: profile.email?.trim() || '',
+        bio: profile.bio?.trim() || '',
+      });
+      setProfile(r.profile || {});
+      await refreshUser();
+      setProfileMsg({ type: 'ok', text: 'Profile saved.' });
+    } catch (err: any) {
+      setProfileMsg({ type: 'err', text: err.message || 'Failed to save profile' });
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const pickAvatar = async (e: any) => {
+    const file = e.target.files?.[0] as File | undefined;
+    e.target.value = '';
+    if (!file) return;
+    setAvatarBusy(true);
+    setProfileMsg(null);
+    try {
+      await uploadAvatar(file);
+      const r = await getMyProfile();
+      setProfile(r.profile || {});
+      await refreshUser();
+      setProfileMsg({ type: 'ok', text: 'Avatar updated.' });
+    } catch (err: any) {
+      setProfileMsg({ type: 'err', text: err.message || 'Upload failed' });
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    setAvatarBusy(true);
+    setProfileMsg(null);
+    try {
+      await deleteMyAvatar();
+      const r = await getMyProfile();
+      setProfile(r.profile || {});
+      await refreshUser();
+      setProfileMsg({ type: 'ok', text: 'Avatar removed.' });
+    } catch (err: any) {
+      setProfileMsg({ type: 'err', text: err.message || 'Failed to remove avatar' });
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
   return (
     <div class="view">
       <div class="hero">
         <span class="hero-badge"><SettingsIcon width={12} height={12} /> Settings</span>
         <h1 class="hero-title" style="font-size: 1.5rem">Settings</h1>
         <p class="hero-sub">Manage your account and application settings.</p>
+      </div>
+
+      {/* Profile */}
+      <div class="panel settings-section">
+        <h2 class="panel-title">
+          <span class="icon-wrap"><UserRound width={14} height={14} /></span> Profile
+        </h2>
+        <p class="settings-hint">
+          How you appear across the team — name, avatar, bio and contact.
+        </p>
+        {profileLoading && user ? (
+          <div class="inline-loading"><Loader2 width={14} height={14} class="icon spin" /> Loading profile…</div>
+        ) : (
+          <>
+            <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap;">
+              <Avatar
+                name={profile.displayName || user?.username || user?.id || 'user'}
+                avatar={user ? avatarUrl(user.id, profile.avatarExt) : null}
+                size={56}
+              />
+              <div style="display: flex; flex-direction: column; gap: 6px">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <button class="btn-ghost sm" type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarBusy}>
+                    <span class="icon-wrap">
+                      {avatarBusy ? <Loader2 width={13} height={13} class="icon spin" /> : <ImagePlus width={13} height={13} />}
+                    </span>
+                    {profile.avatarExt ? 'Change photo' : 'Upload photo'}
+                  </button>
+                  {profile.avatarExt && (
+                    <button class="btn-danger sm" type="button" onClick={removeAvatar} disabled={avatarBusy}>
+                      {avatarBusy ? <Loader2 width={13} height={13} class="icon spin" /> : 'Remove'}
+                    </button>
+                  )}
+                </div>
+                <span class="settings-hint" style="margin: 0">PNG, JPEG or WebP · up to 2 MB</span>
+              </div>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                onChange={pickAvatar}
+                aria-label="Upload profile photo"
+              />
+            </div>
+
+            <label class="field-label">Display name</label>
+            <input
+              class="modern-input"
+              maxLength={60}
+              placeholder="How you appear to the team"
+              value={profile.displayName || ''}
+              onInput={(e: any) => setProfile({ ...profile, displayName: e.target.value })}
+            />
+
+            <label class="field-label">Email</label>
+            <input
+              class="modern-input"
+              type="email"
+              maxLength={200}
+              placeholder="you@example.com"
+              value={profile.email || ''}
+              onInput={(e: any) => setProfile({ ...profile, email: e.target.value })}
+            />
+
+            <label class="field-label">Bio</label>
+            <textarea
+              class="modern-input"
+              rows={3}
+              maxLength={500}
+              placeholder="A short line about you — shown to the team."
+              value={profile.bio || ''}
+              onInput={(e: any) => setProfile({ ...profile, bio: e.target.value })}
+            />
+
+            {profileMsg && (
+              <div class={profileMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px" role={profileMsg.type === 'ok' ? 'status' : 'alert'}>
+                {profileMsg.text}
+              </div>
+            )}
+
+            <div style="margin-top: 12px">
+              <button class="btn-primary sm" type="button" onClick={saveProfile} disabled={profileSaving}>
+                {profileSaving ? <Loader2 width={13} height={13} class="icon spin" /> : (
+                  <>
+                    <span class="icon-wrap"><UserCheck width={13} height={13} /></span> Save profile
+                  </>
+                )}
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Account Info */}

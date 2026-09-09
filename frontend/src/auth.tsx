@@ -1,6 +1,6 @@
 import { createContext, type ComponentChildren } from 'preact';
 import { useState, useEffect, useContext, useCallback } from 'preact/hooks';
-import { relockProviders, clearProvidersUnlock } from './api';
+import { relockProviders, clearProvidersUnlock, type UserProfile } from './api';
 
 interface AuthUser {
   id: string;
@@ -8,6 +8,7 @@ interface AuthUser {
   role: 'admin' | 'editor' | 'viewer';
   createdAt: string;
   passwordChangedAt?: string;
+  profile?: UserProfile;
 }
 
 interface AuthState {
@@ -22,6 +23,8 @@ interface AuthState {
   pending2fa: boolean;
   setup: (username: string, password: string) => Promise<void>;
   logout: () => void;
+  /** Re-fetch the current user (profile edits, etc.) and update the context. */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -35,6 +38,7 @@ const AuthContext = createContext<AuthState>({
   pending2fa: false,
   setup: async () => {},
   logout: () => {},
+  refreshUser: async () => {},
 });
 
 export function useAuth(): AuthState {
@@ -135,6 +139,18 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
     localStorage.removeItem('wsd.token');
     setToken(null);
     setUser(null);
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const stored = localStorage.getItem('wsd.token');
+    if (!stored) return;
+    try {
+      const res = await fetch('/api/auth/status', { headers: { Authorization: `Bearer ${stored}` } });
+      const data = await res.json();
+      if (data?.user) setUser(data.user);
+    } catch {
+      /* keep the current user — a fresh leak here is not worth a logout */
+    }
   }, []);
 
   // ── Auto-logout on inactivity ─────────────────────────────────
@@ -261,6 +277,7 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
         pending2fa: !!pending2faToken,
         setup: doSetup,
         logout,
+        refreshUser,
       }}
     >
       {children}

@@ -14,11 +14,13 @@ import {
   stopProject,
   clearProjectCrash,
   deleteProject,
+  avatarUrl,
   wsUrl,
   type Project,
   getStorageMetrics,
   type ProjectStorage,
 } from '../api';
+import { Avatar } from '../components/Avatar';
 import { fmtCpu, fmtMem } from '../lib/limits';
 import { fmtBytes } from '../lib/size';
 import { lastTouched, lastTouchedLabel } from '../lib/time';
@@ -37,11 +39,15 @@ function extraMemberCount(p: Project): number {
 
 /** Who owns / can access a project, shown on cards and the table. */
 function ProjectPeople({ p }: { p: Project }) {
-  const ownerName = p.owner?.username || '(deleted user)';
+  const ownerName = p.owner?.displayName || p.owner?.username || '(deleted user)';
   const extra = extraMemberCount(p);
   return (
     <span class="meta-chip people" title={`Owner: ${ownerName}${extra ? ` · ${extra} more member${extra === 1 ? '' : 's'}` : ''}`}>
-      <Users width={11} height={11} class="icon" />
+      {p.owner ? (
+        <Avatar name={ownerName} avatar={avatarUrl(p.owner.id, p.owner.avatarExt)} size={16} />
+      ) : (
+        <Users width={11} height={11} class="icon" />
+      )}
       <span class="people-owner">{ownerName}</span>
       {extra > 0 && <span class="people-extra">+{extra}</span>}
     </span>

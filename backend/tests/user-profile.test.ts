@@ -174,6 +174,12 @@ describe('User profile & avatar (real Docker)', () => {
     const bytes = Buffer.from(await served.arrayBuffer());
     assert.ok(bytes.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), 'served bytes match');
 
+    // Avatars are intentionally public so <img> tags (which carry no auth
+    // header) can render them — no token required.
+    const anonymous = await fetch(`${API_URL}/users/${myId}/avatar`);
+    assert.strictEqual(anonymous.status, 200, 'avatar served without a token');
+    assert.strictEqual(anonymous.headers.get('content-type'), 'image/png');
+
     // Avatar extension lands on the user record.
     const users = await (await reqAuth('GET', '/users')).json();
     const self = users.find((u: any) => u.id === myId);

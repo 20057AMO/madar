@@ -23,9 +23,11 @@ import {
   getProvidersUnlock,
   relockProviders,
   clearProvidersUnlock,
+  avatarUrl,
   UNLOCK_KEY,
   getOpencodeStatus,
 } from './api';
+import { Avatar } from './components/Avatar';
 
 const Dashboard = lazy(() => import('./views/Dashboard').then(m => ({ default: m.Dashboard })));
 const Projects = lazy(() => import('./views/Projects').then(m => ({ default: m.Projects })));
@@ -220,7 +222,8 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <ProvidersUnlockBadge />
         <div class="sys-row">
           <span class="sys-dot ok" />
-          {user?.username || 'authenticated'}
+          {user?.profile?.displayName || user?.username || 'authenticated'}
+          {user && <Avatar name={user.profile?.displayName || user.username} avatar={avatarUrl(user.id, user.profile?.avatarExt)} size={20} />}
           <span class="beta-chip" title="Beta software — features and data format may change">BETA</span>
         </div>
       </div>

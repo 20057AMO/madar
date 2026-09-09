@@ -6,11 +6,13 @@ import {
   removeProjectMember,
   transferOwner,
   listUsers,
+  avatarUrl,
   type ProjectMember,
   type TeamUser,
   type UserRole,
 } from '../api';
 import { ConfirmModal } from './ConfirmModal';
+import { Avatar } from './Avatar';
 import type { PresenceUser } from '../usePresence';
 
 interface Props {
@@ -184,12 +186,12 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                 <div class="member-row" key={m.userId}>
                   <div class="member-info">
                     <div class="member-avatar" style="position:relative">
-                      {m.username.charAt(0).toUpperCase()}
+                      <Avatar name={m.displayName || m.username} avatar={avatarUrl(m.userId, m.avatarExt)} size={34} />
                       {onlineIds.has(m.userId) && <span class="presence-online-dot" />}
                     </div>
                     <div class="member-details">
                       <span class="member-name">
-                        {m.username}
+                        {m.displayName || m.username}
                         {isOwner && <Crown class="icon icon-sm" style={{ color: '#f59e0b', marginLeft: '4px' }} />}
                       </span>
                       <span class="member-meta">Added {new Date(m.addedAt).toLocaleDateString()}</span>

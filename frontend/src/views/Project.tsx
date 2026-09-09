@@ -35,6 +35,7 @@ import {
   startServe,
   stopServe,
   clearProjectCrash,
+  avatarUrl,
 } from '../api';
 import type {
   Project,
@@ -54,6 +55,7 @@ import { TeamPanel } from '../components/TeamPanel';
 import { SnapshotsPanel } from '../components/SnapshotsPanel';
 import { ProjectCanvas } from '../components/ProjectCanvas';
 import { CrashBadge } from '../components/CrashBadge';
+import { Avatar } from '../components/Avatar';
 import { useAuth } from '../auth';
 import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
@@ -514,10 +516,10 @@ export function Project({ params }: { params: { slug: string } }) {
               {project?.crash && <CrashBadge crash={project.crash} />}
               {wsConnected && <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" />}
               {onlineUsers.length > 0 && (
-                <span class="presence-indicator" role="status" title={onlineUsers.map(u => u.username).join(', ')}>
+                <span class="presence-indicator" role="status" title={onlineUsers.map(u => u.displayName || u.username).join(', ')}>
                   {onlineUsers.map(u => (
                     <span class="presence-dot" key={u.id}>
-                      <span class="presence-avatar">{u.username.charAt(0).toUpperCase()}</span>
+                      <Avatar name={u.displayName || u.username} avatar={avatarUrl(u.id, u.avatarExt)} size={22} />
                       <span class="presence-online-dot" />
                     </span>
                   ))}

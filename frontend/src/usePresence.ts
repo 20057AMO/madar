@@ -10,6 +10,8 @@ export interface PresenceUser {
   id: string;
   username: string;
   role: string;
+  displayName?: string;
+  avatarExt?: string;
 }
 
 export function usePresence(slug: string | null): PresenceUser[] {

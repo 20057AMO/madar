@@ -355,6 +355,18 @@ app.post('/api/auth/login/verify', totpLimiter, (req: any, res) => {
   res.json(result);
 });
 
+// ── User avatars (public by design: <img> tags carry no auth header) ──
+app.get('/api/users/:userId/avatar', (req: any, res) => {
+  if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
+  const p = getAvatarPath(req.params.userId);
+  if (!p) return res.status(404).json({ error: 'No avatar' });
+  const ext = p.endsWith('.png') ? 'png' : p.endsWith('.webp') ? 'webp' : 'jpeg';
+  res.setHeader('Content-Type', `image/${ext}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(p);
+});
+
 // ── Auth middleware (protect everything below) ────────────────
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')) return next();
@@ -668,17 +680,6 @@ app.delete('/api/users/me/avatar', userWriteLimiter, (req: any, res) => {
     recordAudit('avatar-remove', false, req.ip);
     res.status(400).json({ error: err.message });
   }
-});
-
-app.get('/api/users/:userId/avatar', (req: any, res) => {
-  if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
-  const p = getAvatarPath(req.params.userId);
-  if (!p) return res.status(404).json({ error: 'No avatar' });
-  const ext = p.endsWith('.png') ? 'png' : p.endsWith('.webp') ? 'webp' : 'jpeg';
-  res.setHeader('Content-Type', `image/${ext}`);
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'public, max-age=86400');
-  res.sendFile(p);
 });
 
 // ── Server info / networking ─────────────────────────────────

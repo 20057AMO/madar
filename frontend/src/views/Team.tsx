@@ -15,9 +15,11 @@ import {
   createUser,
   updateUserRole,
   deleteUser,
+  avatarUrl,
   type TeamUser,
   type UserRole,
 } from '../api';
+import { Avatar } from '../components/Avatar';
 
 const ROLE_CONFIG: Record<UserRole, { label: string; color: string; icon: typeof ShieldCheck }> = {
   admin: { label: 'Admin', color: '#f59e0b', icon: ShieldCheck },
@@ -203,7 +205,6 @@ export function Team() {
         {users.map((u) => {
           const isMe = u.id === currentUser?.id;
           const cfg = ROLE_CONFIG[u.role];
-          const RoleIcon = cfg.icon;
           return (
             <div
               key={u.id}
@@ -218,17 +219,10 @@ export function Team() {
                 borderRadius: 10,
               }}
             >
-              <div style={{
-                width: 36, height: 36, borderRadius: '50%',
-                background: `${cfg.color}20`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0,
-              }}>
-                <RoleIcon size={18} color={cfg.color} />
-              </div>
+              <Avatar name={u.profile?.displayName || u.username} avatar={avatarUrl(u.id, u.profile?.avatarExt)} size={36} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{u.username}</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{u.profile?.displayName || u.username}</span>
                   {isMe && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>(you)</span>}
                   <span style={{
                     fontSize: '0.6875rem',
