@@ -164,6 +164,17 @@ export function Projects() {
   const [duplicating, setDuplicating] = useState(false);
   const [dupError, setDupError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!createOpen && !dupSrc) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || creating || duplicating) return;
+      if (createOpen) setCreateOpen(false);
+      if (dupSrc) setDupSrc(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [createOpen, dupSrc, creating, duplicating]);
+
   // Trash count for the tab label — fetched on mount and refreshed after changes.
   useEffect(() => {
     listArchive().then((r) => setTrashCount(r.archives.length)).catch(() => {});

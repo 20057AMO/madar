@@ -69,6 +69,15 @@ export function Agents() {
   const [renameValue, setRenameValue] = useState('');
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
+  useEffect(() => {
+    if (!presetsOpen || creatingPreset) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPresetsOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [presetsOpen, creatingPreset]);
+
   const [agentModels, setAgentModels] = useState<string[]>([]);
   const activeAgent = agents.find((a) => a.id === activeAgentId);
   const wsPath = activeAgent && activeSession
