@@ -102,6 +102,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const slugRef = useRef<string>(slug);
   const saveTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
+  const revisionRef = useRef(0);
   const dragRef = useRef<null | {
     kind: 'node' | 'pan' | 'resize' | 'marquee';
     ids?: string[];
@@ -123,7 +124,33 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   // ── load ─────────────────────────────────────────────────────
   useEffect(() => {
+    if (saveTimer.current !== null) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
     slugRef.current = slug;
+    docRef.current = null;
+    setDoc(null);
+    setLoaded(false);
+    setLoadError(null);
+    setSaveError(null);
+    setSaveState('saved');
+    setSavedAt('');
+    setSelNodes([]);
+    setSelEdge(null);
+    setEditing(null);
+    setConnectFrom(null);
+    setMenuOpen(false);
+    dragRef.current = null;
+    addSeqRef.current = 0;
+    histRef.current = [];
+    redoRef.current = [];
+    setCanUndo(false);
+    setCanRedo(false);
+    dirtyRef.current = false;
+    revisionRef.current += 1;
+    viewRef.current = { x: 40, y: 40, z: 1 };
+    setView(viewRef.current);
     let cancelled = false;
     (async () => {
       try {
@@ -148,20 +175,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     saveTimer.current = null;
     const d = docRef.current;
     if (!d || !dirtyRef.current) return;
+    const saveRevision = revisionRef.current;
+    const saveSlug = slugRef.current;
+    const payload = JSON.parse(JSON.stringify(d)) as ProjectCanvas;
     dirtyRef.current = false;
     setSaveState('saving');
-    saveProjectCanvas(slugRef.current, d)
-      .then(() => {
-        if (docRef.current === d) {
+    saveProjectCanvas(saveSlug, payload)
+      .then((saved) => {
+        if (slugRef.current === saveSlug && revisionRef.current === saveRevision && docRef.current === d) {
+          docRef.current = saved;
+          setDoc(saved);
           setSaveState('saved');
           setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
           setSaveError(null);
         }
       })
       .catch((err: any) => {
-        dirtyRef.current = true;
-        setSaveState('dirty');
-        setSaveError(err.message || 'Save failed');
+        if (slugRef.current === saveSlug && revisionRef.current === saveRevision) {
+          dirtyRef.current = true;
+          setSaveState('dirty');
+          setSaveError(err.message || 'Save failed');
+        }
       });
   };
 
@@ -212,6 +246,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const next = fn(d);
     docRef.current = next;
     setDoc(next);
+    revisionRef.current += 1;
     scheduleSave();
   };
 
@@ -301,9 +336,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     copyRef.current = { nodes, edges };
     // Write a portable JSON to the system clipboard so the user can paste
     // across tabs or after a page refresh.
-    try {
-      navigator.clipboard.writeText(JSON.stringify({ nodes, edges }));
-    } catch { /* best-effort — in-memory ref still works */ }
+    void navigator.clipboard.writeText(JSON.stringify({ nodes, edges })).catch(() => {
+      /* in-memory copy remains available */
+    });
     pasteCountRef.current = 0;
     setNotice(`Copied ${nodes.length} node(s)`);
   };
@@ -669,7 +704,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const onWheel = (e: WheelEvent) => {
       if ((e.target as HTMLElement).closest?.('textarea')) return;
       e.preventDefault();
-      zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, { sx: e.clientX, sy: e.clientY });
+      const r = containerRef.current?.getBoundingClientRect();
+      zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, {
+        sx: e.clientX - (r?.left ?? 0),
+        sy: e.clientY - (r?.top ?? 0),
+      });
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -959,6 +998,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       if (cur) {
         docRef.current = { ...cur, nodes: cur.nodes.map((n) => n) };
         setDoc(docRef.current);
+        revisionRef.current += 1;
         scheduleSave();
       }
       return;
@@ -985,6 +1025,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     };
     docRef.current = next;
     setDoc(next);
+    revisionRef.current += 1;
     scheduleSave();
   };
 
@@ -1395,6 +1436,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
+        onPointerCancel={endDrag}
         onContextMenu={(e: any) => {
           e.preventDefault();
           e.stopPropagation();

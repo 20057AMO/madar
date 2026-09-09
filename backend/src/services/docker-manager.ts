@@ -1191,7 +1191,7 @@ export async function duplicateProject(
 
   // Carry over the visual planning canvas (only when the board is non-empty).
   const srcCanvas = loadCanvas(srcSlug);
-  if (srcCanvas.nodes.length > 0 || srcCanvas.edges.length > 0) {
+  if (srcCanvas.nodes.length > 0 || srcCanvas.edges.length > 0 || (srcCanvas.sections?.length ?? 0) > 0) {
     try {
       saveCanvas(created.slug, srcCanvas);
     } catch {

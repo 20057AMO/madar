@@ -226,7 +226,7 @@ export function exportProjectSnapshot(slug: string): ProjectSnapshot {
     // backup too. Only materialized when the board has anything on it.
     try {
       const canvasDoc = loadCanvas(slug);
-      if (canvasDoc.nodes.length || canvasDoc.edges.length) {
+      if (canvasDoc.nodes.length || canvasDoc.edges.length || (canvasDoc.sections?.length ?? 0)) {
         const canvasBytes = Buffer.from(JSON.stringify(canvasDoc, null, 2), 'utf8');
         yield* entryHeaders('canvas.json', canvasBytes.length, now, '0');
         yield canvasBytes;

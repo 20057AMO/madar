@@ -69,6 +69,15 @@ export const MAX_SECTIONS = 12;
 
 const COLORS: CanvasColor[] = ['yellow', 'blue', 'red', 'green'];
 
+class CanvasConflictError extends Error {
+  statusCode = 409;
+
+  constructor() {
+    super('Canvas changed elsewhere; reload before saving');
+    this.name = 'CanvasConflictError';
+  }
+}
+
 function canvasFile(slug: unknown): string {
   return path.join(META_DIR, cleanSlug(slug), 'canvas.json');
 }
@@ -142,27 +151,41 @@ export function loadCanvas(slug: unknown): ProjectCanvas {
     const rawNodes = Array.isArray(raw?.nodes) ? (raw.nodes as unknown[]) : [];
     const rawEdges = Array.isArray(raw?.edges) ? (raw.edges as unknown[]) : [];
     const nodes: CanvasNode[] = [];
+    const nodeIds = new Set<string>();
     for (const n of rawNodes) {
       if (nodes.length >= MAX_NODES) break;
       const node = normalizeNode(n);
-      if (node) nodes.push(node);
+      if (node) {
+        while (nodeIds.has(node.id)) node.id = freshId('n');
+        nodeIds.add(node.id);
+        nodes.push(node);
+      }
     }
-    const ids = new Set(nodes.map((n) => n.id));
+    const ids = nodeIds;
     const rawSections = Array.isArray(raw?.sections) ? (raw.sections as unknown[]) : [];
     const sections: CanvasSection[] = [];
+    const sectionIds = new Set<string>();
     for (const s of rawSections) {
       if (sections.length >= MAX_SECTIONS) break;
       const section = normalizeSection(s);
-      if (section) sections.push(section);
+      if (section) {
+        while (sectionIds.has(section.id)) section.id = freshId('s');
+        sectionIds.add(section.id);
+        sections.push(section);
+      }
     }
-    const sectionIds = new Set(sections.map((s) => s.id));
     // Drop section refs whose section is missing (lean + never dangling).
     for (const n of nodes) if (n.section && !sectionIds.has(n.section)) delete n.section;
     const edges: CanvasEdge[] = [];
+    const edgeIds = new Set<string>();
     for (const e of rawEdges) {
       if (edges.length >= MAX_EDGES) break;
       const edge = normalizeEdge(e, ids);
-      if (edge) edges.push(edge);
+      if (edge) {
+        while (edgeIds.has(edge.id)) edge.id = freshId('e');
+        edgeIds.add(edge.id);
+        edges.push(edge);
+      }
     }
     return {
       version: 1,
@@ -190,26 +213,44 @@ export function saveCanvas(slug: unknown, input: unknown): ProjectCanvas {
     const rawNodes = r.nodes as unknown[];
     const rawEdges = r.edges as unknown[];
     const rawSections = Array.isArray(r.sections) ? (r.sections as unknown[]) : [];
+    const current = loadCanvas(clean);
+    if (typeof r.updatedAt === 'string' && r.updatedAt !== current.updatedAt) {
+      throw new CanvasConflictError();
+    }
     if (rawNodes.length > MAX_NODES) throw new Error(`Too many canvas nodes (max ${MAX_NODES})`);
     if (rawEdges.length > MAX_EDGES) throw new Error(`Too many canvas edges (max ${MAX_EDGES})`);
     if (rawSections.length > MAX_SECTIONS) throw new Error(`Too many canvas sections (max ${MAX_SECTIONS})`);
     const nodes: CanvasNode[] = [];
+    const nodeIds = new Set<string>();
     for (const raw of rawNodes) {
       const n = normalizeNode(raw);
-      if (n) nodes.push(n);
+      if (n) {
+        while (nodeIds.has(n.id)) n.id = freshId('n');
+        nodeIds.add(n.id);
+        nodes.push(n);
+      }
     }
-    const ids = new Set(nodes.map((n) => n.id));
+    const ids = nodeIds;
     const sections: CanvasSection[] = [];
+    const sectionIds = new Set<string>();
     for (const raw of rawSections) {
       const s = normalizeSection(raw);
-      if (s) sections.push(s);
+      if (s) {
+        while (sectionIds.has(s.id)) s.id = freshId('s');
+        sectionIds.add(s.id);
+        sections.push(s);
+      }
     }
-    const sectionIds = new Set(sections.map((s) => s.id));
     for (const n of nodes) if (n.section && !sectionIds.has(n.section)) delete n.section;
     const edges: CanvasEdge[] = [];
+    const edgeIds = new Set<string>();
     for (const raw of rawEdges) {
       const e = normalizeEdge(raw, ids);
-      if (e) edges.push(e);
+      if (e) {
+        while (edgeIds.has(e.id)) e.id = freshId('e');
+        edgeIds.add(e.id);
+        edges.push(e);
+      }
     }
     const doc: ProjectCanvas = {
       version: 1,
@@ -280,12 +321,19 @@ export function canvasNodeCount(slug: unknown): number {
 export function formatCanvasForContext(slug: unknown, maxChars: number = 1500): string {
   const { nodes, sections } = loadCanvas(slug);
   const withText = nodes.filter((n) => n.text.trim());
-  if (!withText.length) return '';
+  if (!withText.length && !sections?.length) return '';
   const secName = (id?: string) => sections?.find((s) => s.id === id)?.name;
   const lines = withText.map((n) => {
     const sec = n.section && secName(n.section) ? ` [${secName(n.section)}]` : '';
     return `- [${n.type === 'card' ? (n.done ? 'done' : 'task') : 'note'}]${sec} ${n.text.trim()}`;
   });
+  if (sections?.length) {
+    for (const section of sections) {
+      if (!lines.some((line) => line.includes(`[${section.name}]`))) {
+        lines.push(`- [section] ${section.name}`);
+      }
+    }
+  }
   const doneCount = nodes.filter((n) => n.type === 'card' && n.done).length;
   let text = `[Planning canvas]\n${lines.join('\n')}`;
   if (doneCount > 0) text += `\n(${doneCount} completed card(s))`;

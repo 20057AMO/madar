@@ -374,7 +374,7 @@ app.post('/api/auth/2fa/setup', authLimiter, (req: any, res) => {
     const user = getUserInfo(userId);
     res.json({ secret, uri: otpauthUri(secret, user?.username || 'owner') });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    res.status(err.statusCode || 400).json({ error: err.message });
   }
 });
 
@@ -1245,7 +1245,7 @@ app.put('/api/projects/:slug/tags', requireProjectAccess('editor'), (req, res) =
     recordAudit('project-tags', true, req.ip);
     res.json({ tags: sanitized });
   } catch (err: any) {
-    res.status(err.statusCode || 400).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -1263,7 +1263,7 @@ app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req, res)
     recordAudit('canvas-save', true, req.ip);
     res.json(doc);
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    res.status(err.statusCode || 400).json({ error: err.message });
   }
 });
 
@@ -2174,9 +2174,6 @@ snapAuto.startSnapshotAutomation();
 // Container-crash detection (boot + every WSD_ALERT_SWEEP_MS) — WebSocket-
 // independent, so crashes are caught even with zero browsers connected.
 startAlertsAutomation();
-
-
-
 
 
 
