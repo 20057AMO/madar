@@ -2692,6 +2692,27 @@ input[type="file"].modern-file::file-selector-button {
   font-variant-numeric: tabular-nums;
 }
 .cn-text-control input:focus { outline: none; border-color: var(--accent); }
+.cn-align-control { gap: 3px; }
+.cn-align-control > span { margin-right: 2px; }
+.cn-align-btn {
+  width: 25px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.cn-align-btn:hover,
+.cn-align-btn.active {
+  color: var(--text);
+  background: var(--bg-3);
+  border-color: var(--border-2);
+}
 .cn-dot {
   width: 14px;
   height: 14px;

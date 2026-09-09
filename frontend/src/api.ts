@@ -540,6 +540,7 @@ export const saveProjectNotes = (slug: string, items: NoteItem[]) =>
 // ── Project canvas (visual planning) ────────────────────────────────────
 export type CanvasNodeType = 'note' | 'card';
 export type CanvasColor = 'yellow' | 'blue' | 'red' | 'green';
+export type CanvasTextAlign = 'left' | 'center' | 'right';
 export interface CanvasNode {
   id: string;
   type: CanvasNodeType;
@@ -551,6 +552,7 @@ export interface CanvasNode {
   textX?: number;
   textY?: number;
   textSize?: number;
+  textAlign?: CanvasTextAlign;
   color: CanvasColor;
   done?: boolean;
   section?: string;

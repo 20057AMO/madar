@@ -26,13 +26,16 @@ import {
   ClipboardPaste,
   Maximize2,
   Minimize2,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
   saveProjectCanvas,
   getProjectNotes,
 } from '../api';
-import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection } from '../api';
+import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection, CanvasTextAlign } from '../api';
 import { ConfirmModal } from './ConfirmModal';
 
 /**
@@ -434,6 +437,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       textX: 10,
       textY: 10,
       textSize: 14,
+      textAlign: 'left',
       color: type === 'card' ? 'blue' : 'yellow',
       done: false,
     };
@@ -1319,6 +1323,25 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               onChange={(e: any) => patchNode(selected.id, { textSize: clamp(Number(e.currentTarget.value) || 14, 10, 48) })}
             />
           </label>
+          <span class="cn-text-control cn-align-control">
+            <span>Align</span>
+            {(['left', 'center', 'right'] as CanvasTextAlign[]).map((align) => {
+              const Icon = align === 'left' ? AlignLeft : align === 'center' ? AlignCenter : AlignRight;
+              return (
+                <button
+                  key={align}
+                  type="button"
+                  class={`cn-align-btn ${(selected.textAlign ?? 'left') === align ? 'active' : ''}`}
+                  title={`Align ${align}`}
+                  aria-label={`Align text ${align}`}
+                  aria-pressed={(selected.textAlign ?? 'left') === align}
+                  onClick={() => patchNode(selected.id, { textAlign: align })}
+                >
+                  <Icon width={13} height={13} />
+                </button>
+              );
+            })}
+          </span>
           <label class="cn-text-control">
             <span>X</span>
             <input
@@ -1579,14 +1602,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                     onInput={(e: any) => patchNode(n.id, { text: e.currentTarget.value }, false)}
                     onBlur={commitEdit}
                     onKeyDown={onEditorKey}
-                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; width: calc(100% - ${(n.textX ?? 10) + 10}px); height: calc(100% - ${(n.textY ?? 10) + 10}px); font-size: ${n.textSize ?? 14}px;`}
+                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; width: calc(100% - ${(n.textX ?? 10) + 10}px); height: calc(100% - ${(n.textY ?? 10) + 10}px); font-size: ${n.textSize ?? 14}px; text-align: ${n.textAlign ?? 'left'};`}
                     onClick={(e: any) => e.stopPropagation()}
                     onPointerDown={(e: any) => e.stopPropagation()}
                   />
                 ) : (
                   <div
                     class="cn-text"
-                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; right: 10px; bottom: 10px; font-size: ${n.textSize ?? 14}px;`}
+                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; right: 10px; bottom: 10px; font-size: ${n.textSize ?? 14}px; text-align: ${n.textAlign ?? 'left'};`}
                   >
                     {n.text || <span class="cn-placeholder">Double-click to edit</span>}
                   </div>

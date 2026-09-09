@@ -25,6 +25,7 @@ const CANVAS_MIRROR_FILE = 'WSD_CANVAS.md';
 
 export type CanvasNodeType = 'note' | 'card';
 export type CanvasColor = 'yellow' | 'blue' | 'red' | 'green';
+export type CanvasTextAlign = 'left' | 'center' | 'right';
 
 export interface CanvasNode {
   id: string;
@@ -37,6 +38,7 @@ export interface CanvasNode {
   textX?: number;
   textY?: number;
   textSize?: number;
+  textAlign?: CanvasTextAlign;
   color: CanvasColor;
   done?: boolean;
   /** Optional swimlane/section id this node belongs to. */
@@ -121,6 +123,7 @@ function normalizeNode(raw: unknown): CanvasNode | null {
   const section = typeof r.section === 'string' && /^[a-zA-Z0-9_-]{1,48}$/.test(r.section) ? r.section : undefined;
   const w = clampNum(r.w, 60, 900, 220);
   const h = clampNum(r.h, 40, 900, type === 'card' ? 120 : 100);
+  const textAlign: CanvasTextAlign = r.textAlign === 'center' || r.textAlign === 'right' ? r.textAlign : 'left';
   return {
     id: nodeId(r.id, freshId('n')),
     type,
@@ -132,6 +135,7 @@ function normalizeNode(raw: unknown): CanvasNode | null {
     textX: clampNum(r.textX, 0, Math.max(0, w - 20), 10),
     textY: clampNum(r.textY, 0, Math.max(0, h - 20), 10),
     textSize: clampNum(r.textSize, 10, 48, 14),
+    textAlign,
     color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
     done: r.done === true,
     section,

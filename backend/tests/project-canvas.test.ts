@@ -135,6 +135,7 @@ test('canvas normalization: junk rows dropped, bad edges removed, numeric clamps
   assert.strictEqual(n2.textX, 10, 'text x defaults inside the node');
   assert.strictEqual(n2.textY, 10, 'text y defaults inside the node');
   assert.strictEqual(n2.textSize, 14, 'text size defaults safely');
+  assert.strictEqual(n2.textAlign, 'left', 'text alignment defaults safely');
   assert.strictEqual(n2.color, 'green');
   assert.strictEqual(n2.type, 'card');
   const n1 = json.nodes.find((n: any) => n.id === 'note-1');
