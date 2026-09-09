@@ -436,7 +436,7 @@ select:focus-visible {
 .meta-chip.serve .icon { vertical-align: -2px; margin-right: 2px; }
 .meta-chip.activity { color: var(--accent); border-color: rgba(139,92,246,0.3); }
 .meta-chip.activity .icon { vertical-align: -2px; margin-right: 2px; }
-.meta-chip.people { color: #2dd4bf; border-color: rgba(45,212,191,0.25); white-space: nowrap; }
+.meta-chip.people { color: #2dd4bf; border-color: rgba(45,212,191,0.25); white-space: nowrap; display:inline-flex; align-items: center; gap: 3px; }
 .meta-chip.people .icon { vertical-align: -2px; margin-right: 2px; }
 .meta-chip.people .people-owner { max-width: 11em; overflow: hidden; text-overflow: ellipsis; }
 .meta-chip.people .people-extra { opacity: 0.75; margin-left: 3px; }

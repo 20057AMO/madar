@@ -219,9 +219,9 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       <div class="sidebar-footer">
         <ProvidersUnlockBadge />
         <div class="sys-row">
-          <span class="sys-dot ok" />
           {user?.username || 'authenticated'}
           <span class="beta-chip" title="Beta software — features and data format may change">BETA</span>
+          <span class="sys-dot ok" />
         </div>
       </div>
     </aside>
