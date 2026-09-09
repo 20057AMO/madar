@@ -1349,7 +1349,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       )}
 
       {/* Selection toolbar (active while a node is selected) */}
-      {selected && !readOnly && (
+      {selected && !readOnly && !ctxMenu && (
         <div class="cn-selbar">
           <span class="cn-shape-control" role="group" aria-label="Change selected shape">
             <span class="cn-shape-label">Shape</span>
@@ -1478,7 +1478,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           </button>
         </div>
       )}
-      {selEdge && !readOnly && (
+      {selEdge && !readOnly && !ctxMenu && (
         <div class="cn-selbar cn-selbar-edge">
           <span class="cn-sel-label">Selected arrow</span>
           <span class="cn-sel-sep" />
