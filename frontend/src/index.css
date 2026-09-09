@@ -2669,6 +2669,8 @@ input[type="file"].modern-file::file-selector-button {
   padding: 3px 6px;
   border-radius: var(--radius-sm);
   max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .cn-selbar-edge { gap: 6px; }
 .cn-sel-label { font-size: 0.72rem; color: var(--text-3); margin-right: 2px; }
@@ -2929,6 +2931,7 @@ input[type="file"].modern-file::file-selector-button {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  flex-wrap: wrap;
 }
 .cn-shape-label {
   color: var(--text-3);
@@ -3060,7 +3063,31 @@ input[type="file"].modern-file::file-selector-button {
   font-weight: 500;
   letter-spacing: 0.08em;
 }
-@media (max-width: 700px) {
+@media (max-width: 900px) {
+  .cn-selbar {
+    width: 100%;
+    padding: 6px;
+    gap: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+  }
+  .cn-selbar .cn-sel-sep { display: none; }
+  .cn-shape-control {
+    flex: 1 1 100%;
+    order: 2;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+  }
+  .cn-shape-label { margin-right: 4px; }
+  .cn-text-control { min-height: 40px; }
+  .cn-position-control {
+    flex: 1 1 100%;
+    order: 3;
+    justify-content: space-between;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+  }
+  .cn-position-pad { margin-right: auto; }
   .cn-watermark {
     right: 14px;
     bottom: 14px;
