@@ -97,6 +97,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [savedAt, setSavedAt] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
 
   const [selNodes, setSelNodes] = useState<string[]>([]);
   const [selEdge, setSelEdge] = useState<string | null>(null);
@@ -563,6 +564,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   useEffect(() => {
     if (!ctxMenu) return;
+    requestAnimationFrame(() => {
+      ctxMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    });
     const onDown = (e: any) => {
       if ((e.target as Element).closest?.('.cn-ctx')) return;
       closeCtxMenu();
@@ -1523,6 +1527,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       {/* Right-click context menu */}
       {ctxMenu && (
         <div
+          ref={ctxMenuRef}
           class="cn-ctx"
           role="menu"
           aria-label="Canvas menu"
@@ -1534,6 +1539,17 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             e.preventDefault();
             e.stopPropagation();
             closeCtxMenu();
+          }}
+          onKeyDown={(e: any) => {
+            const items = Array.from(ctxMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+            const index = items.indexOf(document.activeElement as HTMLButtonElement);
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              const next = e.key === 'ArrowDown'
+                ? (index + 1) % items.length
+                : (index - 1 + items.length) % items.length;
+              items[next]?.focus();
+            }
           }}
         >
           {ctxMenu.nodeId ? (
@@ -1614,6 +1630,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 <Maximize width={14} height={14} /> Fit all nodes
               </button>
             </>
+          )}
+          {readOnly && (ctxMenu.nodeId || ctxMenu.edgeId) && (
+            <span class="cn-ctx-empty">View only</span>
           )}
         </div>
       )}
