@@ -119,16 +119,18 @@ function normalizeNode(raw: unknown): CanvasNode | null {
   const r = raw as Record<string, unknown>;
   const type: CanvasNodeType = r.type === 'card' ? 'card' : 'note';
   const section = typeof r.section === 'string' && /^[a-zA-Z0-9_-]{1,48}$/.test(r.section) ? r.section : undefined;
+  const w = clampNum(r.w, 60, 900, 220);
+  const h = clampNum(r.h, 40, 900, type === 'card' ? 120 : 100);
   return {
     id: nodeId(r.id, freshId('n')),
     type,
     text: typeof r.text === 'string' ? r.text.slice(0, MAX_TEXT) : '',
     x: clampNum(r.x, -100_000, 100_000, 0),
     y: clampNum(r.y, -100_000, 100_000, 0),
-    w: clampNum(r.w, 60, 900, 220),
-    h: clampNum(r.h, 40, 900, type === 'card' ? 120 : 100),
-    textX: clampNum(r.textX, 0, 899, 10),
-    textY: clampNum(r.textY, 0, 899, 10),
+    w,
+    h,
+    textX: clampNum(r.textX, 0, Math.max(0, w - 20), 10),
+    textY: clampNum(r.textY, 0, Math.max(0, h - 20), 10),
     textSize: clampNum(r.textSize, 10, 48, 14),
     color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
     done: r.done === true,

@@ -132,6 +132,9 @@ test('canvas normalization: junk rows dropped, bad edges removed, numeric clamps
   const n2 = json.nodes.find((n: any) => n.id === 'note-2');
   assert.strictEqual(n2.w, 60, 'tiny width floored');
   assert.strictEqual(n2.h, 40, 'small height floored');
+  assert.strictEqual(n2.textX, 10, 'text x defaults inside the node');
+  assert.strictEqual(n2.textY, 10, 'text y defaults inside the node');
+  assert.strictEqual(n2.textSize, 14, 'text size defaults safely');
   assert.strictEqual(n2.color, 'green');
   assert.strictEqual(n2.type, 'card');
   const n1 = json.nodes.find((n: any) => n.id === 'note-1');
@@ -141,6 +144,8 @@ test('canvas normalization: junk rows dropped, bad edges removed, numeric clamps
   assert.strictEqual(junk.x, 0, 'non-numeric x defaults to 0');
   assert.strictEqual(junk.w, 60, 'tiny width floored');
   assert.strictEqual(junk.h, 900, 'huge height capped');
+  assert.strictEqual(junk.textX, 10, 'text x remains inside the node');
+  assert.strictEqual(junk.textY, 10, 'text y remains inside the node');
   assert.strictEqual(junk.color, 'yellow', 'unknown color normalizes');
   assert.strictEqual(junk.type, 'note', 'unknown type normalizes');
 });

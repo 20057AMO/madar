@@ -655,6 +655,16 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     setView(v);
   };
 
+  const flushPendingPan = () => {
+    if (panFrameRef.current !== null) {
+      cancelAnimationFrame(panFrameRef.current);
+      panFrameRef.current = null;
+    }
+    const pending = pendingPanRef.current;
+    pendingPanRef.current = null;
+    if (pending) setViewState({ ...viewRef.current, x: pending.x, y: pending.y });
+  };
+
   const resetZoom = () => {
     const v = viewRef.current;
     setViewState({ ...v, z: 1 });
@@ -923,6 +933,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         panFrameRef.current = requestAnimationFrame(() => {
           panFrameRef.current = null;
           const pending = pendingPanRef.current;
+          pendingPanRef.current = null;
           if (!pending) return;
           setViewState({ ...viewRef.current, x: pending.x, y: pending.y });
         });
@@ -996,6 +1007,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       /* already released */
     }
     if (!dr) return;
+    if (dr.kind === 'pan') flushPendingPan();
     if (dr.kind === 'marquee') {
       const marq = document.querySelector('.cn-marquee');
       if (marq) marq.setAttribute('display', 'none');
