@@ -273,6 +273,10 @@ const unlockLimiter = rateLimit('unlock', RATE_WINDOW, 15);
 // suite's user creation never drains the real login-attack budget.
 const userAdminLimiter = rateLimit('user-admin', RATE_WINDOW, RATE_USER_ADMIN_MAX);
 
+// Avatar uploads are rare and memory-bound (2 MB buffers) — a dedicated
+// low budget keeps one user's uploads from draining the shared write budget.
+const avatarLimiter = rateLimit('avatar', RATE_WINDOW, 10);
+
 // ── Uploads (files into an existing project workspace) ────────
 const UPLOADS_TMP = '/tmp/wsd-uploads';
 fs.mkdirSync(UPLOADS_TMP, { recursive: true });
@@ -656,7 +660,7 @@ app.put('/api/users/:userId/profile', requireAdmin, userWriteLimiter, (req: any,
   }
 });
 
-app.post('/api/users/me/avatar', userWriteLimiter, avatarUpload.single('avatar'), (req: any, res) => {
+app.post('/api/users/me/avatar', avatarLimiter, userWriteLimiter, avatarUpload.single('avatar'), (req: any, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No image file provided.' });
     const ext = saveAvatar(req.user?.id, req.file.buffer);

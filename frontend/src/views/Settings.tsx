@@ -149,10 +149,12 @@ export function Settings() {
   const { user } = useAuth();
 
   // ── Route guard: admin-only ──
-  if (user && user.role !== 'admin') {
-    window.location.hash = '/profile';
-    return null;
-  }
+  // Redirect inside an effect (never during render); the null return sits after
+  // every hook so hook order stays stable across the user null→role transition.
+  const isAdmin = !user || user.role === 'admin';
+  useEffect(() => {
+    if (user && user.role !== 'admin') window.location.hash = '/profile';
+  }, [user]);
 
   // ── Providers security lock ──
   const [lockEnabled, setLockEnabled] = useState<boolean | null>(null);
@@ -427,6 +429,8 @@ export function Settings() {
     if (pendingAction === 'disable-lock') return 'This removes the second password — anyone using this session will be able to open Providers.';
     return 'Enter your account password to authorize this action.';
   };
+
+  if (!isAdmin) return null;
 
   return (
     <div class="view">

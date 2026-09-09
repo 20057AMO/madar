@@ -23,10 +23,12 @@ import { getMyProfile, updateMyProfile, uploadAvatar, deleteMyAvatar, avatarUrl,
 import { Avatar } from '../components/Avatar';
 import { PwMeter } from '../components/PwMeter';
 import { ReAuthModal } from '../components/ReAuthModal';
-import { fmtDate, type Msg } from './settings-shared';
-import { AuditLog } from './settings-shared';
+import { ConfirmModal } from '../components/ConfirmModal';
+import { fmtDate, type Msg, AuditLog } from './settings-shared';
 
 type SensitiveAction = 'revoke-all' | '2fa-disable';
+type IdleChoice = 'off' | '30' | '60' | '120';
+type RelockChoice = 'off' | '5' | '15' | '30';
 
 export function Profile() {
   const { user, logout, refreshUser } = useAuth();
@@ -37,6 +39,7 @@ export function Profile() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState<Msg>(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarRemoveOpen, setAvatarRemoveOpen] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -119,7 +122,6 @@ export function Profile() {
   };
 
   // ── Inactivity auto-logout ──
-  type IdleChoice = 'off' | '30' | '60' | '120';
   const [idleChoice, setIdleChoice] = useState<IdleChoice>(() => {
     try {
       return (localStorage.getItem('wsd.idleTimeout') as IdleChoice) || 'off';
@@ -130,7 +132,6 @@ export function Profile() {
   const [idleSaved, setIdleSaved] = useState(false);
 
   // ── Providers auto-relock on inactivity ──
-  type RelockChoice = 'off' | '5' | '15' | '30';
   const [relockChoice, setRelockChoice] = useState<RelockChoice>(() => {
     try {
       return (localStorage.getItem('wsd.providersAutoRelock') as RelockChoice) || 'off';
@@ -275,6 +276,7 @@ export function Profile() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');
       if (data.token) localStorage.setItem('wsd.token', data.token);
+      await refreshUser();
       setPwMsg({ type: 'ok', text: 'Password changed. Other devices were signed out.' });
       setCurrentPw('');
       setNewPw('');
@@ -310,6 +312,14 @@ export function Profile() {
     const file = e.target.files?.[0] as File | undefined;
     e.target.value = '';
     if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setProfileMsg({ type: 'err', text: 'Image too large — max 2 MB.' });
+      return;
+    }
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setProfileMsg({ type: 'err', text: 'Unsupported file type — use PNG, JPEG or WebP.' });
+      return;
+    }
     setAvatarBusy(true);
     setProfileMsg(null);
     try {
@@ -376,7 +386,7 @@ export function Profile() {
                     {profile.avatarExt ? 'Change photo' : 'Upload photo'}
                   </button>
                   {profile.avatarExt && (
-                    <button class="btn-danger sm" type="button" onClick={removeAvatar} disabled={avatarBusy}>
+                    <button class="btn-danger sm" type="button" onClick={() => setAvatarRemoveOpen(true)} disabled={avatarBusy}>
                       {avatarBusy ? <Loader2 width={13} height={13} class="icon spin" /> : 'Remove'}
                     </button>
                   )}
@@ -652,6 +662,18 @@ export function Profile() {
           <AuditLog entries={audit} total={auditTotal} loadingMore={auditLoadingMore} onLoadMore={loadMoreAudit} />
         )}
       </div>
+
+      {/* Remove avatar confirmation */}
+      <ConfirmModal
+        open={avatarRemoveOpen}
+        title="Remove your profile photo?"
+        message="Your photo is removed immediately. You can upload a new one any time."
+        confirmLabel="Remove photo"
+        danger
+        loading={avatarBusy}
+        onConfirm={() => { setAvatarRemoveOpen(false); removeAvatar(); }}
+        onCancel={() => setAvatarRemoveOpen(false)}
+      />
 
       {/* Combined identity confirmation */}
       <ReAuthModal
