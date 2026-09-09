@@ -867,27 +867,37 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       };
       el.setPointerCapture(e.pointerId);
     } else if (e.button === 0) {
-      // Left-drag on empty canvas → marquee selection (rubber band).
+      // Drag the empty canvas to pan. Hold Shift for marquee selection.
       const { x, y, z } = viewRef.current;
       const rr = containerRef.current?.getBoundingClientRect();
       const ox = rr ? rr.left : 0;
       const oy = rr ? rr.top : 0;
       const sx = (e.clientX - ox - x) / z;
       const sy = (e.clientY - oy - y) / z;
-      dragRef.current = {
-        kind: 'marquee',
-        cX: e.clientX,
-        cY: e.clientY,
-        startX: sx,
-        startY: sy,
-        endX: sx,
-        endY: sy,
-        moved: false,
-        pre: JSON.stringify(docRef.current),
-      };
+      dragRef.current = e.shiftKey
+        ? {
+            kind: 'marquee',
+            cX: e.clientX,
+            cY: e.clientY,
+            startX: sx,
+            startY: sy,
+            endX: sx,
+            endY: sy,
+            moved: false,
+            pre: JSON.stringify(docRef.current),
+          }
+        : {
+            kind: 'pan',
+            cX: e.clientX,
+            cY: e.clientY,
+            startX: viewRef.current.x,
+            startY: viewRef.current.y,
+          };
       el.setPointerCapture(e.pointerId);
-      setSelNodes([]);
-      setSelEdge(null);
+      if (e.shiftKey) {
+        setSelNodes([]);
+        setSelEdge(null);
+      }
       setMenuOpen(false);
     }
   };
@@ -1140,7 +1150,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     <div class={`canvas-wrap ${isFullscreen ? 'cn-fullscreen' : ''}`} ref={wrapRef}>
       <h2 class="panel-title" style="display:flex;align-items:center;gap:6px">
         Planning canvas
-        {!readOnly && <span class="dim" style="font-weight:400;font-size:0.7rem">— drag nodes, double-click to edit, Ctrl+Z to undo</span>}
+        {!readOnly && <span class="dim" style="font-weight:400;font-size:0.7rem">— drag the board to pan, Shift+drag to select, double-click to edit, Ctrl+Z to undo</span>}
       </h2>
       {/* Top toolbar: view controls + mode + save status */}
       <div class="cn-toolbar">
@@ -1555,7 +1565,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <div class="cn-empty-icon">✸</div>
             <div class="cn-empty-title">An empty board for your big ideas</div>
             <div class="cn-empty-sub">
-              Drop sticky notes, task cards, or link them with arrows. Press Enter to add your first item — or use <b>N</b> / <b>C</b> to create a note or card.
+              Drag the board to pan, or hold <b>Shift</b> while dragging to select several items. Drop sticky notes, task cards, or link them with arrows. Press Enter to add your first item — or use <b>N</b> / <b>C</b> to create a note or card.
             </div>
           </div>
         )}
