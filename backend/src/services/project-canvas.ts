@@ -39,6 +39,8 @@ export interface CanvasNode {
   textY?: number;
   textSize?: number;
   textAlign?: CanvasTextAlign;
+  textBold?: boolean;
+  textItalic?: boolean;
   color: CanvasColor;
   done?: boolean;
   /** Optional swimlane/section id this node belongs to. */
@@ -136,6 +138,8 @@ function normalizeNode(raw: unknown): CanvasNode | null {
     textY: clampNum(r.textY, 0, Math.max(0, h - 20), 10),
     textSize: clampNum(r.textSize, 10, 48, 14),
     textAlign,
+    textBold: r.textBold === true,
+    textItalic: r.textItalic === true,
     color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
     done: r.done === true,
     section,

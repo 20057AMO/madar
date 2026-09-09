@@ -553,6 +553,8 @@ export interface CanvasNode {
   textY?: number;
   textSize?: number;
   textAlign?: CanvasTextAlign;
+  textBold?: boolean;
+  textItalic?: boolean;
   color: CanvasColor;
   done?: boolean;
   section?: string;

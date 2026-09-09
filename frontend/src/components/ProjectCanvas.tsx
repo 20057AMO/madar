@@ -1342,6 +1342,28 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               );
             })}
           </span>
+          <span class="cn-text-control cn-style-control">
+            <button
+              type="button"
+              class={`cn-style-btn ${selected.textBold ? 'active' : ''}`}
+              title="Bold text"
+              aria-label="Bold text"
+              aria-pressed={selected.textBold === true}
+              onClick={() => patchNode(selected.id, { textBold: !selected.textBold })}
+            >
+              B
+            </button>
+            <button
+              type="button"
+              class={`cn-style-btn italic ${selected.textItalic ? 'active' : ''}`}
+              title="Italic text"
+              aria-label="Italic text"
+              aria-pressed={selected.textItalic === true}
+              onClick={() => patchNode(selected.id, { textItalic: !selected.textItalic })}
+            >
+              I
+            </button>
+          </span>
           <label class="cn-text-control">
             <span>X</span>
             <input
@@ -1602,14 +1624,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                     onInput={(e: any) => patchNode(n.id, { text: e.currentTarget.value }, false)}
                     onBlur={commitEdit}
                     onKeyDown={onEditorKey}
-                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; width: calc(100% - ${(n.textX ?? 10) + 10}px); height: calc(100% - ${(n.textY ?? 10) + 10}px); font-size: ${n.textSize ?? 14}px; text-align: ${n.textAlign ?? 'left'};`}
+                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; width: calc(100% - ${(n.textX ?? 10) + 10}px); height: calc(100% - ${(n.textY ?? 10) + 10}px); font-size: ${n.textSize ?? 14}px; text-align: ${n.textAlign ?? 'left'}; font-weight: ${n.textBold ? 700 : 400}; font-style: ${n.textItalic ? 'italic' : 'normal'};`}
                     onClick={(e: any) => e.stopPropagation()}
                     onPointerDown={(e: any) => e.stopPropagation()}
                   />
                 ) : (
                   <div
                     class="cn-text"
-                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; right: 10px; bottom: 10px; font-size: ${n.textSize ?? 14}px; text-align: ${n.textAlign ?? 'left'};`}
+                    style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; right: 10px; bottom: 10px; font-size: ${n.textSize ?? 14}px; text-align: ${n.textAlign ?? 'left'}; font-weight: ${n.textBold ? 700 : 400}; font-style: ${n.textItalic ? 'italic' : 'normal'};`}
                   >
                     {n.text || <span class="cn-placeholder">Double-click to edit</span>}
                   </div>
