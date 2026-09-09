@@ -2664,9 +2664,11 @@ input[type="file"].modern-file::file-selector-button {
 .cn-selbar {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 3px 6px;
   border-radius: var(--radius-sm);
+  max-width: 100%;
 }
 .cn-selbar-edge { gap: 6px; }
 .cn-sel-label { font-size: 0.72rem; color: var(--text-3); margin-right: 2px; }
@@ -3023,15 +3025,6 @@ input[type="file"].modern-file::file-selector-button {
 }
 .cn-node.cn-selected .cn-check { opacity: 1; }
 
-.cn-node-colors {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  opacity: 0;
-  transition: opacity 0.14s;
-}
-.cn-node.cn-selected .cn-node-colors, .cn-node:hover .cn-node-colors { opacity: 1; }
-
 .cn-editor {
   position: absolute;
   background: rgba(15, 16, 20, 0.92);
@@ -3046,6 +3039,34 @@ input[type="file"].modern-file::file-selector-button {
   box-sizing: border-box;
   z-index: 2;
   box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.2);
+}
+.cn-watermark {
+  position: absolute;
+  right: 24px;
+  bottom: 20px;
+  z-index: 2;
+  pointer-events: none;
+  user-select: none;
+  color: rgba(226, 232, 240, 0.22);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.cn-watermark span {
+  margin-left: 8px;
+  color: rgba(148, 163, 184, 0.22);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+@media (max-width: 700px) {
+  .cn-watermark {
+    right: 14px;
+    bottom: 14px;
+    font-size: 0.68rem;
+  }
+  .cn-watermark span { display: none; }
 }
 
 .cn-empty {

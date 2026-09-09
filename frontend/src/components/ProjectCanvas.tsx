@@ -1630,6 +1630,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           openCtxMenu(e);
         }}
       >
+        {isFullscreen && <div class="cn-watermark" aria-hidden="true">Madar <span>Planning canvas</span></div>}
         <div
           class="cn-world"
           style={`transform: translate3d(${view.x}px, ${view.y}px, 0) scale(${view.z}); transform-origin: 0 0;`}
@@ -1687,24 +1688,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                     style={`left: ${n.textX ?? 10}px; top: ${n.textY ?? 10}px; right: 10px; bottom: 10px; font-size: ${n.textSize ?? 14}px; text-align: ${n.textAlign ?? 'left'}; font-weight: ${n.textBold ? 700 : 400}; font-style: ${n.textItalic ? 'italic' : 'normal'};`}
                   >
                     {n.text || <span class="cn-placeholder">Double-click to edit</span>}
-                  </div>
-                )}
-                {!isEditing && !readOnly && (
-                  <div class="cn-node-colors">
-                    {COLORS.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        class={`cn-dot s c-${c} ${n.color === c ? 'cn-dot-active' : ''}`}
-                        aria-label={`Set ${c} color`}
-                        aria-pressed={n.color === c}
-                        onPointerDown={(e: any) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setColor(n.id, c);
-                        }}
-                      />
-                    ))}
                   </div>
                 )}
                 {isSel && !readOnly && (
