@@ -26,6 +26,7 @@ const CANVAS_MIRROR_FILE = 'WSD_CANVAS.md';
 export type CanvasNodeType = 'note' | 'card';
 export type CanvasColor = 'yellow' | 'blue' | 'red' | 'green';
 export type CanvasTextAlign = 'left' | 'center' | 'right';
+export type CanvasShape = 'rectangle' | 'rounded' | 'ellipse' | 'diamond' | 'pill';
 
 export interface CanvasNode {
   id: string;
@@ -42,6 +43,7 @@ export interface CanvasNode {
   textBold?: boolean;
   textItalic?: boolean;
   color: CanvasColor;
+  shape?: CanvasShape;
   done?: boolean;
   /** Optional swimlane/section id this node belongs to. */
   section?: string;
@@ -75,6 +77,7 @@ export const MAX_TEXT = 2000;
 export const MAX_SECTIONS = 12;
 
 const COLORS: CanvasColor[] = ['yellow', 'blue', 'red', 'green'];
+const SHAPES: CanvasShape[] = ['rectangle', 'rounded', 'ellipse', 'diamond', 'pill'];
 
 class CanvasConflictError extends Error {
   statusCode = 409;
@@ -126,6 +129,7 @@ function normalizeNode(raw: unknown): CanvasNode | null {
   const w = clampNum(r.w, 60, 900, 220);
   const h = clampNum(r.h, 40, 900, type === 'card' ? 120 : 100);
   const textAlign: CanvasTextAlign = r.textAlign === 'center' || r.textAlign === 'right' ? r.textAlign : 'left';
+  const shape: CanvasShape = SHAPES.includes(r.shape as CanvasShape) ? (r.shape as CanvasShape) : 'rectangle';
   return {
     id: nodeId(r.id, freshId('n')),
     type,
@@ -141,6 +145,7 @@ function normalizeNode(raw: unknown): CanvasNode | null {
     textBold: r.textBold === true,
     textItalic: r.textItalic === true,
     color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
+    shape,
     done: r.done === true,
     section,
   };

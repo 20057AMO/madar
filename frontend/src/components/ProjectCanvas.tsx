@@ -33,13 +33,18 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
+  Square,
+  Circle,
+  Diamond,
+  RectangleHorizontal,
+  Hexagon,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
   saveProjectCanvas,
   getProjectNotes,
 } from '../api';
-import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection, CanvasTextAlign } from '../api';
+import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection, CanvasTextAlign, CanvasShape } from '../api';
 import { ConfirmModal } from './ConfirmModal';
 
 /**
@@ -58,6 +63,13 @@ const MIN_Z = 0.2;
 const MAX_Z = 3;
 
 const COLORS: CanvasColor[] = ['yellow', 'blue', 'red', 'green'];
+const SHAPES: Array<{ value: CanvasShape; label: string; hint: string; icon: typeof Square }> = [
+  { value: 'rectangle', label: 'Rectangle', hint: 'General information', icon: Square },
+  { value: 'rounded', label: 'Rounded', hint: 'Process or step', icon: RectangleHorizontal },
+  { value: 'ellipse', label: 'Ellipse', hint: 'Start or end', icon: Circle },
+  { value: 'diamond', label: 'Diamond', hint: 'Decision or condition', icon: Diamond },
+  { value: 'pill', label: 'Pill', hint: 'Status or category', icon: Hexagon },
+];
 
 interface ViewState {
   x: number;
@@ -414,8 +426,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   };
 
   const setColor = (nodeId: string, color: CanvasColor) => patchNode(nodeId, { color });
+  const setShape = (nodeId: string, shape: CanvasShape) => patchNode(nodeId, { shape });
 
-  const addNode = (type: CanvasNodeType) => {
+  const addNode = (type: CanvasNodeType, shape: CanvasShape = type === 'card' ? 'rounded' : 'rectangle') => {
     if (docRef.current && docRef.current.nodes.length >= MAX_NODES) {
       setNotice(`Canvas limit reached (${MAX_NODES} nodes)`);
       return;
@@ -443,6 +456,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       textSize: 14,
       textAlign: 'left',
       color: type === 'card' ? 'blue' : 'yellow',
+      shape,
       done: false,
     };
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
@@ -1330,6 +1344,23 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               onClick={() => setColor(selected.id, c)}
             />
           ))}
+          <span class="cn-sel-sep" />
+          <span class="cn-shape-control" role="group" aria-label="Change selected shape">
+            <span class="cn-shape-label">Shape</span>
+            {SHAPES.map(({ value, label, hint, icon: Icon }) => (
+              <button
+                key={value}
+                type="button"
+                class={`cn-shape-btn ${(selected.shape ?? (selected.type === 'card' ? 'rounded' : 'rectangle')) === value ? 'active' : ''}`}
+                title={`${label}: ${hint}`}
+                aria-label={`${label} shape — ${hint}`}
+                aria-pressed={(selected.shape ?? (selected.type === 'card' ? 'rounded' : 'rectangle')) === value}
+                onClick={() => setShape(selected.id, value)}
+              >
+                <Icon width={13} height={13} />
+              </button>
+            ))}
+          </span>
           <label class="cn-text-control">
             <span>Size</span>
             <input
@@ -1466,6 +1497,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <button class="cn-add-item" aria-label="Add task card" onClick={() => addNode('card')}>
               <CheckSquare width={15} height={15} /> Task card <span class="dim">C</span>
             </button>
+            <span class="cn-add-label">Shapes</span>
+            <div class="cn-shape-menu" role="group" aria-label="Choose shape">
+              {SHAPES.map(({ value, label, hint, icon: Icon }) => (
+                <button key={value} class="cn-add-item cn-shape-item" aria-label={`Add ${label.toLowerCase()} shape — ${hint}`} title={hint} onClick={() => addNode('note', value)}>
+                  <Icon width={15} height={15} /> {label}
+                </button>
+              ))}
+            </div>
             <button class="cn-add-item" aria-label="Add arrow" onClick={() => { if (selNode) { setConnectFrom(selNode); setMenuOpen(false); } else setMenuOpen(false); }}>
               <Link2 width={15} height={15} /> Arrow <span class="dim">L</span>
             </button>
@@ -1603,7 +1642,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             return (
               <div
                 key={n.id}
-                class={`cn-node ${n.type} c-${n.color} ${isSel ? 'cn-selected' : ''} ${connectFrom === n.id ? 'cn-connect-src' : ''} ${connectFrom && connectFrom !== n.id ? 'cn-connectable' : ''}`}
+                class={`cn-node ${n.type} shape-${n.shape ?? (n.type === 'card' ? 'rounded' : 'rectangle')} c-${n.color} ${isSel ? 'cn-selected' : ''} ${connectFrom === n.id ? 'cn-connect-src' : ''} ${connectFrom && connectFrom !== n.id ? 'cn-connectable' : ''}`}
                 data-id={n.id}
                 ref={(el: HTMLElement | null) => {
                   if (el) nodeElsRef.current.set(n.id, el);

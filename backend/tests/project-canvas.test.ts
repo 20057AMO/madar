@@ -83,7 +83,7 @@ test('save canvas: valid document roundtrips, positions/colors/done preserved, u
   const doc = canvasDoc(
     [
       node('note-1', 'Sticky note text'),
-      node('card-1', 'Task card', { type: 'card', done: true, color: 'blue', x: 400, y: 300, w: 280, h: 160 }),
+      node('card-1', 'Task card', { type: 'card', done: true, color: 'blue', shape: 'diamond', x: 400, y: 300, w: 280, h: 160 }),
     ],
     [edge('e-1', 'note-1', 'card-1')]
   );
@@ -98,6 +98,7 @@ test('save canvas: valid document roundtrips, positions/colors/done preserved, u
   assert.strictEqual(got.json.nodes[1].type, 'card');
   assert.strictEqual(got.json.nodes[1].done, true);
   assert.strictEqual(got.json.nodes[1].color, 'blue');
+  assert.strictEqual(got.json.nodes[1].shape, 'diamond');
   assert.strictEqual(got.json.nodes[1].x, 400);
   assert.strictEqual(got.json.nodes[1].y, 300);
   assert.strictEqual(got.json.edges[0].from, 'note-1');
@@ -138,6 +139,7 @@ test('canvas normalization: junk rows dropped, bad edges removed, numeric clamps
   assert.strictEqual(n2.textAlign, 'left', 'text alignment defaults safely');
   assert.strictEqual(n2.textBold, false, 'bold defaults safely');
   assert.strictEqual(n2.textItalic, false, 'italic defaults safely');
+  assert.strictEqual(n2.shape, 'rectangle', 'shape defaults safely');
   assert.strictEqual(n2.color, 'green');
   assert.strictEqual(n2.type, 'card');
   const n1 = json.nodes.find((n: any) => n.id === 'note-1');

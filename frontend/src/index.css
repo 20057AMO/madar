@@ -2739,8 +2739,8 @@ input[type="file"].modern-file::file-selector-button {
 .cn-position-pad {
   position: relative;
   display: inline-block;
-  width: 73px;
-  height: 48px;
+  width: 70px;
+  height: 70px;
 }
 .cn-position-btn {
   position: absolute;
@@ -2761,11 +2761,11 @@ input[type="file"].modern-file::file-selector-button {
   border-color: var(--accent);
   background: var(--bg-3);
 }
-.cn-position-btn.up { top: 0; left: 25px; }
-.cn-position-btn.left { top: 25px; left: 0; }
-.cn-position-btn.center { top: 25px; left: 25px; font-size: 1rem; line-height: 1; }
-.cn-position-btn.right { top: 25px; right: 0; }
-.cn-position-btn.down { bottom: 0; left: 25px; }
+.cn-position-btn.up { top: 0; left: 24px; }
+.cn-position-btn.left { top: 24px; left: 0; }
+.cn-position-btn.center { top: 24px; left: 24px; font-size: 1rem; line-height: 1; }
+.cn-position-btn.right { top: 24px; right: 0; }
+.cn-position-btn.down { bottom: 0; left: 24px; }
 .cn-dot {
   width: 14px;
   height: 14px;
@@ -2837,6 +2837,16 @@ input[type="file"].modern-file::file-selector-button {
   text-align: left;
 }
 .cn-add-item:hover { background: var(--bg-3); color: var(--text); }
+.cn-add-label {
+  display: block;
+  padding: 7px 10px 3px;
+  color: var(--text-3);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cn-shape-menu { display: grid; grid-template-columns: 1fr 1fr; }
+.cn-shape-item { font-size: 0.76rem; padding: 7px 9px; }
 .cn-add-item .dim {
   margin-left: auto;
   font-size: 0.68rem;
@@ -2905,6 +2915,41 @@ input[type="file"].modern-file::file-selector-button {
   touch-action: none;
   box-sizing: border-box;
   will-change: left, top, width, height;
+}
+.cn-node.shape-rectangle { border-radius: 8px; }
+.cn-node.shape-rounded { border-radius: 22px; }
+.cn-node.shape-ellipse { border-radius: 50%; }
+.cn-node.shape-diamond { clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); border-radius: 0; }
+.cn-node.shape-pill { border-radius: 999px; }
+.cn-node.shape-diamond .cn-node-colors,
+.cn-node.shape-diamond .cn-resize { display: none; }
+.cn-shape-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.cn-shape-label {
+  color: var(--text-3);
+  font-size: 0.7rem;
+  margin-right: 2px;
+}
+.cn-shape-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-3);
+  background: var(--bg);
+}
+.cn-shape-btn:hover,
+.cn-shape-btn.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--bg-3);
 }
 .cn-node:hover { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04); }
 .cn-node.cn-selected {
