@@ -17,6 +17,7 @@ import {
   type UserRole,
 } from '../api';
 import { Avatar } from '../components/Avatar';
+import { ReAuthModal } from '../components/ReAuthModal';
 
 const ROLE_CONFIG: Record<UserRole, { label: string; color: string }> = {
   admin: { label: 'Admin', color: '#f59e0b' },
@@ -36,6 +37,9 @@ export function Team() {
   const [newRole, setNewRole] = useState<UserRole>('editor');
   const [creating, setCreating] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<TeamUserWithMemberships | null>(null);
+  const [pendingRole, setPendingRole] = useState<{ user: TeamUserWithMemberships; role: UserRole } | null>(null);
+  const [roleSaving, setRoleSaving] = useState(false);
+  const [roleError, setRoleError] = useState<string | null>(null);
 
   useEffect(() => {
     loadUsers();
@@ -71,13 +75,28 @@ export function Team() {
     }
   }
 
-  async function handleRoleChange(userId: string, role: UserRole) {
+  async function handleRoleChangeRequested(userId: string, role: UserRole) {
+    if (roleError) setRoleError(null);
+    const target = users.find((u) => u.id === userId);
+    if (!target || role === target.role) return;
+    // Role changes are sudo ops — surface the identity confirmation modal
+    // instead of changing the role with a single click.
+    setPendingRole({ user: target, role });
+  }
+
+  async function handleRoleChangeConfirmed(accountPassword: string) {
+    if (!pendingRole) return;
     try {
+      setRoleSaving(true);
+      setRoleError(null);
+      await updateUserRole(pendingRole.user.id, pendingRole.role, accountPassword);
+      setPendingRole(null);
       setError('');
-      await updateUserRole(userId, role);
       await loadUsers();
     } catch (err: any) {
-      setError(err.message || 'Failed to update role');
+      setRoleError(err.message || 'Failed to update role');
+    } finally {
+      setRoleSaving(false);
     }
   }
 
@@ -279,7 +298,7 @@ export function Team() {
                 <div style={{ display: 'flex', gap: '0.375rem', flexShrink: 0 }}>
                   <select
                     value={u.role}
-                    onChange={(e) => handleRoleChange(u.id, (e.target as HTMLSelectElement).value as UserRole)}
+                    onChange={(e) => handleRoleChangeRequested(u.id, (e.target as HTMLSelectElement).value as UserRole)}
                     style={{
                       padding: '0.25rem 0.5rem',
                       borderRadius: 6,
@@ -351,6 +370,21 @@ export function Team() {
           </div>
         </div>
       )}
+      <ReAuthModal
+        open={pendingRole !== null}
+        username={pendingRole ? (pendingRole.user.profile?.displayName || pendingRole.user.username) : currentUser?.username}
+        loading={roleSaving}
+        error={roleError}
+        title={pendingRole ? `Change role of ${pendingRole.user.profile?.displayName || pendingRole.user.username}` : 'Change role'}
+        description={
+          pendingRole
+            ? `Set ${pendingRole.user.profile?.displayName || pendingRole.user.username} as ${ROLE_CONFIG[pendingRole.role].label}? Enter your account password to confirm.`
+            : 'Enter your account password to confirm.'
+        }
+        confirmLabel="Change role"
+        onConfirm={handleRoleChangeConfirmed}
+        onCancel={() => { setPendingRole(null); setRoleError(null); }}
+      />
     </div>
   );
 }

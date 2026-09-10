@@ -1,12 +1,15 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, JSON_HEADERS } from './helpers.ts';
 
 /**
  * Team page & permissions round:
- *  - GET /api/users/with-memberships — read-only roster with per-user project
- *    affiliations, open to ANY authenticated user (viewer included).
+ *  - GET /api/users/with-memberships — full-team roster with per-user project
+ *    affiliations, now ADMIN-ONLY (the project-level Team tab keeps the open
+ *    GET /api/users route for regular members).
+ *  - Role changes are sudo ops — the acting admin must re-confirm their
+ *    account password (missing → 400, wrong → 401, correct → 200).
  *  - Activity attribution — project lifecycle events carry the acting user's
  *    id (who stopped/started), not just an anonymous action string.
  *  - Safety guard — an admin cannot demote their own system role.
@@ -87,10 +90,16 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.strictEqual(r2.status, 200, `add viewer: ${r2.status}`);
   });
 
-  test('viewer can read the team roster with memberships (200)', async () => {
-    const res = await req('GET', '/users/with-memberships', undefined, runAs(viewerToken).headers);
-    assert.strictEqual(res.status, 200, `viewer with-memberships: ${res.status}`);
-    const data = await res.json();
+  test('with-memberships is admin-only — viewers and editors get 403', async () => {
+    const viewer = await req('GET', '/users/with-memberships', undefined, runAs(viewerToken).headers);
+    assert.strictEqual(viewer.status, 403, 'viewer with-memberships: must be 403');
+    const editor = await req('GET', '/users/with-memberships', undefined, runAs(editorToken).headers);
+    assert.strictEqual(editor.status, 403, 'editor with-memberships: must be 403');
+
+    // Admin sees the full roster with per-user project affiliations.
+    const admin = await reqAuth('GET', '/users/with-memberships');
+    assert.strictEqual(admin.status, 200);
+    const data = await admin.json();
     assert.ok(Array.isArray(data.users));
 
     const editorRow = data.users.find((u: any) => u.id === editorId);
@@ -112,16 +121,50 @@ describe('Team page & permissions (real Docker container)', () => {
 
   test('admin cannot demote their own role (400 — lockout guard)', async () => {
     // The shared forged admin token pads id 'test-user'; PATCH own role away
-    // from admin must be refused before any store write.
-    const res = await reqAuth('PATCH', `/users/test-user/role`, { role: 'viewer' });
+    // from admin must be refused before any store write (and before any
+    // password check — a self-demote is a lockout, not a mutation).
+    const res = await reqAuth('PATCH', `/users/test-user/role`, { role: 'viewer', accountPassword: 'irrelevant' });
     assert.strictEqual(res.status, 400, `self-demote: ${res.status}`);
     const body = await res.json();
     assert.match(String(body.error || ''), /own role/i);
+  });
 
-    // A real target is still changeable → transfer the guard did not break it.
-    const ok = await reqAuth('PATCH', `/users/${viewerId}/role`, { role: 'editor' });
-    assert.strictEqual(ok.status, 200, `change other role: ${ok.status}`);
-    await reqAuth('PATCH', `/users/${viewerId}/role`, { role: 'viewer' });
+  test('role change requires the admin account password (missing 400, wrong 401)', async () => {
+    const missing = await reqAuth('PATCH', `/users/${viewerId}/role`, { role: 'editor' });
+    assert.strictEqual(missing.status, 400, 'role change without password must be 400');
+
+    const wrong = await reqAuth('PATCH', `/users/${viewerId}/role`, { role: 'editor', accountPassword: 'definitely-not-the-password' });
+    assert.strictEqual(wrong.status, 401, 'role change with a wrong password must be 401');
+    const wrongBody = await wrong.json();
+    assert.match(String(wrongBody.error || ''), /incorrect/i);
+
+    // A failed sudo attempt does not mutate the role.
+    const roster = await (await reqAuth('GET', '/users/with-memberships')).json();
+    const viewerRow = (roster.users as any[]).find((u: any) => u.id === viewerId);
+    assert.strictEqual(viewerRow.role, 'viewer');
+  });
+
+  test('role change succeeds after sudo verification (real admin login; self-skips)', async (t) => {
+    // The sudo check validates the ACTING admin's own password, so we need a
+    // real session — forged tokens resolve to an unknown user id. Mirror the
+    // shared helpers: the suite container's first admin is created via setup
+    // as 'test-admin' (or login with WSD_TEST_ACCOUNT_PASSWORD).
+    const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
+    const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
+    const loginData = await loginRes.json();
+    if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
+    const realAdmin = { headers: { ...authHeaders(), Authorization: `Bearer ${loginData.token}` } };
+
+    const ok = await req('PATCH', `/users/${viewerId}/role`, { role: 'editor', accountPassword: pw }, realAdmin.headers);
+    assert.strictEqual(ok.status, 200, `role change with correct password: ${ok.status}`);
+
+    const roster = await (await req('GET', '/users/with-memberships', undefined, realAdmin.headers)).json();
+    const viewerRow = (roster.users as any[]).find((u: any) => u.id === viewerId);
+    assert.strictEqual(viewerRow.role, 'editor', 'role persisted after sudo');
+
+    // Revert so the rest of the suite sees viewer as a viewer.
+    const rev = await req('PATCH', `/users/${viewerId}/role`, { role: 'viewer', accountPassword: pw }, realAdmin.headers);
+    assert.strictEqual(rev.status, 200);
   });
 
   test('project activity is attributed (stopped/started carry the acting user)', async () => {
@@ -158,7 +201,7 @@ describe('Team page & permissions (real Docker container)', () => {
     const transfer = await reqAuth('POST', `/projects/${slug}/transfer-owner`, { userId: editorId });
     assert.strictEqual(transfer.status, 200);
 
-    const roster = await (await req('GET', '/users/with-memberships', undefined, runAs(editorToken).headers)).json();
+    const roster = await (await reqAuth('GET', '/users/with-memberships')).json();
     const editorRow = (roster.users as any[]).find((u: any) => u.id === editorId);
     assert.strictEqual(editorRow.memberships.find((m: any) => m.slug === slug).isOwner, true);
 

@@ -14,6 +14,7 @@ import {
   Users,
   PencilRuler,
   Menu,
+  ShieldAlert,
 } from 'lucide-preact';
 import { AuthProvider, useAuth } from './auth';
 import { VSCodeIcon, OpencodeIcon } from './components/brand-icons';
@@ -215,8 +216,8 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <NavButton href="/agents" label="Agents" icon={Bot} />
         <NavButton label="opencode" icon={OpencodeIcon} newTabUrl={`${toolBase}:${ocPort}/`} />
         <NavButton href="/opencode-studio" label="OC Studio" icon={OpencodeIcon} />
-        <NavButton href="/providers" label="Providers" icon={KeyRound} />
-        <NavButton href="/team" label="Team" icon={Users} />
+        {user?.role === 'admin' && <NavButton href="/providers" label="Providers" icon={KeyRound} />}
+        {user?.role === 'admin' && <NavButton href="/team" label="Team" icon={Users} />}
         {user?.role === 'admin' && <NavButton href="/settings" label="Settings" icon={SettingsIcon} />}
         <NavButton href="/ide" label="VS Code" icon={VSCodeIcon} />
       </nav>
@@ -309,12 +310,48 @@ function Shell() {
           <Route path="/project/:slug" component={Project} />
           <Route path="/terminals" component={Terminals} />
           <Route path="/terminals/:slug" component={Terminals} />
-          <Route path="/providers" component={Providers} />
+          {user?.role === 'admin' ? (
+            <>
+              <Route path="/providers" component={Providers} />
+              <Route path="/team" component={Team} />
+            </>
+          ) : (
+            <>
+              <Route path="/providers" component={AdminOnly} />
+              <Route path="/team" component={AdminOnly} />
+            </>
+          )}
           <Route path="/settings" component={Settings} />
           <Route path="/profile" component={Profile} />
-          <Route path="/team" component={Team} />
         </Suspense>
       </main>
+    </div>
+  );
+}
+
+/**
+ * Admin-only guard panel — rendered in place of the restricted routes
+ * (/providers, /team) when the signed-in user is not an admin. Settings has
+ * its own internal redirect guard and stays untouched.
+ */
+function AdminOnly() {
+  return (
+    <div
+      class="page-container"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingTop: '6rem',
+        gap: '0.75rem',
+      }}
+    >
+      <ShieldAlert size={32} style={{ color: 'var(--text-secondary)' }} />
+      <div style={{ fontWeight: 600, fontSize: '1.05rem' }}>Admin only</div>
+      <div class="dim" style={{ fontSize: '0.85rem', maxWidth: 380, textAlign: 'center' }}>
+        This page is restricted to administrators. Sign in with an admin account to manage it.
+      </div>
     </div>
   );
 }

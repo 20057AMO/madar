@@ -557,9 +557,10 @@ app.delete('/api/auth/providers-password', authLimiter, async (req: any, res) =>
 });
 
 // ── Settings backup (export / import) ─────────────────────────
-// Both operations require account re-auth. Exports never contain API keys.
+// Admin-only. Both operations require account re-auth. Exports never contain
+// API keys.
 
-app.post('/api/settings/export', authLimiter, async (req: any, res) => {
+app.post('/api/settings/export', requireAdmin, authLimiter, async (req: any, res) => {
   const accountPassword = String((req.body?.accountPassword) || '');
   if (!(await verifyAccountPassword(accountPassword, req.user?.id))) {
     return res.status(401).json({ error: 'Account password is incorrect.' });
@@ -577,7 +578,7 @@ app.post('/api/settings/export', authLimiter, async (req: any, res) => {
   }
 });
 
-app.post('/api/settings/import', authLimiter, async (req: any, res) => {
+app.post('/api/settings/import', requireAdmin, authLimiter, async (req: any, res) => {
   try {
     const { accountPassword, backup } = req.body || {};
     if (!accountPassword) return res.status(400).json({ error: 'Account password is required.' });
@@ -599,9 +600,9 @@ app.get('/api/users', (req: any, res) => {
 });
 
 // Team overview — every user + their project memberships (owner/admin/editor/
-// viewer). Any authenticated user may view the roster (like GET /api/users);
-// project membership data is already visible via the per-project members route.
-app.get('/api/users/with-memberships', (req: any, res) => {
+// viewer). Admin-only roster for the admin Team page; the project-level Team
+// tab stays served by the open GET /api/users route (members may view it).
+app.get('/api/users/with-memberships', requireAdmin, (req: any, res) => {
   const users = listUsers();
   const memberships = new Map<string, Array<{ slug: string; name: string; role: string; isOwner: boolean }>>();
   for (const slug of listMetaSlugs()) {
@@ -642,8 +643,8 @@ app.post('/api/users', requireAdmin, userAdminLimiter, async (req: any, res) => 
   }
 });
 
-app.patch('/api/users/:userId/role', requireAdmin, (req: any, res) => {
-  const { role } = req.body || {};
+app.patch('/api/users/:userId/role', requireAdmin, authLimiter, async (req: any, res) => {
+  const { role, accountPassword } = req.body || {};
   if (!['admin', 'editor', 'viewer'].includes(String(role))) {
     return res.status(400).json({ error: 'Invalid role. Must be admin, editor, or viewer.' });
   }
@@ -651,6 +652,15 @@ app.patch('/api/users/:userId/role', requireAdmin, (req: any, res) => {
   // left without an admin (mirrors the self-delete guard below).
   if (req.params.userId === req.user?.id && String(role) !== 'admin') {
     return res.status(400).json({ error: 'Cannot change your own role.' });
+  }
+  // Role changes are sudo ops: the acting admin must re-confirm the account
+  // password (rate-limited via authLimiter to protect the new credential check).
+  if (!accountPassword || !String(accountPassword).length) {
+    return res.status(400).json({ error: 'Account password is required to change roles.' });
+  }
+  if (!(await verifyAccountPassword(String(accountPassword), req.user?.id))) {
+    recordAudit('user-role-change-failed', false, req.ip, req.user?.id);
+    return res.status(401).json({ error: 'Account password is incorrect.' });
   }
   const ok = updateUserRole(req.params.userId, role as any);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
@@ -885,11 +895,11 @@ app.get('/api/providers/templates', (_req, res) => {
 
 const providersManagement: Array<(req: any, res: any, next: any) => void> = [providersLockMiddleware];
 
-app.get('/api/providers', providersManagement, (_req: any, res: any) => {
+app.get('/api/providers', requireAdmin, providersManagement, (_req: any, res: any) => {
   res.json({ providers: listProviders() });
 });
 
-app.post('/api/providers/detect', providersManagement, async (req: any, res: any) => {
+app.post('/api/providers/detect', requireAdmin, providersManagement, async (req: any, res: any) => {
   try {
     const { apiKey, host } = req.body || {};
     const result = await detectProvider({ apiKey, host });
@@ -899,7 +909,7 @@ app.post('/api/providers/detect', providersManagement, async (req: any, res: any
   }
 });
 
-app.post('/api/providers', providersManagement, async (req: any, res: any) => {
+app.post('/api/providers', requireAdmin, providersManagement, async (req: any, res: any) => {
   try {
     const { name, host, type, apiKey, enabled, auth } = req.body || {};
     const key = typeof apiKey === 'string' ? apiKey.trim() : '';
@@ -939,7 +949,7 @@ app.post('/api/providers', providersManagement, async (req: any, res: any) => {
   }
 });
 
-app.put('/api/providers/:id', providersManagement, (req: any, res: any) => {
+app.put('/api/providers/:id', requireAdmin, providersManagement, (req: any, res: any) => {
   try {
     const id = String(req.params.id || '');
     if (!getProviderMeta(id)) {
@@ -961,7 +971,7 @@ app.put('/api/providers/:id', providersManagement, (req: any, res: any) => {
   }
 });
 
-app.delete('/api/providers/:id', providersManagement, (req: any, res: any) => {
+app.delete('/api/providers/:id', requireAdmin, providersManagement, (req: any, res: any) => {
   try {
     const id = String(req.params.id || '');
     deleteProvider(id);
@@ -971,7 +981,7 @@ app.delete('/api/providers/:id', providersManagement, (req: any, res: any) => {
   }
 });
 
-app.post('/api/providers/:id/test', providersManagement, async (req: any, res: any) => {
+app.post('/api/providers/:id/test', requireAdmin, providersManagement, async (req: any, res: any) => {
   const id = String(req.params.id || '');
   if (!getProviderMeta(id)) {
     res.status(404).json({ error: 'Unknown provider' });

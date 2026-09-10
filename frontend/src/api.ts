@@ -1024,11 +1024,14 @@ export const createUser = (username: string, password: string, role: UserRole = 
     body: JSON.stringify({ username, password, role }),
   });
 
-export const updateUserRole = (userId: string, role: UserRole) =>
+export const updateUserRole = (userId: string, role: UserRole, accountPassword?: string) =>
   api<{ ok: boolean }>(`/api/users/${userId}/role`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role }),
+    // skipAuthRedirect so a wrong sudo password surfaces inline in the
+    // ReAuthModal instead of triggering the global session-expiry handler.
+    body: JSON.stringify({ role, accountPassword }),
+    skipAuthRedirect: true,
   });
 
 export const deleteUser = (userId: string) =>

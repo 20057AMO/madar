@@ -61,6 +61,7 @@ export type AuditEvent =
   | 'opencode-update-failed'
   | 'user-created'
   | 'user-role-changed'
+  | 'user-role-change-failed'
   | 'user-deleted'
   | 'member-added'
   | 'member-removed'
