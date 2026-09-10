@@ -297,6 +297,7 @@ export function Profile() {
         displayName: profile.displayName?.trim() || '',
         email: profile.email?.trim() || '',
         bio: profile.bio?.trim() || '',
+        emailVisible: profile.emailVisible !== false,
       });
       setProfile(r.profile || {});
       await refreshUser();
@@ -403,6 +404,12 @@ export function Profile() {
               />
             </div>
 
+            <label class="field-label">Username</label>
+            <div class="settings-row" style="margin:0 0 12px">
+              <span class="mono" style="color: var(--text)">@{user?.username || '—'}</span>
+              <span class="settings-hint" style="margin:0">Used to sign in — cannot be changed.</span>
+            </div>
+
             <label class="field-label">Display name</label>
             <input
               class="modern-input"
@@ -431,6 +438,18 @@ export function Profile() {
               value={profile.bio || ''}
               onInput={(e: any) => setProfile({ ...profile, bio: e.target.value })}
             />
+
+            <label class="privacy-check" style="display:flex;align-items:center;gap:10px;margin-top:16px;cursor:pointer">
+              <input
+                type="checkbox"
+                checked={profile.emailVisible !== false}
+                onChange={(e: any) => setProfile({ ...profile, emailVisible: (e.target as HTMLInputElement).checked })}
+              />
+              <span>
+                Show email to team members
+                <span class="settings-hint" style="display:block;margin:0">When off, your email is hidden on your public profile.</span>
+              </span>
+            </label>
 
             {profileMsg && (
               <div class={profileMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px" role={profileMsg.type === 'ok' ? 'status' : 'alert'}>

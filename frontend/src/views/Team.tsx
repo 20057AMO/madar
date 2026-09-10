@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
+import { useHashLocation } from 'wouter/use-hash-location';
 import {
   Users,
   UserPlus,
@@ -32,6 +33,7 @@ const ROLE_CONFIG: Record<UserRole, { label: string; color: string; hint: string
 export function Team() {
   const { user: currentUser } = useAuth();
   const isAdmin = currentUser?.role === 'admin';
+  const [, setLocation] = useHashLocation();
   const [users, setUsers] = useState<TeamUserWithMemberships[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -238,7 +240,13 @@ export function Team() {
                 background: isMe ? 'rgba(59,130,246,0.06)' : 'var(--surface)',
                 border: `1px solid ${isMe ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`,
                 borderRadius: 10,
+                cursor: 'pointer',
               }}
+              onClick={() => setLocation(`/user/${u.id}`)}
+              role="button"
+              tabIndex={0}
+              title={`View ${u.profile?.displayName || u.username}'s profile`}
+              onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLocation(`/user/${u.id}`); } }}
             >
               <Avatar name={u.profile?.displayName || u.username} avatar={avatarUrl(u.id, u.profile?.avatarExt)} size={36} />
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -306,6 +314,7 @@ export function Team() {
                 <div style={{ display: 'flex', gap: '0.375rem', flexShrink: 0 }}>
                   <select
                     value={u.role}
+                    onClick={(e: Event) => e.stopPropagation()}
                     onChange={(e) => handleRoleChangeRequested(u.id, (e.target as HTMLSelectElement).value as UserRole)}
                     style={{
                       padding: '0.25rem 0.5rem',
@@ -322,7 +331,7 @@ export function Team() {
                   </select>
                   <button
                     class="btn-icon"
-                    onClick={() => setConfirmDelete(u)}
+                    onClick={(e: Event) => { e.stopPropagation(); setConfirmDelete(u); }}
                     title="Remove user"
                     aria-label={`Remove user ${u.username}`}
                     style={{ color: '#ef4444' }}

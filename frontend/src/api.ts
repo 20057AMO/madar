@@ -990,6 +990,18 @@ export interface UserProfile {
   bio?: string;
   /** Avatar image type stored on disk (data/avatars/<userId>.<ext>). */
   avatarExt?: 'png' | 'jpg' | 'webp';
+  /** Privacy toggle: when explicitly false the email is withheld from the
+   *  public read route (other members' profile pages). Undefined = visible. */
+  emailVisible?: boolean;
+}
+
+/** Enriched profile read — identity fields plus the editable profile. */
+export interface UserProfileRead {
+  id: string;
+  username: string;
+  role: UserRole;
+  createdAt: string;
+  profile: UserProfile;
 }
 
 export interface TeamUser {
@@ -1041,13 +1053,18 @@ export const deleteUser = (userId: string) =>
 
 /** Public profile of any user (any authenticated role may read). */
 export const getUserProfile = (userId: string) =>
-  api<{ profile: UserProfile }>(`/api/users/${userId}/profile`);
+  api<UserProfileRead>(`/api/users/${userId}/profile`);
 
 /** Own editable profile. */
 export const getMyProfile = () =>
-  api<{ profile: UserProfile }>('/api/users/me/profile');
+  api<UserProfileRead>('/api/users/me/profile');
 
-export const updateMyProfile = (patch: { displayName?: string | null; email?: string | null; bio?: string | null }) =>
+export const updateMyProfile = (patch: {
+  displayName?: string | null;
+  email?: string | null;
+  bio?: string | null;
+  emailVisible?: boolean | null;
+}) =>
   api<{ id: string; username: string; profile: UserProfile }>('/api/users/me/profile', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

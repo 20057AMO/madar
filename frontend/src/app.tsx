@@ -44,6 +44,7 @@ const Providers = lazy(() => import('./views/Providers').then(m => ({ default: m
 const Settings = lazy(() => import('./views/Settings').then(m => ({ default: m.Settings })));
 const Profile = lazy(() => import('./views/Profile').then(m => ({ default: m.Profile })));
 const Team = lazy(() => import('./views/Team').then(m => ({ default: m.Team })));
+const UserProfile = lazy(() => import('./views/UserProfile').then(m => ({ default: m.UserProfile })));
 const Planner = lazy(() => import('./views/Planner').then(m => ({ default: m.Planner })));
 const TeamChat = lazy(() => import('./views/Chat').then(m => ({ default: m.Chat })));
 
@@ -327,6 +328,7 @@ function Shell() {
           )}
           <Route path="/settings" component={Settings} />
           <Route path="/profile" component={Profile} />
+          <Route path="/user/:id" component={UserProfile} />
         </Suspense>
       </main>
     </div>

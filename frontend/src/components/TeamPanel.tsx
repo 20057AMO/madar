@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
+import { useHashLocation } from 'wouter/use-hash-location';
 import { Users, UserPlus, Trash2, Crown } from 'lucide-preact';
 import {
   listProjectMembers,
@@ -24,6 +25,7 @@ interface Props {
 const ROLE_HIERARCHY: Record<string, number> = { admin: 3, editor: 2, viewer: 1 };
 
 export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
+  const [, setLocation] = useHashLocation();
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [allUsers, setAllUsers] = useState<TeamUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -184,7 +186,14 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
               const isOwner = project?.ownerId === m.userId;
               return (
                 <div class="member-row" key={m.userId}>
-                  <div class="member-info">
+                  <div
+                    class="member-info"
+                    role="button"
+                    tabIndex={0}
+                    title={`View ${m.displayName || m.username}'s profile`}
+                    onClick={() => setLocation(`/user/${m.userId}`)}
+                    onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLocation(`/user/${m.userId}`); } }}
+                  >
                     <div class="member-avatar" style="position:relative">
                       <Avatar name={m.displayName || m.username} avatar={avatarUrl(m.userId, m.avatarExt)} size={34} />
                       {onlineIds.has(m.userId) && <span class="presence-online-dot" />}

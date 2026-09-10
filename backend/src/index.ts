@@ -691,20 +691,29 @@ app.delete('/api/users/:userId', requireAdmin, userAdminLimiter, (req: any, res)
 app.get('/api/users/me/profile', (req: any, res) => {
   const info = getUserInfo(req.user?.id);
   if (!info) return res.status(404).json({ error: 'User not found' });
-  res.json({ profile: info.profile || {} });
+  const { id, username, role, createdAt, profile } = info;
+  res.json({ id, username, role, createdAt, profile: profile || {} });
 });
 
 app.get('/api/users/:userId/profile', (req: any, res) => {
   if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
   const info = getUserInfo(req.params.userId);
   if (!info) return res.status(404).json({ error: 'User not found' });
-  res.json({ profile: info.profile || {} });
+  const { id, username, role, createdAt, profile } = info;
+  const visible = { ...(profile || {}) };
+  // Privacy: only the OWNER's /me route and admin surfaces see the email when
+  // the owner opted out. This route is read by any authenticated member — hide
+  // the email (read copy only, never the stored record) when hidden.
+  if (req.user?.id !== req.params.userId && visible.email && visible.emailVisible === false) {
+    delete visible.email;
+  }
+  res.json({ id, username, role, createdAt, profile: visible });
 });
 
 app.put('/api/users/me/profile', userWriteLimiter, (req: any, res) => {
   try {
-    const { displayName, email, bio } = req.body || {};
-    const updated = updateUserProfile(req.user?.id, { displayName, email, bio });
+    const { displayName, email, bio, emailVisible } = req.body || {};
+    const updated = updateUserProfile(req.user?.id, { displayName, email, bio, emailVisible });
     if (!updated) return res.status(404).json({ error: 'User not found.' });
     recordAudit('profile-update', true, req.ip, req.user?.id);
     res.json(updated);
@@ -717,8 +726,8 @@ app.put('/api/users/me/profile', userWriteLimiter, (req: any, res) => {
 app.put('/api/users/:userId/profile', requireAdmin, userWriteLimiter, (req: any, res) => {
   try {
     if (!validAvatarUserId(req.params.userId)) return res.status(404).json({ error: 'User not found' });
-    const { displayName, email, bio } = req.body || {};
-    const updated = updateUserProfile(req.params.userId, { displayName, email, bio });
+    const { displayName, email, bio, emailVisible } = req.body || {};
+    const updated = updateUserProfile(req.params.userId, { displayName, email, bio, emailVisible });
     if (!updated) return res.status(404).json({ error: 'User not found.' });
     recordAudit('profile-update', true, req.ip, req.params.userId);
     res.json(updated);

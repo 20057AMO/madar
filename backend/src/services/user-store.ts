@@ -26,6 +26,10 @@ export interface UserProfile {
   email?: string;
   bio?: string;
   avatarExt?: 'png' | 'jpg' | 'webp';
+  /** Privacy toggle: when explicitly false the email is withheld from the
+   *  public read route (GET /api/users/:userId/profile for OTHERS). Undefined
+   *  means visible — the default contract. */
+  emailVisible?: boolean;
 }
 
 export interface StoredUser {
@@ -132,7 +136,7 @@ const BIO_MAX = 500;
 /** Validated, additive patch of a user's profile. `null` values clear a field. */
 export function updateUserProfile(
   userId: string,
-  patch: { displayName?: string | null; email?: string | null; bio?: string | null }
+  patch: { displayName?: string | null; email?: string | null; bio?: string | null; emailVisible?: boolean | null }
 ): { id: string; username: string; profile?: UserProfile } | null {
   const user = getUserById(userId);
   if (!user) return null;
@@ -155,6 +159,13 @@ export function updateUserProfile(
     if (v.length > BIO_MAX) throw new Error(`Bio must be at most ${BIO_MAX} characters.`);
     if (/[\u0000-\u001f\u007f]/.test(v)) throw new Error('Bio contains invalid characters.');
     profile.bio = v || undefined;
+  }
+  if (patch.emailVisible !== undefined) {
+    if (patch.emailVisible !== null && typeof patch.emailVisible !== 'boolean') {
+      throw new Error('emailVisible must be a boolean.');
+    }
+    if (patch.emailVisible === null) delete profile.emailVisible;
+    else profile.emailVisible = patch.emailVisible;
   }
 
   if (!Object.keys(profile).length) delete user.profile;

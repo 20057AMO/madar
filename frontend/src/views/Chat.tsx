@@ -6,6 +6,7 @@
  * write path); the WebSocket delivers live messages/typing/read/pin/presence.
  */
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { useHashLocation } from 'wouter/use-hash-location';
 import { useAuth } from '../auth';
 import {
   MessageCircle,
@@ -42,6 +43,14 @@ import { Avatar } from '../components/Avatar';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useTeamChatSocket, type ChatSocketEvent } from '../useTeamChatSocket';
 import '../tchat.css';
+
+interface ChatPresenceUser {
+  id: string;
+  username: string;
+  role: string;
+  displayName?: string;
+  avatarExt?: 'png' | 'jpg' | 'webp';
+}
 
 interface ComposerState {
   text: string;
@@ -96,12 +105,13 @@ function AttachImage({ id, alt }: { id: string; alt: string }) {
 export function Chat() {
   const { user } = useAuth();
   const meId = user?.id || '';
+  const [, setLocation] = useHashLocation();
   const [channels, setChannels] = useState<ChatChannel[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [active, setActive] = useState<ChatChannel | null>(null);
   const [messages, setMessages] = useState<TeamChatMessage[]>([]);
   const [typing, setTyping] = useState<{ id: string; username: string }[]>([]);
-  const [presence, setPresence] = useState<Map<string, string>>(new Map());
+  const [presence, setPresence] = useState<Map<string, ChatPresenceUser>>(new Map());
   const [composer, setComposer] = useState<ComposerState>({ text: '', attachments: [] });
   const [viewerOnly, setViewerOnly] = useState(false);
   const [searchQ, setSearchQ] = useState('');
@@ -167,7 +177,7 @@ export function Chat() {
       return;
     }
     if (ev.type === 'presence') {
-      setPresence(new Map(ev.users.map((u) => [u.id, u.username])));
+      setPresence(new Map(ev.users.map((u) => [u.id, u])));
       return;
     }
     if (ev.type === 'read') {
@@ -398,7 +408,24 @@ export function Chat() {
             <MessageCircle width={16} height={16} class="icon" />
             Team Chat
           </span>
-          <span class="tchat-online">{presence.size} online</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="tchat-online">{presence.size} online</span>
+            {presence.size > 0 && (
+              <span class="tchat-presence-avatars">
+                {Array.from(presence.values()).slice(0, 5).map((p) => (
+                  <button
+                    key={p.id}
+                    class="tchat-presence-avatar"
+                    aria-label={`View ${p.displayName || p.username}'s profile`}
+                    onClick={() => setLocation(`/user/${p.id}`)}
+                  >
+                    <Avatar name={p.displayName || p.username} avatar={avatarUrl(p.id, p.avatarExt)} size={22} title={p.displayName || p.username} />
+                  </button>
+                ))}
+                {presence.size > 5 && <span class="tchat-members-all" title={`${presence.size} members online`}>+{presence.size - 5}</span>}
+              </span>
+            )}
+          </div>
         </div>
         {user?.role !== 'viewer' && (
           <div class="tchat-rail-actions">
@@ -472,7 +499,14 @@ export function Chat() {
               <div style="display:flex;align-items:center;gap:8px">
                 <div class="tchat-member-avatars">
                   {active.members.slice(0, 4).map((m) => (
-                    <Avatar key={m.userId} name={m.displayName || m.username} avatar={avatarUrl(m.userId, m.avatarExt)} size={22} />
+                    <button
+                      key={m.userId}
+                      class="tchat-presence-avatar"
+                      aria-label={`View ${m.displayName || m.username}'s profile`}
+                      onClick={() => setLocation(`/user/${m.userId}`)}
+                    >
+                      <Avatar name={m.displayName || m.username} avatar={avatarUrl(m.userId, m.avatarExt)} size={22} title={m.displayName || m.username} />
+                    </button>
                   ))}
                   {(!active.members.length || active.kind === 'channel') && (
                     <span class="tchat-members-all" title="All members">
@@ -527,11 +561,19 @@ export function Chat() {
                 return (
                   <div key={m.id} class={`tchat-msg${mine ? ' mine' : ''}`}>
                     {!mine && (
-                      <Avatar
-                        name={m.username}
-                        avatar={avatarUrl(m.userId, author?.avatarExt)}
-                        size={28}
-                      />
+                      <button
+                        class="tchat-presence-avatar"
+                        style="align-self:flex-start;margin-top:2px"
+                        aria-label={`View ${author?.displayName || m.username}'s profile`}
+                        onClick={() => setLocation(`/user/${m.userId}`)}
+                      >
+                        <Avatar
+                          name={author?.displayName || m.username}
+                          avatar={avatarUrl(m.userId, author?.avatarExt)}
+                          size={28}
+                          title={author?.displayName || m.username}
+                        />
+                      </button>
                     )}
                     <div class="tchat-msg-body">
                       {/* reply context */}

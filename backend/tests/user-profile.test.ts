@@ -91,6 +91,12 @@ describe('User profile & avatar (real Docker)', () => {
   let myId = '';
   let myTok = '';
   let createdUser = false;
+  // A second, separate member identity used to verify the email-visibility
+  // privacy toggle (the reader must NOT be the owner of the profile).
+  const otherName = `q_${Date.now().toString(36)}`;
+  let otherId = '';
+  let otherTok = '';
+  let otherCreated = false;
 
   after(async () => {
     if (createdUser) {
@@ -99,6 +105,9 @@ describe('User profile & avatar (real Docker)', () => {
         await new Promise((r) => setTimeout(r, 1500));
         await reqAuth('DELETE', `/users/${myId}`);
       }
+    }
+    if (otherCreated) {
+      await reqAuth('DELETE', `/users/${otherId}`).catch(() => {});
     }
   });
 
@@ -151,6 +160,55 @@ describe('User profile & avatar (real Docker)', () => {
     const me = await (await req('GET', '/users/me/profile', undefined, { Authorization: `Bearer ${myTok}` })).json();
     assert.strictEqual(me.profile.displayName, undefined);
     assert.strictEqual(me.profile.email, undefined);
+  });
+
+  test('email visibility toggle: hidden from other members, visible to the owner', async () => {
+    // Provision a DIFFERENT member so the "other" read path truly fires.
+    const create = await reqAuth('POST', '/users', { username: otherName, password: pw, role: 'viewer' });
+    assert.strictEqual(create.status, 201);
+    otherId = (await create.json()).id;
+    otherCreated = true;
+    otherTok = jwt.sign({ id: otherId, username: otherName, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+
+    // Seed an email and hide it.
+    const put = await req('PUT', '/users/me/profile', { email: 'hidden@example.com', emailVisible: false }, { Authorization: `Bearer ${myTok}` });
+    assert.strictEqual(put.status, 200);
+    const me = await (await req('GET', '/users/me/profile', undefined, { Authorization: `Bearer ${myTok}` })).json();
+    assert.strictEqual(me.profile.email, 'hidden@example.com', 'owner still sees own email');
+    assert.strictEqual(me.profile.emailVisible, false);
+
+    // Identity fields are enriched on the read route.
+    const asOther = await (await req('GET', `/users/${myId}/profile`, undefined, { Authorization: `Bearer ${otherTok}` })).json();
+    assert.strictEqual(asOther.id, myId);
+    assert.strictEqual(asOther.username, myName);
+    assert.strictEqual(asOther.role, 'editor');
+    assert.strictEqual(asOther.profile.email, undefined, 'email withheld from other members when hidden');
+    assert.strictEqual(asOther.profile.emailVisible, false, 'toggle state stays visible so the UI can explain the hidden field');
+
+    // The admin surface is non-self too → filtered on this route, but the
+    // admin roster (/api/users) still carries the email as before.
+    const asAdmin = await (await reqAuth('GET', `/users/${myId}/profile`)).json();
+    assert.strictEqual(asAdmin.profile.email, undefined);
+    const roster = await (await reqAuth('GET', '/users')).json();
+    const rec = roster.find((u: any) => u.id === myId);
+    assert.strictEqual(rec.profile.email, 'hidden@example.com', 'admin roster keeps the email');
+
+    // Re-enable → visible to others again.
+    const on = await req('PUT', '/users/me/profile', { emailVisible: true }, { Authorization: `Bearer ${myTok}` });
+    assert.strictEqual(on.status, 200);
+    const asOther2 = await (await req('GET', `/users/${myId}/profile`, undefined, { Authorization: `Bearer ${otherTok}` })).json();
+    assert.strictEqual(asOther2.profile.email, 'hidden@example.com');
+
+    // Type guard: junk → 400, flag unchanged.
+    const junk = await req('PUT', '/users/me/profile', { emailVisible: 'yes' }, { Authorization: `Bearer ${myTok}` });
+    assert.strictEqual(junk.status, 400);
+
+    // null clears the flag → visible again by default.
+    const clear = await req('PUT', '/users/me/profile', { emailVisible: null }, { Authorization: `Bearer ${myTok}` });
+    assert.strictEqual(clear.status, 200);
+    const cleared = await (await req('GET', `/users/${myId}/profile`, undefined, { Authorization: `Bearer ${otherTok}` })).json();
+    assert.strictEqual(cleared.profile.emailVisible, undefined);
+    assert.strictEqual(cleared.profile.email, 'hidden@example.com');
   });
 
   test('avatar roundtrip: upload PNG → served → delete → 404', async () => {

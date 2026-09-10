@@ -14,7 +14,7 @@ export type ChatSocketEvent =
   | { type: 'typing'; channelId: string; user: { id: string; username: string } }
   | { type: 'read'; channelId: string; userId: string; msgId: string }
   | { type: 'pin'; channelId: string; msgId: string; pinned: boolean }
-  | { type: 'presence'; users: { id: string; username: string; role: string; displayName?: string }[] }
+  | { type: 'presence'; users: { id: string; username: string; role: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' }[] }
   | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write' };
 
 export interface TeamChatSocket {
