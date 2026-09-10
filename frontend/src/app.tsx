@@ -15,6 +15,7 @@ import {
   PencilRuler,
   Menu,
   ShieldAlert,
+  MessageCircle,
 } from 'lucide-preact';
 import { AuthProvider, useAuth } from './auth';
 import { VSCodeIcon, OpencodeIcon } from './components/brand-icons';
@@ -44,6 +45,7 @@ const Settings = lazy(() => import('./views/Settings').then(m => ({ default: m.S
 const Profile = lazy(() => import('./views/Profile').then(m => ({ default: m.Profile })));
 const Team = lazy(() => import('./views/Team').then(m => ({ default: m.Team })));
 const Planner = lazy(() => import('./views/Planner').then(m => ({ default: m.Planner })));
+const TeamChat = lazy(() => import('./views/Chat').then(m => ({ default: m.Chat })));
 
 
 interface ErrorBoundaryProps { children: ComponentChildren; }
@@ -212,6 +214,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       <nav class="sidebar-nav" onClick={onClose}>
         <NavButton href="/" label="Dashboard" icon={LayoutDashboard} />
         <NavButton href="/projects" label="Projects" icon={FolderOpen} />
+        <NavButton href="/chat" label="Team Chat" icon={MessageCircle} />
         <NavButton href="/planner" label="Planner" icon={PencilRuler} />
         <NavButton href="/agents" label="Agents" icon={Bot} />
         <NavButton label="opencode" icon={OpencodeIcon} newTabUrl={`${toolBase}:${ocPort}/`} />
@@ -306,6 +309,7 @@ function Shell() {
         <Suspense fallback={<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div class="dim" style="font-size:0.85rem">Loading…</div></div>}>
           <Route path="/" component={Dashboard} />
           <Route path="/projects" component={Projects} />
+          <Route path="/chat" component={TeamChat} />
         <Route path="/planner" component={Planner} />
           <Route path="/project/:slug" component={Project} />
           <Route path="/terminals" component={Terminals} />

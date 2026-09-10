@@ -129,6 +129,8 @@ import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkP
 import { attachWebSockets } from './ws/ws-server';
 import { getPresence } from './ws/ws-presence';
 import { saveAvatar, deleteAvatar, getAvatarPath, validAvatarUserId } from './services/avatar-store';
+import { registerChatTeamRoutes } from './services/chat-team-routes';
+import { removeUserChannels } from './services/chat-team-store';
 
 dotenv.config();
 
@@ -381,6 +383,9 @@ app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')) return next();
   authMiddleware(req, res, next);
 });
+
+// ── Team chat (live messaging + channels + attachments) ──────
+registerChatTeamRoutes(app);
 
 // Global security activity log — ADMIN ONLY. Regular users get the
 // account-scoped view at /api/auth/me/activity (Profile → Account Activity).
@@ -676,6 +681,7 @@ app.delete('/api/users/:userId', requireAdmin, userAdminLimiter, (req: any, res)
   const ok = deleteUser(req.params.userId);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
   deleteAvatar(req.params.userId); // best-effort avatar cleanup
+  removeUserChannels(req.params.userId).catch(() => { /* best-effort on chat state */ });
   recordAudit('user-deleted', true, req.ip, req.params.userId);
   res.json({ ok: true });
 });

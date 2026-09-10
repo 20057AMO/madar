@@ -36,6 +36,7 @@ import {
 import { ensureServeRunning, probeServe } from './project-serve';
 import { deriveServeState, type ServeState } from './serve-core';
 import { invalidateProjectsCache } from './projects-cache';
+import { ensureProjectChannel, deleteChannel } from './chat-team-store';
 
 const docker = new Docker(); // uses /var/run/docker.sock by default
 
@@ -488,6 +489,15 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
   delete savedMeta.crashWatch;
   saveMeta(slug, savedMeta);
 
+  // A project gets its own auto channel (project:<slug>) tied to its lifecycle —
+  // created here (create covers fresh + recreate + duplicate) so the team can
+  // discuss the project from the moment it exists. Never breaks creation.
+  try {
+    await ensureProjectChannel(slug, clean.name, userId);
+  } catch (e: any) {
+    console.warn(`[chat] could not create auto channel for '${slug}':`, e?.message || e);
+  }
+
   // If the persisted meta enables static-site serving, (re)start the serve
   // process now that the fresh container is up. Never throws — a failed serve
   // must not break creation. createProject also serves as the recreate path
@@ -722,6 +732,12 @@ export async function removeProject(slug: string): Promise<void> {
   removeWorkspaceDir(projectSlug);
   unregisterOpencodeProject(projectSlug);
   purgeOpencodeProjectRows([projectSlug]);
+  // The project's auto channel dies with it (messages + uploads reclaimed).
+  try {
+    await deleteChannel(`project:${projectSlug}`);
+  } catch (e: any) {
+    console.warn(`[chat] could not delete auto channel for '${projectSlug}':`, e?.message || e);
+  }
   dispatchWebhook('deleted', {
     event: 'deleted',
     slug: projectSlug,

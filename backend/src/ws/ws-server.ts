@@ -15,6 +15,7 @@ import { handleAgentSocket } from './ws-agent';
 import { handleProjectStatusSocket, shutdownProjectStatusBroadcasters } from './ws-project-status';
 import { handleProjectsStatusSocket, shutdownProjectsStatusBroadcaster } from './ws-projects-status';
 import { handlePresenceSocket } from './ws-presence';
+import { handleChatTeamSocket } from './ws-chat-team';
 import { verifyToken } from '../services/user-store';
 
 /** Interactive rooms (chat/terminal/logs/agent/presence) stay at 8. */
@@ -179,6 +180,21 @@ export function attachWebSockets(server: http.Server): void {
         return;
       }
       handlePresenceSocket(ws, slug, token, releaseRoom(room));
+      return;
+    }
+
+    const chatTeamMatch = url.pathname.match(/^\/ws\/chat-team$/);
+    if (chatTeamMatch) {
+      if (!authUser) {
+        ws.close(1008, 'invalid token');
+        return;
+      }
+      const room = 'chat-team:global';
+      if (!acquireRoom(room, 200)) {
+        ws.close(1013, 'too many connections for team chat');
+        return;
+      }
+      handleChatTeamSocket(ws, authUser, releaseRoom(room));
       return;
     }
 

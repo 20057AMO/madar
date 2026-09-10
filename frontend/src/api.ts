@@ -1212,3 +1212,152 @@ export const emptyTrash = () =>
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
   });
+
+// ── Team chat (live team messaging) ────────────────────────────
+export type ChatChannelKind = 'channel' | 'project' | 'direct';
+
+export interface ChatChannelMember {
+  userId: string;
+  role: string;
+  username: string;
+  displayName?: string;
+  avatarExt?: 'png' | 'jpg' | 'webp' | null;
+}
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  kind: 'image' | 'file';
+  size: number;
+}
+
+export interface TeamChatMessage {
+  id: string;
+  userId: string;
+  username: string;
+  text: string;
+  replyTo?: string;
+  mentions?: string[];
+  attachments?: ChatAttachment[];
+  pinned?: boolean;
+  createdAt: string;
+}
+
+export interface ChatChannel {
+  id: string;
+  kind: ChatChannelKind;
+  name?: string;
+  projectSlug?: string;
+  members: ChatChannelMember[];
+  createdBy?: string;
+  createdAt: string;
+  lastMessageAt?: string;
+  unread?: number;
+  firstUnreadId?: string;
+}
+
+/** All channels the user can see, with unread counts. */
+export const listChatChannels = () => api<{ channels: ChatChannel[] }>('/api/chat-team/channels');
+
+/** Create a team-wide manual channel (editor+). */
+export const createChatChannel = (name: string) =>
+  api<{ channel: ChatChannel }>('/api/chat-team/channels', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+
+/** Open (or already-existing) direct 1:1 conversation. */
+export const openDirectChat = (withUserId: string) =>
+  api<{ channel: ChatChannel }>('/api/chat-team/direct', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ with: withUserId }),
+  });
+
+export const getChatChannel = (channelId: string) =>
+  api<{ channel: ChatChannel }>(`/api/chat-team/channels/${encodeURIComponent(channelId)}`);
+
+export const deleteChatChannel = (channelId: string) =>
+  api<{ ok: boolean }>(`/api/chat-team/channels/${encodeURIComponent(channelId)}`, { method: 'DELETE' });
+
+export const getChatMessages = (channelId: string, opts?: { limit?: number; before?: string }) => {
+  const q = new URLSearchParams();
+  if (opts?.limit) q.set('limit', String(opts.limit));
+  if (opts?.before) q.set('before', opts.before);
+  const qs = q.toString();
+  return api<{ messages: TeamChatMessage[] }>(
+    `/api/chat-team/channels/${encodeURIComponent(channelId)}/messages${qs ? `?${qs}` : ''}`
+  );
+};
+
+export const searchChatMessages = (channelId: string, query: string) =>
+  api<{ messages: TeamChatMessage[] }>(
+    `/api/chat-team/channels/${encodeURIComponent(channelId)}/search?q=${encodeURIComponent(query)}`
+  );
+
+export const sendChatMessage = (channelId: string, body: { text: string; replyTo?: string; attachments?: { id: string; name: string }[] }) =>
+  api<{ message: TeamChatMessage }>('/api/chat-team/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channelId, ...body }),
+  });
+
+export const pinChatMessage = (channelId: string, msgId: string, pinned: boolean) =>
+  api<{ message: TeamChatMessage }>(
+    `/api/chat-team/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(msgId)}/pin`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    }
+  );
+
+export const markChatRead = (channelId: string, msgId: string) =>
+  api<{ ok: boolean }>(`/api/chat-team/channels/${encodeURIComponent(channelId)}/read`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ msgId }),
+  });
+
+/** Upload a message attachment (returns id/kind/size to attach by reference). */
+export const uploadChatAttachment = (channelId: string, file: Blob) => {
+  const fd = new FormData();
+  fd.append('channelId', channelId);
+  fd.append('file', file, file instanceof File ? file.name : 'file');
+  return api<{ attachment: ChatAttachment }>('/api/chat-team/upload', { method: 'POST', body: fd });
+};
+
+/** Authenticated attachment URL (raw bytes; a token is never in the URL). */
+export const chatAttachmentUrl = (attachmentId: string): string => `/api/chat-team/uploads/${attachmentId}`;
+
+const _chatBlob = new Map<string, Promise<string>>();
+/**
+ * Fetch an authenticated attachment and return a cached object URL.
+ * The uploads route sits behind authMiddleware, so `<img>` cannot load it
+ * directly — the token must ride the fetch header. Blob URLs are cached per
+ * attachment id so repeated renders don't re-download.
+ */
+export function chatAttachmentObjectUrl(attachmentId: string): Promise<string> {
+  const cached = _chatBlob.get(attachmentId);
+  if (cached) return cached;
+  const p = fetch(chatAttachmentUrl(attachmentId), {
+    headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
+  })
+    .then((r) => {
+      if (!r.ok) throw new Error('Failed to load attachment');
+      return r.blob();
+    })
+    .then((blob) => URL.createObjectURL(blob));
+  _chatBlob.set(attachmentId, p);
+  p.catch(() => _chatBlob.delete(attachmentId));
+  return p;
+}
+
+/** Current online team-chat users (labels only). */
+export interface ChatPresenceUser {
+  userId: string;
+  username: string;
+  displayName?: string;
+}
+export const getChatTeamPresence = () => api<{ users: ChatPresenceUser[] }>('/api/chat-team/presence');
