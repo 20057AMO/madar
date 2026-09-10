@@ -270,9 +270,9 @@ describe('project chat access control (membership + roles)', () => {
     assert.ok(slug, 'a slug must be resolvable');
   });
 
-  test('setup: create outsider editor + member viewer users', async () => {
+  test('setup: create outsider viewer + member viewer users', async () => {
     viewerId = await createUser(`wsacc-viewer-${Date.now().toString(36)}`, 'viewer');
-    outsiderId = await createUser(`wsacc-outsider-${Date.now().toString(36)}`, 'editor');
+    outsiderId = await createUser(`wsacc-outsider-${Date.now().toString(36)}`, 'viewer');
     await addMember(viewerId, 'viewer');
   });
 
@@ -280,7 +280,7 @@ describe('project chat access control (membership + roles)', () => {
     `${WS_BASE}/ws/chat/${targetSlug}/${Date.now().toString(36)}?token=${encodeURIComponent(token)}`;
 
   test('non-member token → chat room closed with 1008 (no replay leaked)', async () => {
-    const ws = new WebSocket(chatUrl(slug, mintUserToken(outsiderId, 'outsider', 'editor')));
+    const ws = new WebSocket(chatUrl(slug, mintUserToken(outsiderId, 'outsider', 'viewer')));
     await new Promise<void>((resolve, reject) => {
       const to = setTimeout(() => { try { ws.terminate(); } catch { /* gone */ } reject(new Error('socket not closed within 5s')); }, 5000);
       ws.on('error', () => { /* handshake error path */ });

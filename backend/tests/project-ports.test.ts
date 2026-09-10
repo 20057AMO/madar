@@ -12,7 +12,7 @@ import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL 
  * create → edit → recreate → rebind roundtrip, self-exclusion collision rules
  * (including OTHER projects' STALE LIVE bindings — a port mid-rebind still
  * physically belongs to the old container), stopped-project reservation,
- * snapshot manifest fidelity, and the access matrix (non-member editor 403,
+ * snapshot manifest fidelity, and the access matrix (non-member viewer 403,
  * viewer member 403, editor member allowed).
  *
  * p1 is mutated sequentially through the editable set: 8901 → 8902 → 8910 →
@@ -281,10 +281,10 @@ describe('Project published-ports editing', () => {
     assert.deepStrictEqual(project.ports, []);
   });
 
-  test('access matrix: non-member editor 403, viewer member 403, editor member 200', async () => {
-    const outsider = memberAuth('ports-outsider-user', 'ports-outsider', 'editor');
+  test('access matrix: non-member viewer 403, viewer member 403, editor member 200', async () => {
+    const outsider = memberAuth('ports-outsider-user', 'ports-outsider', 'viewer');
     const out = await req('PUT', `/projects/${p1}/ports`, { ports: [EDITOR_EDIT] }, outsider.headers);
-    assert.strictEqual(out.status, 403, 'non-member editor must be denied');
+    assert.strictEqual(out.status, 403, 'non-member viewer must be denied');
 
     const viewer = memberAuth(viewerUser.id, viewerUser.username, 'viewer');
     const v = await req('PUT', `/projects/${p1}/ports`, { ports: [EDITOR_EDIT] }, viewer.headers);

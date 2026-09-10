@@ -43,8 +43,10 @@ export function requireRole(minRole: UserRole) {
 
 /**
  * Check if a user has access to a project.
- * System admins always have access. Otherwise the user must be a member.
- * If the project has no membership data (legacy), all authenticated users are allowed.
+ * System admins always have access. System editors are global editors: they have
+ * write access to every project (level 'editor'), without needing membership.
+ * Any other user must be a member. If the project has no membership data (legacy),
+ * all authenticated users are allowed.
  * minRole: 'viewer' (default read) | 'editor' (write) | 'admin' (manage members).
  */
 export function checkProjectAccess(
@@ -54,6 +56,10 @@ export function checkProjectAccess(
   minRole: 'admin' | 'editor' | 'viewer' = 'viewer'
 ): { allowed: boolean; memberRole?: string } {
   if (userRole === 'admin') return { allowed: true, memberRole: 'admin' };
+  // Global editor: write-level access to every project without membership.
+  if (userRole === 'editor') {
+    return { allowed: minRole !== 'admin', memberRole: 'editor' };
+  }
 
   const meta = loadMeta(slug);
   // Legacy projects without membership data: allow all authenticated users

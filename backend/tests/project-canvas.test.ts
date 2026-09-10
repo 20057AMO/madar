@@ -8,7 +8,7 @@ import type { CanvasNode, ProjectCanvas } from '../src/services/project-canvas.t
  * Project canvas (visual planning): fresh empty doc, PUT/GET roundtrip with
  * positions/colors/done preserved, junk normalization + numeric clamps,
  * payload 400s (missing arrays / over caps / non-object), access control
- * (member viewer read-only, editor writes, outsider 403), canvasEditedAt on
+ * (member viewer read-only, editor writes, non-member viewer 403), canvasEditedAt on
  * the project list, and the pure context formatter.
  */
 
@@ -160,19 +160,19 @@ test('canvas rejected: missing arrays, oversized payload, non-object body all 40
   }
 });
 
-test('canvas access control: member viewer read-only, editor writes, outsider 403', async () => {
+test('canvas access control: member viewer read-only, editor writes, non-member viewer 403', async () => {
   const slug = await createTestProject('canvas-acl');
 
   // Members must be real users (the members route validates existence).
   const mkUser = async (name: string, role: string): Promise<{ id: string; username: string }> => {
-    const create = await reqAuth('POST', '/users', { username: name, password: 'canvas-test-pw' });
+    const create = await reqAuth('POST', '/users', { username: name, password: 'canvas-test-pw', role });
     assert.strictEqual(create.status, 201, `create user ${name}: ${create.status}`);
     const u = (await create.json()) as { id: string; username: string };
     return { id: u.id, username: u.username };
   };
   const viewer = await mkUser(uniqueId('canvas-viewer'), 'viewer');
   const editor = await mkUser(uniqueId('canvas-editor'), 'editor');
-  const outsiderUser = await mkUser(uniqueId('canvas-outsider'), 'editor');
+  const outsiderUser = await mkUser(uniqueId('canvas-outsider'), 'viewer');
 
   const tokenFor = (u: { id: string; username: string }, role: string) =>
     jwt.sign({ id: u.id, username: u.username, role, tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
@@ -186,7 +186,7 @@ test('canvas access control: member viewer read-only, editor writes, outsider 40
 
   // Outsider (real user, not a member): 403 even for read.
   const outsiderRes = await req('GET', `/projects/${slug}/canvas`, undefined, {
-    Authorization: `Bearer ${tokenFor(outsiderUser, 'editor')}`,
+    Authorization: `Bearer ${tokenFor(outsiderUser, 'viewer')}`,
   });
   assert.strictEqual(outsiderRes.status, 403, 'outsider cannot even read');
 

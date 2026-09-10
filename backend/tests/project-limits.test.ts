@@ -14,7 +14,7 @@ import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL 
  *  - Creation-time limits and duplicate-source limits apply right away.
  *  - Snapshot manifests deliberately do NOT carry limits (a restore on a
  *    fresh machine starts unconstrained).
- *  - Access matrix: non-member editor 403, viewer member 403, editor member 200.
+ *  - Access matrix: non-member viewer 403, viewer member 403, editor member 200.
  *
  * p1 starts UNLIMITED and is mutated sequentially: edit cpu+memory → recreate →
  * re-persist (clean) → partial edit (memory only, cpu survives) → remove cpu →
@@ -264,10 +264,10 @@ describe('Project resource limits (CPU/memory)', () => {
     assert.deepStrictEqual(dupProj.liveLimits, dupProj.limits, 'duplicate applies them at creation');
   });
 
-  test('access matrix: non-member editor 403, viewer member 403, editor member 200', async () => {
-    const outsider = memberAuth('lim-outsider-user', 'lim-outsider', 'editor');
+  test('access matrix: non-member viewer 403, viewer member 403, editor member 200', async () => {
+    const outsider = memberAuth('lim-outsider-user', 'lim-outsider', 'viewer');
     const out = await req('PUT', `/projects/${p1}/limits`, { cpu: '1' }, outsider.headers);
-    assert.strictEqual(out.status, 403, 'non-member editor must be denied');
+    assert.strictEqual(out.status, 403, 'non-member viewer must be denied');
 
     const viewer = memberAuth(viewerUser.id, viewerUser.username, 'viewer');
     const v = await req('PUT', `/projects/${p1}/limits`, { cpu: '1' }, viewer.headers);

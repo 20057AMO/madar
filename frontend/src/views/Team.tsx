@@ -19,10 +19,14 @@ import {
 import { Avatar } from '../components/Avatar';
 import { ReAuthModal } from '../components/ReAuthModal';
 
-const ROLE_CONFIG: Record<UserRole, { label: string; color: string }> = {
-  admin: { label: 'Admin', color: '#f59e0b' },
-  editor: { label: 'Editor', color: '#3b82f6' },
-  viewer: { label: 'Viewer', color: '#6b7280' },
+const ROLE_CONFIG: Record<UserRole, { label: string; color: string; hint: string }> = {
+  admin: { label: 'Admin', color: '#f59e0b', hint: 'Full access — users, settings, providers and all projects.' },
+  editor: {
+    label: 'Editor',
+    color: '#3b82f6',
+    hint: 'Global editor — writes to every project; cannot manage users, settings, providers, or delete others’ projects.',
+  },
+  viewer: { label: 'Viewer', color: '#6b7280', hint: 'Read-only on the projects they are added to.' },
 };
 
 export function Team() {
@@ -203,6 +207,7 @@ export function Team() {
                 );
               })}
             </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{ROLE_CONFIG[newRole].hint}</div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
                 class="btn btn-primary"
@@ -248,10 +253,13 @@ export function Team() {
                     color: cfg.color,
                     fontWeight: 600,
                   }}>
-                    {cfg.label}
+                    {cfg.label}{u.role === 'editor' ? ' · global' : ''}
                   </span>
                 </div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>
+                  {cfg.hint}
+                </div>
+                <div style={{ fontSize: '0.6875rem', color: 'rgba(255,255,255,0.3)', marginTop: '0.125rem' }}>
                   Joined {new Date(u.createdAt).toLocaleDateString()}
                 </div>
                 {u.memberships && u.memberships.length > 0 && (
@@ -309,7 +317,7 @@ export function Team() {
                     }}
                   >
                     <option value="admin">Admin</option>
-                    <option value="editor">Editor</option>
+                    <option value="editor">Editor (Global)</option>
                     <option value="viewer">Viewer</option>
                   </select>
                   <button

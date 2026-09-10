@@ -57,7 +57,7 @@ import { CrashBadge } from '../components/CrashBadge';
 import { useAuth } from '../auth';
 import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
-import { VSCodeIcon } from '../components/brand-icons';
+import { VSCodeIcon, OpencodeIcon } from '../components/brand-icons';
 
 type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'snapshots' | 'canvas';
 
@@ -335,6 +335,10 @@ export function Project({ params }: { params: { slug: string } }) {
 
   const [moreOpen, setMoreOpen] = useState(false);
   const headerMoreWrap = useRef<HTMLDivElement | null>(null);
+
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportWrap = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!moreOpen) return;
     const onDoc = (e: MouseEvent) => {
@@ -348,6 +352,20 @@ export function Project({ params }: { params: { slug: string } }) {
       document.removeEventListener('keydown', onKey);
     };
   }, [moreOpen]);
+
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (exportWrap.current && !exportWrap.current.contains(e.target as Node)) setExportOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExportOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [exportOpen]);
 
   const handleExport = async () => {
     if (exporting) return;
@@ -392,6 +410,11 @@ export function Project({ params }: { params: { slug: string } }) {
     // "#/ide?folder=/workspaces/<slug>" keeps the query inside the hash where
     // EmbeddedIDE's handler parses it.
     window.location.hash = `/ide?folder=${encodeURIComponent(folder)}`;
+  };
+
+  const openOpencode = () => {
+    const folder = subdirInfo?.hostPath || `/workspaces/${slug}`;
+    window.location.hash = `/opencode?folder=${encodeURIComponent(folder)}`;
   };
 
   const copy = async (text: string) => {
@@ -513,34 +536,57 @@ export function Project({ params }: { params: { slug: string } }) {
               <span class={`status-badge ${project?.status || 'missing'}`}>{project?.status || '…'}</span>
               {project?.crash && <CrashBadge crash={project.crash} />}
               {wsConnected && <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" />}
-              {onlineUsers.length > 0 && (
-                <span class="presence-indicator" role="status" title={onlineUsers.map(u => u.username).join(', ')}>
-                  {onlineUsers.map(u => (
-                    <span class="presence-dot" key={u.id}>
-                      <span class="presence-avatar">{u.username.charAt(0).toUpperCase()}</span>
-                      <span class="presence-online-dot" />
-                    </span>
-                  ))}
-                  <span class="presence-count">{onlineUsers.length} online</span>
-                </span>
-              )}
+               {onlineUsers.length > 0 && (
+                 <div class="presence-indicator" role="status">
+                   <div class="presence-avatar-stack">
+                     {onlineUsers.slice(0, 5).map(u => (
+                       <span class="presence-avatar-wrap" key={u.id} title={u.username}>
+                         <span class="presence-avatar">{u.username.charAt(0).toUpperCase()}</span>
+                         <span class="presence-online-dot" />
+                       </span>
+                     ))}
+                     {onlineUsers.length > 5 && (
+                       <span class="presence-avatar-wrap presence-avatar-more" title={`${onlineUsers.length - 5} more online`}>
+                         <span class="presence-avatar">+{onlineUsers.length - 5}</span>
+                       </span>
+                     )}
+                   </div>
+                   <span class="presence-count">{onlineUsers.length} online</span>
+                 </div>
+               )}
             </div>
           </div>
         </div>
         <div class="detail-actions">
-          <div class="header-overflow">
-            <button class="btn-ghost sm" onClick={openIde} >
-              <VSCodeIcon width={13} height={13} class="icon" /> Open With 
-            </button>
-            <span class="detail-action-sep" aria-hidden="true" />
-            <button class="btn-ghost sm" onClick={handleExport} disabled={exporting || readOnly} title={readOnly ? 'Viewer — backup requires editor access' : 'Download a snapshot of the project as tar.gz'}>
-              <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Backup'}
-            </button>
-            <span class="detail-action-sep" aria-hidden="true" />
-            <button class="btn-ghost sm" onClick={handleZip} disabled={zipping || readOnly} title={readOnly ? 'Viewer — download requires editor access' : 'Download workspace as ZIP'}>
-              <FileArchive width={13} height={13} class="icon" /> {zipping ? 'Zipping…' : 'ZIP'}
-            </button>
-          </div>
+           <div class="header-overflow">
+             <button class="btn-ghost sm" onClick={openIde} >
+               <VSCodeIcon width={13} height={13} class="icon" /> Open With 
+             </button>
+             <button class="btn-ghost sm" onClick={openOpencode} >
+               <OpencodeIcon width={13} height={13} class="icon" /> Opencode
+             </button>
+             <span class="detail-action-sep" aria-hidden="true" />
+             <span style={{ position: 'relative', display: 'inline-block' }} ref={exportWrap}>
+               <button 
+                 class="btn-ghost sm" 
+                 onClick={() => setExportOpen(!exportOpen)} 
+                 disabled={readOnly}
+                 title={readOnly ? 'Viewer — export requires editor access' : 'Export project data'}
+               >
+                 <Download width={13} height={13} class="icon" /> Export
+               </button>
+               {exportOpen && (
+                 <div class="header-menu" role="menu" style={{ right: 'auto', left: 0 }}>
+                   <button role="menuitem" onClick={() => { setExportOpen(false); handleExport(); }} disabled={exporting}>
+                     <Download width={13} height={13} class="icon" /> {exporting ? 'Backing up…' : 'Snapshot (Backup)'}
+                   </button>
+                   <button role="menuitem" onClick={() => { setExportOpen(false); handleZip(); }} disabled={zipping}>
+                     <FileArchive width={13} height={13} class="icon" /> {zipping ? 'Zipping…' : 'Files (ZIP)'}
+                   </button>
+                 </div>
+               )}
+             </span>
+           </div>
           <span class="header-more-wrap" ref={headerMoreWrap}>
             <button
               class="btn-ghost sm icon-only header-more"

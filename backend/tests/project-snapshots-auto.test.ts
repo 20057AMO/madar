@@ -14,8 +14,8 @@ const createdSlugs: string[] = [];
 const AUTO_PORT = 8775;
 const FILE_RE = /^madar-[a-z0-9][a-z0-9._-]{0,63}-\d{17}\.tar\.gz$/;
 
-function editorAuth() {
-  const token = jwt.sign({ id: 'auto-editor-user', username: 'auto-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+function outsiderAuth() {
+  const token = jwt.sign({ id: 'auto-outsider-user', username: 'auto-outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
   return { headers: { ...authHeaders(), Authorization: `Bearer ${token}` } };
 }
 
@@ -223,7 +223,7 @@ describe('Project snapshot automation (scheduled server-side backups)', () => {
   });
 
   test('access control: member viewer can list/config but not capture/restore; outsider denied', async () => {
-    const out = editorAuth(); // editor that is NOT a member
+    const out = outsiderAuth(); // viewer that is NOT a member
 
     // Create a real viewer user (required as a project member) and clean up.
     const viewerName = uniqueId('auto-viewer');
@@ -262,9 +262,9 @@ describe('Project snapshot automation (scheduled server-side backups)', () => {
     const outCfg = await cfgGet(slug, out.headers);
     assert.strictEqual(outCfg.status, 403, 'non-member denied reading schedule');
 
-    // Non-member editor cannot capture either.
+    // Non-member viewer cannot capture either.
     const outCap = await capture(slug, out.headers);
-    assert.strictEqual(outCap.status, 403, 'non-member editor cannot capture');
+    assert.strictEqual(outCap.status, 403, 'non-member viewer cannot capture');
 
     // Clean up the temp viewer user.
     try { await reqAuth('DELETE', `/users/${viewerId}`); } catch { /* best effort */ }

@@ -264,14 +264,14 @@ describe('Project static-site serve (python3 http.server)', () => {
     assert.strictEqual(after.json.serve.active, true, 'serve auto-recovered after the start');
   });
 
-  test('access matrix: outsider editor 403 on all routes, viewer member 403 on writes but 200 on status', async () => {
-    const outsider = memberAuth('srv-outsider-user', 'srv-outsider', 'editor');
+  test('access matrix: outsider viewer 403 on all routes, viewer member 403 on writes but 200 on status', async () => {
+    const outsider = memberAuth('srv-outsider-user', 'srv-outsider', 'viewer');
     const oStart = await postServe(p1, { port: P1_PORT }, outsider.headers);
-    assert.strictEqual(oStart.status, 403, 'outsider editor POST /serve → 403');
+    assert.strictEqual(oStart.status, 403, 'outsider viewer POST /serve → 403');
     const oStop = await stopServe(p1, outsider.headers);
-    assert.strictEqual(oStop.status, 403, 'outsider editor POST /serve/stop → 403');
+    assert.strictEqual(oStop.status, 403, 'outsider viewer POST /serve/stop → 403');
     const oGet = await getServe(p1, outsider.headers);
-    assert.strictEqual(oGet.status, 403, 'outsider editor GET /serve → 403');
+    assert.strictEqual(oGet.status, 403, 'outsider viewer GET /serve → 403');
 
     const viewer = memberAuth(viewerUser.id, viewerUser.username, 'viewer');
     const vStart = await postServe(p1, { port: P1_PORT }, viewer.headers);

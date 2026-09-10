@@ -16,11 +16,6 @@ const createdSlugs: string[] = [];
 const SNAP_PORT = 8774;
 let snapshotGzip: Buffer;
 
-function editorAuth() {
-  const token = jwt.sign({ id: 'snap-editor-user', username: 'snap-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-  return { headers: { ...authHeaders(), Authorization: `Bearer ${token}` } };
-}
-
 function viewerAuth() {
   const token = jwt.sign({ id: 'snap-viewer-user', username: 'snap-viewer', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
   return { headers: { ...authHeaders(), Authorization: `Bearer ${token}` } };
@@ -110,9 +105,9 @@ describe('Project snapshots (export / restore)', () => {
     assert.strictEqual(res.status, 404);
   });
 
-  test('access control: non-member editor cannot export (403), viewer cannot import (403)', async () => {
-    const exp = await req('GET', `/projects/${srcSlug}/export`, undefined, editorAuth().headers);
-    assert.strictEqual(exp.status, 403, 'non-member editor must be denied export');
+  test('access control: non-member viewer cannot export (403), viewer cannot import (403)', async () => {
+    const exp = await req('GET', `/projects/${srcSlug}/export`, undefined, viewerAuth().headers);
+    assert.strictEqual(exp.status, 403, 'non-member viewer must be denied export');
 
     const fd = new FormData();
     fd.append('file', new Blob([Buffer.from('x')]), 'x.tar.gz');
