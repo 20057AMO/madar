@@ -30,6 +30,8 @@ const ROLE_CONFIG: Record<UserRole, { label: string; color: string; hint: string
   viewer: { label: 'Viewer', color: '#6b7280', hint: 'Read-only on the projects they are added to.' },
 };
 
+const ROLE_ORDER: Record<UserRole, number> = { admin: 3, editor: 2, viewer: 1 };
+
 export function Team() {
   const { user: currentUser } = useAuth();
   const isAdmin = currentUser?.role === 'admin';
@@ -116,6 +118,14 @@ export function Team() {
       setError(err.message || 'Failed to delete user');
     }
   }
+
+  // Role-aware ordering: admins first, then editors, then viewers, joined
+  // date as the tiebreaker — a manager scanning the roster sees the hierarchy.
+  const sortedUsers = [...users].sort(
+    (a, b) =>
+      (ROLE_ORDER[b.role] || 0) - (ROLE_ORDER[a.role] || 0) ||
+      String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+  );
 
   if (loading) {
     return (
@@ -225,7 +235,7 @@ export function Team() {
       )}
 
       <div style={{ display: 'grid', gap: '0.5rem' }}>
-        {users.map((u) => {
+        {sortedUsers.map((u) => {
           const isMe = u.id === currentUser?.id;
           const cfg = ROLE_CONFIG[u.role];
           return (

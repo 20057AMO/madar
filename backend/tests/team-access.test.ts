@@ -55,6 +55,7 @@ describe('Project team & access control (real Docker container)', () => {
   let editorToken = '';
   let viewerToken = '';
   let created = false;
+  let ownerTransferred = false;
 
   after(async () => {
     if (created) {
@@ -288,21 +289,91 @@ describe('Project team & access control (real Docker container)', () => {
     assert.strictEqual(res.status, 200);
   });
 
-  // ── Ownership transfer ──────────────────────────────────────
-  test('owner transfers ownership to the editor', async () => {
+  // ── Ownership transfer (sudo op) ────────────────────────────
+  test('transfer-owner requires the account password (400)', async () => {
     const res = await reqAuth('POST', `/projects/${slug}/transfer-owner`, { userId: editorId });
-    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.status, 400, `transfer without password: ${res.status}`);
+    const body = await res.json();
+    assert.match(String(body.error || ''), /password/i);
+  });
+
+  test('transfer-owner rejects a wrong account password (401)', async () => {
+    const res = await reqAuth('POST', `/projects/${slug}/transfer-owner`, {
+      userId: editorId,
+      accountPassword: 'definitely-not-the-password',
+    });
+    assert.strictEqual(res.status, 401, `transfer wrong password: ${res.status}`);
+    const body = await res.json();
+    assert.match(String(body.error || ''), /incorrect/i);
+  });
+
+  test('an admin member passes the transfer gate (sudo still demanded → 401 on a forged session)', async () => {
+    // Project-admins manage membership, so the transfer gate must open for an
+    // admin member too (not just owner/system-admin) — then STILL demand the
+    // acting user's real password. A viewer member, by contrast, stays 403.
+    const up = await reqAuth('POST', `/projects/${slug}/members`, { userId: editorId, role: 'admin' });
+    assert.strictEqual(up.status, 200, `upgrade editor to admin member: ${up.status}`);
+
+    const res = await req('POST', `/projects/${slug}/transfer-owner`, { userId: viewerId, accountPassword: 'x' }, runAs(editorToken).headers);
+    assert.strictEqual(res.status, 401, `admin-member transfer gate: expected 401 (sudo), got ${res.status}`);
+    const body = await res.json();
+    assert.match(String(body.error || ''), /incorrect/i);
+  });
+
+  test('owner transfers ownership to the editor (sudo; real admin login, self-skips)', async (t) => {
+    // Transfer is now a sudo op: verifyAccountPassword validates the ACTING
+    // owner's own password, so we need a real session (forged tokens resolve to
+    // an unknown id). Mirror the role-change test pattern.
+    const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
+    const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
+    const loginData = await loginRes.json();
+    if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
+    const realAdmin = { headers: { ...authHeaders(), Authorization: `Bearer ${loginData.token}` } };
+
+    const res = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: pw }, realAdmin.headers);
+    assert.strictEqual(res.status, 200, `transfer with correct password: ${res.status}`);
     const data = await res.json();
     assert.strictEqual(data.ok, true);
     assert.strictEqual(data.ownerId, editorId);
+    ownerTransferred = true;
+
+    // Deterministic ownership: the new owner is an explicit admin member AND
+    // the former owner stays an explicit admin member — a legacy project with
+    // no members row for the old owner must never lose silent access.
+    const members = await (await req('GET', `/projects/${slug}/members`, undefined, realAdmin.headers)).json();
+    const editorRow = (members.members as any[]).find((m: any) => m.userId === editorId);
+    assert.strictEqual(editorRow.role, 'admin', 'new owner is an admin member');
+    assert.ok(
+      (members.members as any[]).some((m: any) => m.userId !== editorId && m.userId !== viewerId && m.role === 'admin'),
+      'former owner remains an explicit admin member'
+    );
+  });
+
+  test('transferring to the current owner is refused (400)', async (t) => {
+    if (!ownerTransferred) return t.skip('requires the sudo transfer above (WSD_TEST_ACCOUNT_PASSWORD)');
+    const res = await reqAuth('POST', `/projects/${slug}/transfer-owner`, { userId: editorId });
+    assert.strictEqual(res.status, 400, `self-transfer: ${res.status}`);
+    const body = await res.json();
+    assert.match(String(body.error || ''), /already the project owner/i);
   });
 
   test('new owner has admin rights on the project', async () => {
-    // Re-add editor as a member so we can confirm project-admin powers.
+    // Re-add editor as an explicit admin member so we can confirm project-admin
+    // powers regardless of whether the sudo transfer above ran.
     await reqAuth('POST', `/projects/${slug}/members`, { userId: editorId, role: 'admin' });
     const res = await req('POST', `/projects/${slug}/members`, { userId: viewerId, role: 'viewer' }, runAs(editorToken).headers);
-    // As owner the editor is a project admin now → can add members.
+    // As owner (or admin member) the editor is a project admin → can add members.
     assert.strictEqual(res.status, 200);
+  });
+
+  test('deleting a user who owns a project is refused (400)', async (t) => {
+    // The owner-delete guard: while the editor owns the project, admin DELETE
+    // /users/:id must refuse with the project name instead of orphaning it.
+    if (!ownerTransferred) return t.skip('requires the sudo transfer above (WSD_TEST_ACCOUNT_PASSWORD)');
+    const res = await reqAuth('DELETE', `/users/${editorId}`);
+    assert.strictEqual(res.status, 400, `owner delete: ${res.status}`);
+    const body = await res.json();
+    assert.match(String(body.error || ''), /own projects/i);
   });
 
   test('delete removes the project (cleanup marker)', async () => {

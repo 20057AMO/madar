@@ -196,6 +196,21 @@ export async function addChannelMember(channelId: string, userId: string, role: 
   });
 }
 
+/** Update an existing member's role, or add them (data-only — access derives
+ * live from checkProjectAccess). Used on ownership transfer to keep the old
+ * owner's listed role honest. */
+export async function setChannelMemberRole(channelId: string, userId: string, role: ChannelMember['role']): Promise<void> {
+  await withFileLockAsync(`channel:${channelId}`, async () => {
+    const all = readChannelsRaw().channels;
+    const ch = all.find((c) => c.id === channelId);
+    if (!ch) return;
+    const member = ch.members.find((m) => m.userId === userId);
+    if (member) member.role = role;
+    else ch.members.push({ userId, role });
+    writeChannelsRaw({ channels: all });
+  });
+}
+
 /** Remove a deleted project's auto-channel + its messages + uploads. */
 export async function deleteChannel(channelId: string): Promise<void> {
   const cid = isChannelId(channelId) ? channelId : '';

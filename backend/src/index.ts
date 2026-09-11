@@ -130,7 +130,7 @@ import { attachWebSockets } from './ws/ws-server';
 import { getPresence } from './ws/ws-presence';
 import { saveAvatar, deleteAvatar, getAvatarPath, validAvatarUserId } from './services/avatar-store';
 import { registerChatTeamRoutes } from './services/chat-team-routes';
-import { removeUserChannels } from './services/chat-team-store';
+import { removeUserChannels, ensureProjectChannel, setChannelMemberRole } from './services/chat-team-store';
 
 dotenv.config();
 
@@ -677,6 +677,22 @@ app.delete('/api/users/:userId', requireAdmin, userAdminLimiter, (req: any, res)
   // Prevent admin from deleting themselves
   if (req.params.userId === req.user?.id) {
     return res.status(400).json({ error: 'Cannot delete your own account.' });
+  }
+  if (!getUserInfo(req.params.userId)) {
+    return res.status(404).json({ error: 'User not found.' });
+  }
+  // Users who own projects must hand them over first — deleting them would
+  // leave a dangling ownerId (an orphaned project nobody can transfer but a
+  // system admin). Refuse with the project names so the admin knows what to do.
+  const owned: string[] = [];
+  for (const slug of listMetaSlugs()) {
+    const meta = loadMeta(slug);
+    if (meta && meta.ownerId === req.params.userId && meta.name) owned.push(meta.name);
+  }
+  if (owned.length) {
+    return res.status(400).json({
+      error: `Cannot delete this user while they own projects: ${owned.join(', ')}. Transfer ownership first.`,
+    });
   }
   const ok = deleteUser(req.params.userId);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
@@ -1636,16 +1652,25 @@ app.delete('/api/projects/:slug/members/:userId', (req: any, res) => {
   }
 });
 
-// Transfer ownership
-app.post('/api/projects/:slug/transfer-owner', (req: any, res) => {
+// Transfer ownership — a sudo op: the acting owner/admin must re-confirm their
+// account password (rate-limited via authLimiter) exactly like a role change,
+// so a stolen/forgotten session can't silently hand a project away.
+app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, async (req: any, res) => {
   try {
     const meta = loadMeta(req.params.slug);
     if (!meta) return res.status(404).json({ error: 'Project not found' });
 
-    const { userId } = req.body || {};
+    const { userId, accountPassword } = req.body || {};
     const callerId = req.user?.id;
-    if (callerId !== meta.ownerId && req.user?.role !== 'admin') {
-      return res.status(403).json({ error: 'Only the owner or a system admin can transfer ownership' });
+    const callerRole = req.user?.role;
+    const isAdminMember =
+      meta.ownerId === callerId || meta.members?.some((m) => m.userId === callerId && m.role === 'admin');
+    if (callerRole !== 'admin' && !isAdminMember) {
+      return res.status(403).json({ error: 'Only the owner or a project/system admin can transfer ownership' });
+    }
+
+    if (!userId || !String(userId).trim()) {
+      return res.status(400).json({ error: 'userId is required' });
     }
 
     const targetUser = getUserInfo(userId);
@@ -1653,19 +1678,52 @@ app.post('/api/projects/:slug/transfer-owner', (req: any, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Ensure target is a member with admin role
-    if (!meta.members) meta.members = [];
-    let targetMember = meta.members.find((m) => m.userId === userId);
-    if (!targetMember) {
-      meta.members.push({ userId, role: 'admin', addedAt: new Date().toISOString() });
-    } else {
-      targetMember.role = 'admin';
+    // Transferring to the current owner is a meaningless rewrite (would just
+    // shuffle member rows) — surface it instead of silently succeeding.
+    if (userId === meta.ownerId) {
+      return res.status(400).json({ error: 'User is already the project owner' });
     }
 
+    if (!accountPassword || !String(accountPassword).length) {
+      return res.status(400).json({ error: 'Account password is required to transfer ownership.' });
+    }
+    if (!(await verifyAccountPassword(String(accountPassword), callerId))) {
+      recordAudit('ownership-transferred-failed', false, req.ip, callerId);
+      return res.status(401).json({ error: 'Account password is incorrect.' });
+    }
+
+    const now = new Date().toISOString();
+    // Deterministic ownership: BOTH the old and new owner stay explicit admin
+    // members in meta — a legacy project with no members row for the old owner
+    // must never lose silent access the moment the ownership moves.
+    if (!meta.members) meta.members = [];
+    const ensureAdmin = (ownerId: string) => {
+      const existing = meta.members!.find((m) => m.userId === ownerId);
+      if (existing) existing.role = 'admin';
+      else meta.members!.push({ userId: ownerId, role: 'admin', addedAt: now });
+    };
+    if (meta.ownerId) ensureAdmin(meta.ownerId);
+    ensureAdmin(userId);
+
+    const previousOwner = meta.ownerId;
     meta.ownerId = userId;
+    meta.activity = [
+      ...(meta.activity || []),
+      { action: 'ownership-transferred', at: now, userId: callerId },
+    ].slice(-200);
     saveMeta(req.params.slug, meta);
     invalidateProjectsCache();
     recordAudit('ownership-transferred', true, req.ip, userId);
+
+    // Best-effort project-channel sync: the new owner gains an admin
+    // membership in the auto-channel and the old owner's listed role becomes
+    // admin. Channel access derives live from checkProjectAccess, so a sync
+    // failure can never break the transfer — just leave stale listing data.
+    try {
+      await ensureProjectChannel(req.params.slug, meta.name, userId);
+      if (previousOwner) await setChannelMemberRole(`project:${req.params.slug}`, previousOwner, 'admin');
+    } catch { /* fire-and-forget */ }
+
     res.json({ ok: true, ownerId: userId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

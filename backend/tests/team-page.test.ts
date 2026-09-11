@@ -188,7 +188,7 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.ok(createdEntry, 'created action recorded');
   });
 
-  test('membership governance is audited (member-added + ownership-transferred)', async () => {
+  test('membership governance is audited (member-added)', async () => {
     const auditRes = await reqAuth('GET', '/auth/audit');
     assert.strictEqual(auditRes.status, 200);
     const entries: any[] = (await auditRes.json()).entries;
@@ -196,12 +196,27 @@ describe('Team page & permissions (real Docker container)', () => {
       entries.some((e) => e.event === 'member-added' && e.userId === editorId),
       'member-added audit entry exists for the editor'
     );
+  });
+
+  test('ownership transfer is a sudo op and lands in the roster + audit (real login; self-skips)', async (t) => {
+    const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
+    const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
+    const loginData = await loginRes.json();
+    if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
+    const realAdmin = { headers: { ...authHeaders(), Authorization: `Bearer ${loginData.token}` } };
+
+    // The acting admin must re-confirm their account password — missing → 400,
+    // wrong → 401, correct → 200 (transfer mutates nothing on a failed sudo).
+    const missing = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId }, realAdmin.headers);
+    assert.strictEqual(missing.status, 400, 'transfer without password must be 400');
+    const wrong = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: 'definitely-not-the-password' }, realAdmin.headers);
+    assert.strictEqual(wrong.status, 401, 'transfer with a wrong password must be 401');
 
     // Ownership transfer to the editor → audited and reflected by the roster.
-    const transfer = await reqAuth('POST', `/projects/${slug}/transfer-owner`, { userId: editorId });
-    assert.strictEqual(transfer.status, 200);
+    const transfer = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: pw }, realAdmin.headers);
+    assert.strictEqual(transfer.status, 200, 'transfer with the correct password must be 200');
 
-    const roster = await (await reqAuth('GET', '/users/with-memberships')).json();
+    const roster = await (await req('GET', '/users/with-memberships', undefined, realAdmin.headers)).json();
     const editorRow = (roster.users as any[]).find((u: any) => u.id === editorId);
     assert.strictEqual(editorRow.memberships.find((m: any) => m.slug === slug).isOwner, true);
 

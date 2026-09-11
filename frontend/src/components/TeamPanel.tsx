@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'preact/hooks';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { Users, UserPlus, Trash2, Crown } from 'lucide-preact';
+import { useAuth } from '../auth';
 import {
   listProjectMembers,
   addProjectMember,
@@ -13,6 +14,7 @@ import {
   type UserRole,
 } from '../api';
 import { ConfirmModal } from './ConfirmModal';
+import { ReAuthModal } from './ReAuthModal';
 import { Avatar } from './Avatar';
 import type { PresenceUser } from '../usePresence';
 
@@ -26,11 +28,18 @@ const ROLE_HIERARCHY: Record<string, number> = { admin: 3, editor: 2, viewer: 1 
 
 export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   const [, setLocation] = useHashLocation();
+  const { user: currentUser } = useAuth();
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [allUsers, setAllUsers] = useState<TeamUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const onlineIds = new Set(onlineUsers.map(u => u.id));
+
+  // The parent polls ownerId on a 5s cycle — keep a local copy so the crown
+  // badge + manage gates update the instant a transfer completes, without
+  // waiting for the next poll racing the backend write.
+  const [ownerId, setOwnerId] = useState<string | undefined>(project?.ownerId);
+  useEffect(() => { setOwnerId(project?.ownerId); }, [project?.ownerId]);
 
   // Add form
   const [showAdd, setShowAdd] = useState(false);
@@ -42,9 +51,16 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   const [removeTarget, setRemoveTarget] = useState<ProjectMember | null>(null);
   const [removing, setRemoving] = useState(false);
 
-  // Transfer ownership
+  // Transfer ownership (sudo — account password required)
   const [transferTarget, setTransferTarget] = useState<ProjectMember | null>(null);
   const [transferring, setTransferring] = useState(false);
+  const [transferError, setTransferError] = useState<string | null>(null);
+
+  const myMemberRole = members.find((m) => m.userId === currentUser?.id)?.role;
+  // Who may manage members: system admins, the (local) owner, and admin
+  // members. A plain caller — even a project viewer/editor — sees the roster
+  // read-only instead of buttons that would always 403.
+  const canManage = currentUser?.role === 'admin' || ownerId === currentUser?.id || myMemberRole === 'admin';
 
   const loadMembers = async () => {
     try {
@@ -63,7 +79,12 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
     }
   };
 
-  useEffect(() => { loadMembers(); }, [slug]);
+  useEffect(() => {
+    setRemoveTarget(null);
+    setTransferTarget(null);
+    setTransferError(null);
+    loadMembers();
+  }, [slug]);
 
   const isMember = (userId: string) => members.some((m) => m.userId === userId);
   const nonMembers = allUsers.filter((u) => !isMember(u.id));
@@ -98,15 +119,17 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
     }
   };
 
-  const handleTransfer = async () => {
+  const handleTransfer = async (accountPassword?: string) => {
     if (!transferTarget) return;
     try {
       setTransferring(true);
-      await transferOwner(slug, transferTarget.userId);
+      setTransferError(null);
+      const data = await transferOwner(slug, transferTarget.userId, accountPassword);
       setTransferTarget(null);
+      setOwnerId(data.ownerId);
       await loadMembers();
     } catch (err: any) {
-      setError(err.message || 'Failed to transfer ownership');
+      setTransferError(err.message || 'Failed to transfer ownership');
     } finally {
       setTransferring(false);
     }
@@ -135,7 +158,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
           <span>Project Team</span>
           <span class="badge">{members.length}</span>
         </h2>
-        {nonMembers.length > 0 && (
+        {canManage && nonMembers.length > 0 && (
           <button class="btn-primary sm" aria-expanded={showAdd} onClick={() => setShowAdd(!showAdd)}>
             <UserPlus class="icon" />
             {showAdd ? 'Cancel' : 'Add Member'}
@@ -183,7 +206,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
           members
             .sort((a, b) => (ROLE_HIERARCHY[b.role] || 0) - (ROLE_HIERARCHY[a.role] || 0))
             .map((m) => {
-              const isOwner = project?.ownerId === m.userId;
+              const isOwner = ownerId === m.userId;
               return (
                 <div class="member-row" key={m.userId}>
                   <div
@@ -207,23 +230,35 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                     </div>
                   </div>
                   <div class="member-actions">
-                    <select
-                      class="select-dark select-sm"
-                      aria-label={`Role for ${m.username}`}
-                      value={m.role}
-                      onChange={(e) => handleRoleChange(m, (e.target as HTMLSelectElement).value as UserRole)}
-                    >
-                      <option value="viewer">Viewer</option>
-                      <option value="editor">Editor</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                    {!isOwner && (
+                    {isOwner ? (
+                      // The owner's role is fixed — the ownership check in
+                      // checkProjectAccess outranks any member role, so a
+                      // changeable select here would be a lie. Show it as-is.
+                      <span class="member-meta" style="textTransform:capitalize" title="The owner always holds admin access">
+                        <Crown class="icon icon-sm" style={{ color: '#f59e0b', verticalAlign: '-2px', marginRight: '3px' }} />
+                        Owner · Admin
+                      </span>
+                    ) : canManage ? (
+                      <select
+                        class="select-dark select-sm"
+                        aria-label={`Role for ${m.username}`}
+                        value={m.role}
+                        onChange={(e) => handleRoleChange(m, (e.target as HTMLSelectElement).value as UserRole)}
+                      >
+                        <option value="viewer">Viewer</option>
+                        <option value="editor">Editor</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    ) : (
+                      <span class="member-meta" style="textTransform:capitalize">{m.role}</span>
+                    )}
+                    {canManage && !isOwner && (
                       <>
                         <button
                           class="btn-ghost sm"
                           title="Transfer ownership"
                           aria-label={`Transfer ownership to ${m.username}`}
-                          onClick={() => setTransferTarget(m)}
+                          onClick={() => { setTransferError(null); setTransferTarget(m); }}
                         >
                           <Crown class="icon icon-sm" />
                         </button>
@@ -255,15 +290,16 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
         loading={removing}
       />
 
-      <ConfirmModal
+      <ReAuthModal
         open={!!transferTarget}
-        danger={false}
-        title={`Transfer ownership to ${transferTarget?.username}?`}
-        message="You will become an admin member. The new owner gets full control."
-        confirmLabel="Transfer"
-        onConfirm={handleTransfer}
-        onCancel={() => setTransferTarget(null)}
+        username={currentUser?.username}
         loading={transferring}
+        error={transferError}
+        title={`Transfer ownership to ${transferTarget?.username}?`}
+        description={`${transferTarget?.username} becomes the new owner with full control. You will become an admin member. Enter your account password to confirm.`}
+        confirmLabel="Transfer ownership"
+        onConfirm={handleTransfer}
+        onCancel={() => { setTransferTarget(null); setTransferError(null); }}
       />
     </div>
   );

@@ -67,6 +67,7 @@ export type AuditEvent =
   | 'member-removed'
   | 'member-role-changed'
   | 'ownership-transferred'
+  | 'ownership-transferred-failed'
   | 'profile-update'
   | 'avatar-upload'
   | 'avatar-remove'

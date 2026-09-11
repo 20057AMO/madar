@@ -1111,11 +1111,14 @@ export const addProjectMember = (slug: string, userId: string, role: 'admin' | '
 export const removeProjectMember = (slug: string, userId: string) =>
   api<{ ok: boolean }>(`/api/projects/${slug}/members/${userId}`, { method: 'DELETE' });
 
-export const transferOwner = (slug: string, userId: string) =>
+export const transferOwner = (slug: string, userId: string, accountPassword?: string) =>
   api<{ ok: boolean; ownerId: string }>(`/api/projects/${slug}/transfer-owner`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId }),
+    // skipAuthRedirect so a wrong sudo password surfaces inline in the
+    // ReAuthModal instead of triggering the global session-expiry handler.
+    body: JSON.stringify({ userId, accountPassword }),
+    skipAuthRedirect: true,
   });
 
 // ── Notifications / Webhooks (admin) ─────────────────────────
