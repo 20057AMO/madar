@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
 
 /**
  * Project ownership + membership + access control (the "Team" scenario).
@@ -23,6 +23,19 @@ function runAs(token: string) {
   return {
     headers: { ...authHeaders(), Authorization: `Bearer ${token}` },
   };
+}
+
+async function postWithBackoff(path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 429 || attempt >= 8) return res;
+    const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '2'), 10));
+    await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+  }
 }
 
 /**
@@ -298,10 +311,10 @@ describe('Project team & access control (real Docker container)', () => {
   });
 
   test('transfer-owner rejects a wrong account password (401)', async () => {
-    const res = await reqAuth('POST', `/projects/${slug}/transfer-owner`, {
+    const res = await postWithBackoff(`/projects/${slug}/transfer-owner`, {
       userId: editorId,
       accountPassword: 'definitely-not-the-password',
-    });
+    }, authHeaders());
     assert.strictEqual(res.status, 401, `transfer wrong password: ${res.status}`);
     const body = await res.json();
     assert.match(String(body.error || ''), /incorrect/i);
@@ -314,7 +327,7 @@ describe('Project team & access control (real Docker container)', () => {
     const up = await reqAuth('POST', `/projects/${slug}/members`, { userId: editorId, role: 'admin' });
     assert.strictEqual(up.status, 200, `upgrade editor to admin member: ${up.status}`);
 
-    const res = await req('POST', `/projects/${slug}/transfer-owner`, { userId: viewerId, accountPassword: 'x' }, runAs(editorToken).headers);
+    const res = await postWithBackoff(`/projects/${slug}/transfer-owner`, { userId: viewerId, accountPassword: 'x' }, runAs(editorToken).headers);
     assert.strictEqual(res.status, 401, `admin-member transfer gate: expected 401 (sudo), got ${res.status}`);
     const body = await res.json();
     assert.match(String(body.error || ''), /incorrect/i);
@@ -330,7 +343,7 @@ describe('Project team & access control (real Docker container)', () => {
     if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
     const realAdmin = { headers: { ...authHeaders(), Authorization: `Bearer ${loginData.token}` } };
 
-    const res = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: pw }, realAdmin.headers);
+    const res = await postWithBackoff(`/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: pw }, realAdmin.headers);
     assert.strictEqual(res.status, 200, `transfer with correct password: ${res.status}`);
     const data = await res.json();
     assert.strictEqual(data.ok, true);

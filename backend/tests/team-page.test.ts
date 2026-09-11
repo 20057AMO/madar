@@ -29,6 +29,19 @@ function runAs(token: string) {
   };
 }
 
+async function requestWithBackoff(method: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: method,
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 429 || attempt >= 20) return res;
+    const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '2'), 10));
+    await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+  }
+}
+
 async function deleteRobust(path: string, attempts = 20): Promise<boolean> {
   for (let i = 0; i < attempts; i += 1) {
     try {
@@ -120,20 +133,21 @@ describe('Team page & permissions (real Docker container)', () => {
   });
 
   test('admin cannot demote their own role (400 — lockout guard)', async () => {
+    await new Promise(r => setTimeout(r, 2000));
     // The shared forged admin token pads id 'test-user'; PATCH own role away
     // from admin must be refused before any store write (and before any
     // password check — a self-demote is a lockout, not a mutation).
-    const res = await reqAuth('PATCH', `/users/test-user/role`, { role: 'viewer', accountPassword: 'irrelevant' });
+    const res = await requestWithBackoff('PATCH', `/users/test-user/role`, { role: 'viewer', accountPassword: 'irrelevant' }, authHeaders());
     assert.strictEqual(res.status, 400, `self-demote: ${res.status}`);
     const body = await res.json();
     assert.match(String(body.error || ''), /own role/i);
   });
 
   test('role change requires the admin account password (missing 400, wrong 401)', async () => {
-    const missing = await reqAuth('PATCH', `/users/${viewerId}/role`, { role: 'editor' });
+    const missing = await requestWithBackoff('PATCH', `/users/${viewerId}/role`, { role: 'editor' }, { ...authHeaders(), 'Content-Type': 'application/json' });
     assert.strictEqual(missing.status, 400, 'role change without password must be 400');
 
-    const wrong = await reqAuth('PATCH', `/users/${viewerId}/role`, { role: 'editor', accountPassword: 'definitely-not-the-password' });
+    const wrong = await requestWithBackoff('PATCH', `/users/${viewerId}/role`, { role: 'editor', accountPassword: 'definitely-not-the-password' }, { ...authHeaders(), 'Content-Type': 'application/json' });
     assert.strictEqual(wrong.status, 401, 'role change with a wrong password must be 401');
     const wrongBody = await wrong.json();
     assert.match(String(wrongBody.error || ''), /incorrect/i);
@@ -209,11 +223,11 @@ describe('Team page & permissions (real Docker container)', () => {
     // wrong → 401, correct → 200 (transfer mutates nothing on a failed sudo).
     const missing = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId }, realAdmin.headers);
     assert.strictEqual(missing.status, 400, 'transfer without password must be 400');
-    const wrong = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: 'definitely-not-the-password' }, realAdmin.headers);
+    const wrong = await requestWithBackoff('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: 'definitely-not-the-password' }, realAdmin.headers);
     assert.strictEqual(wrong.status, 401, 'transfer with a wrong password must be 401');
 
     // Ownership transfer to the editor → audited and reflected by the roster.
-    const transfer = await req('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: pw }, realAdmin.headers);
+    const transfer = await requestWithBackoff('POST', `/projects/${slug}/transfer-owner`, { userId: editorId, accountPassword: pw }, realAdmin.headers);
     assert.strictEqual(transfer.status, 200, 'transfer with the correct password must be 200');
 
     const roster = await (await req('GET', '/users/with-memberships', undefined, realAdmin.headers)).json();

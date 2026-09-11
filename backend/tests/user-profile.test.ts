@@ -267,7 +267,7 @@ describe('User profile & avatar (real Docker)', () => {
       headers: { Authorization: `Bearer ${myTok}` },
       body: big,
     });
-    assert.strictEqual(bigRes.status, 400);
+    assert.strictEqual(bigRes.status, 413, 'oversized avatar → 413 (multer LIMIT_FILE_SIZE)');
   });
 
   test('access matrix: requireAdmin blocks editor editing via :userId; admin can', async () => {

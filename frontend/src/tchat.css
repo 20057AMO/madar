@@ -1,5 +1,13 @@
 /* Team chat (Team Chat view) — kept separate from index.css (user-owned global
    styles) and namespaced `tchat-` so it never collides with the AI-chat panel. */
+.chat-view {
+  display: flex;
+  height: calc(100vh - 60px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
 .tchat-view {
   display: flex;
   height: calc(100vh - 60px);
