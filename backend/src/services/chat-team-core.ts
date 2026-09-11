@@ -54,12 +54,14 @@ export const MAX_ATTACHMENTS = 5;
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 /** Cap of stored messages per channel — oldest pruned beyond this. */
 export const DEFAULT_MSG_CAP = 500;
+/** Cumulative attachment storage ceiling per channel (disk-exhaustion guard). */
+export const MAX_CHANNEL_ATTACHMENT_BYTES = 500 * 1024 * 1024; // 500 MB per channel
 /** Restrictive chat id — used in every fs/ws/route key. */
 export const CHANNEL_ID_RE = /^[a-z0-9._:-]{1,72}$/;
 export const MESSAGE_ID_RE = /^m-[a-z0-9-]{1,48}$/;
 
 /** Team-member usernames are the only mention targets (2-50 chars, no @). */
-const MENTION_RE = /(?:^|\s)@([A-Za-z0-9][A-Za-z0-9._-]{1,49})/g;
+const MENTION_RE = /(?:^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]{1,49})/gu;
 
 /** Deterministic project auto-channel id — never collides with manual ids. */
 export function buildProjectChannelId(slug: string): string {
@@ -156,6 +158,16 @@ export function searchMessages(messages: TeamMessage[], query: string): TeamMess
 export function pruneToCap(messages: TeamMessage[], cap = DEFAULT_MSG_CAP): TeamMessage[] {
   if (messages.length <= cap) return messages;
   return messages.slice(messages.length - cap);
+}
+
+/** Total attachment bytes referenced across the given messages. */
+export function channelAttachmentBytes(messages: { attachments?: { size?: number }[] }[]): number {
+  return messages.reduce((sum, m) => sum + (m.attachments?.reduce((s, a) => s + (a.size || 0), 0) ?? 0), 0);
+}
+
+/** True when adding `addedBytes` to stored `existingBytes` crosses the per-channel ceiling. */
+export function wouldExceedAttachmentQuota(existingBytes: number, addedBytes: number): boolean {
+  return existingBytes + addedBytes > MAX_CHANNEL_ATTACHMENT_BYTES;
 }
 
 /** How many messages accumulated beyond the cap (for the prune batch). */

@@ -189,10 +189,23 @@ export async function addChannelMember(channelId: string, userId: string, role: 
     const all = readChannelsRaw().channels;
     const ch = all.find((c) => c.id === channelId);
     if (!ch) return;
+    const before = ch.members.length;
     if (!ch.members.some((m) => m.userId === userId)) {
       ch.members.push({ userId, role });
     }
-    writeChannelsRaw({ channels: all });
+    if (ch.members.length !== before) writeChannelsRaw({ channels: all });
+  });
+}
+
+/** Remove a member from a channel (project channels list members for UX only). */
+export async function removeChannelMember(channelId: string, userId: string): Promise<void> {
+  await withFileLockAsync(`channel:${channelId}`, async () => {
+    const all = readChannelsRaw().channels;
+    const ch = all.find((c) => c.id === channelId);
+    if (!ch) return;
+    const before = ch.members.length;
+    ch.members = ch.members.filter((m) => m.userId !== userId);
+    if (ch.members.length !== before) writeChannelsRaw({ channels: all });
   });
 }
 
@@ -214,11 +227,13 @@ export async function setChannelMemberRole(channelId: string, userId: string, ro
 /** Remove a deleted project's auto-channel + its messages + uploads. */
 export async function deleteChannel(channelId: string): Promise<void> {
   const cid = isChannelId(channelId) ? channelId : '';
+  let attIds: string[] = [];
   await withFileLockAsync(`channel:${cid || 'x'}`, async () => {
     const all = readChannelsRaw().channels;
     const filtered = all.filter((c) => c.id !== cid);
     if (filtered.length !== all.length) writeChannelsRaw({ channels: filtered });
     if (cid) {
+      attIds = readMessagesRaw(cid).flatMap((m) => m.attachments?.map((a) => a.id) ?? []);
       try {
         fs.rmSync(messagesFile(cid), { force: true });
       } catch { /* missing */ }
@@ -230,6 +245,7 @@ export async function deleteChannel(channelId: string): Promise<void> {
       writeReadMap(read);
     }
   });
+  if (attIds.length > 0) deleteAttachments(attIds);
 }
 
 /** Append a message (persisted, pruning oldest beyond cap). */
@@ -341,12 +357,32 @@ export function uploadDir(): string {
   return UPLOADS_DIR;
 }
 
-/** Save an attachment's bytes under a fresh random id. */
-export function saveAttachment(buffer: Buffer): { id: string; size: number } {
+/** Save an attachment's bytes under a fresh random id, plus a small meta file
+ * (channelId/uploadedBy) so cross-channel reuse can be rejected later. */
+export function saveAttachment(buffer: Buffer, channelId: string, userId: string): { id: string; size: number } {
   const id = genId('att');
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
   fs.writeFileSync(path.join(UPLOADS_DIR, id), buffer, { mode: 0o600 });
+  try {
+    fs.writeFileSync(
+      path.join(UPLOADS_DIR, `${id}.meta.json`),
+      JSON.stringify({ channelId, uploadedBy: userId, uploadedAt: new Date().toISOString(), size: buffer.length }),
+      { mode: 0o600 }
+    );
+  } catch { /* best-effort — without meta the download route 404s (fail-closed) */ }
   return { id, size: buffer.length };
+}
+
+/** Ownership metadata for an uploaded attachment — null when absent (legacy). */
+export function getAttachmentMeta(attachmentId: string): { channelId: string; uploadedBy: string; uploadedAt: string } | null {
+  if (!/^att-[a-z0-9-]+$/.test(attachmentId)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(UPLOADS_DIR, `${attachmentId}.meta.json`), 'utf8'));
+    if (raw && typeof raw.channelId === 'string' && typeof raw.uploadedBy === 'string') {
+      return { channelId: raw.channelId, uploadedBy: raw.uploadedBy, uploadedAt: String(raw.uploadedAt || '') };
+    }
+  } catch { /* missing or corrupt */ }
+  return null;
 }
 
 export function attachmentPath(attachmentId: string): string | null {
@@ -365,6 +401,9 @@ export function deleteAttachment(attachmentId: string): void {
       fs.rmSync(full, { force: true });
     } catch { /* best-effort */ }
   }
+  try {
+    fs.rmSync(path.join(UPLOADS_DIR, `${attachmentId}.meta.json`), { force: true });
+  } catch { /* best-effort */ }
 }
 
 /** Drop a channel's uploads (project delete reclaims disk). */
@@ -384,10 +423,6 @@ export async function removeUserChannels(userId: string): Promise<number> {
     (c) => c.kind === 'direct' && c.members.some((m) => m.userId === userId)
   );
   for (const channel of victims) {
-    const messages = readMessagesRaw(channel.id);
-    deleteAttachments(
-      messages.flatMap((m) => m.attachments?.map((a) => a.id) ?? [])
-    );
     await deleteChannel(channel.id);
   }
   return victims.length;

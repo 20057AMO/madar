@@ -53,7 +53,9 @@ type Client = {
 
 const clients = new Map<WebSocket, Client>();
 const channelSubscribers = new Map<string, Set<WebSocket>>();
-const presence = new Map<string, PresUser>();
+// Ref-counted presence: one user with N open sockets (tabs) stays listed until
+// the LAST socket closes — otherwise tab churn flickers the online roster.
+const presence = new Map<string, { entry: PresUser; count: number }>();
 
 function send(ws: WebSocket, obj: unknown): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -76,11 +78,11 @@ export function broadcastPinChange(channelId: string, msgId: string, pinned: boo
 }
 
 function sendPresence(ws: WebSocket): void {
-  send(ws, { type: 'presence', users: Array.from(presence.values()) });
+  send(ws, { type: 'presence', users: Array.from(presence.values()).map((v) => v.entry) });
 }
 
 function broadcastPresence(): void {
-  const payload = { type: 'presence', users: Array.from(presence.values()) };
+  const payload = { type: 'presence', users: Array.from(presence.values()).map((v) => v.entry) };
   for (const client of clients.values()) send(client.ws, payload);
 }
 
@@ -89,7 +91,11 @@ function removeClient(ws: WebSocket, client: Client): void {
     channelSubscribers.get(channelId)?.delete(ws);
     if (!channelSubscribers.get(channelId)?.size) channelSubscribers.delete(channelId);
   }
-  presence.delete(client.user.id);
+  const row = presence.get(client.user.id);
+  if (row) {
+    row.count -= 1;
+    if (row.count <= 0) presence.delete(client.user.id);
+  }
   clients.delete(ws);
   broadcastPresence();
 }
@@ -103,7 +109,13 @@ function addPresence(user: ChatUser): PresUser {
     displayName: profile?.profile?.displayName,
     avatarExt: profile?.profile?.avatarExt,
   };
-  presence.set(user.id, entry);
+  const row = presence.get(user.id);
+  if (row) {
+    row.count += 1;
+    row.entry = entry;
+  } else {
+    presence.set(user.id, { entry, count: 1 });
+  }
   return entry;
 }
 
@@ -211,5 +223,5 @@ export function handleChatTeamSocket(
 
 /** Online team-chat users (for REST introspection/tests). */
 export function getChatTeamPresence(): PresUser[] {
-  return Array.from(presence.values());
+  return Array.from(presence.values()).map((v) => v.entry);
 }

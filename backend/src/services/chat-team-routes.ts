@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import fs from 'fs';
+import path from 'path';
 
 import {
   listUsers,
@@ -19,8 +20,12 @@ import {
   normalizeMessage,
   formatMessage,
   searchMessages,
+  channelSortKey,
   MAX_ATTACHMENTS,
   MAX_ATTACHMENT_BYTES,
+  MAX_CHANNEL_ATTACHMENT_BYTES,
+  channelAttachmentBytes,
+  wouldExceedAttachmentQuota,
   type ChannelMember,
   type ChatAttachment,
   type TeamChannel,
@@ -40,6 +45,8 @@ import {
   getUnreadByChannel,
   saveAttachment,
   attachmentPath,
+  getAttachmentMeta,
+  uploadDir,
   genId,
 } from './chat-team-store';
 import { canAccessChannel, type ChatUser } from './chat-team-access';
@@ -84,7 +91,8 @@ function userIndex(): Map<string, SafeUserRow> {
 function visibleChannels(user: ChatUser, idx: Map<string, SafeUserRow>): TeamChannel[] {
   return listChannels()
     .filter((c) => canAccessChannel(user, c) !== 'none')
-    .map((c) => enrichChannel(c, idx, user));
+    .map((c) => enrichChannel(c, idx, user))
+    .sort((a, b) => channelSortKey(b) - channelSortKey(a));
 }
 
 function enrichChannel(c: TeamChannel, idx: Map<string, SafeUserRow>, user: ChatUser): TeamChannel {
@@ -121,7 +129,7 @@ export function registerChatTeamRoutes(app: any): void {
   });
 
   // Create a manual team-wide channel (editor+).
-  r.post('/channels', chatWriteLimiter, (req: any, res) => {
+  r.post('/channels', chatWriteLimiter, async (req: any, res) => {
     const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
     if (user.role === 'viewer') {
       return res.status(403).json({ error: 'Editors and admins can create channels' });
@@ -141,10 +149,13 @@ export function registerChatTeamRoutes(app: any): void {
       createdBy: user.id,
       createdAt: new Date().toISOString(),
     };
-    void createChannel(channel).then(({ created, channel: ch }) => {
+    try {
+      const { created, channel: ch } = await createChannel(channel);
       if (!created) return res.status(409).json({ error: 'Channel already exists' });
       res.status(201).json({ channel: ch });
-    });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to create channel' });
+    }
   });
 
   // Direct conversation with another user (idempotent).
@@ -170,11 +181,12 @@ export function registerChatTeamRoutes(app: any): void {
     const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
     const channel = getChannel(req.params.channelId);
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
-    if (canAccessChannel(user, channel) === 'none') {
+    const level = canAccessChannel(user, channel);
+    if (level === 'none') {
       return res.status(403).json({ error: 'Access denied' });
     }
     const idx = userIndex();
-    res.json({ channel: enrichChannel(channel, idx, user) });
+    res.json({ channel: enrichChannel(channel, idx, user), level });
   });
 
   // Delete a manual channel (creator or admin; editor+ level overall).
@@ -210,7 +222,9 @@ export function registerChatTeamRoutes(app: any): void {
     const cid = req.params.channelId;
     if (!isChannelId(cid)) return res.status(400).json({ error: 'Invalid channel id' });
     const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
-    if (canAccessChannel(user, getChannel(cid) as TeamChannel) === 'none') {
+    const channel = getChannel(cid);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    if (canAccessChannel(user, channel) === 'none') {
       return res.status(403).json({ error: 'Access denied' });
     }
     const q = typeof req.query.q === 'string' ? req.query.q : '';
@@ -253,6 +267,10 @@ export function registerChatTeamRoutes(app: any): void {
         if (!/^att-[a-z0-9-]+$/.test(id)) return res.status(400).json({ error: 'Invalid attachment' });
         const path = attachmentPath(id);
         if (!path) return res.status(400).json({ error: 'Attachment not found' });
+        const meta = getAttachmentMeta(id);
+        if (!meta || meta.channelId !== channelId) {
+          return res.status(400).json({ error: 'Attachment was uploaded to a different channel' });
+        }
         let size = 0;
         try {
           size = fs.statSync(path).size;
@@ -273,6 +291,11 @@ export function registerChatTeamRoutes(app: any): void {
         out.push({ id, name: name || 'file', kind, size });
       }
       attachments = out;
+      const existingBytes = channelAttachmentBytes(getAllMessages(channelId));
+      const newBytes = attachments.reduce((s, a) => s + (a.size || 0), 0);
+      if (existingBytes + newBytes > MAX_CHANNEL_ATTACHMENT_BYTES) {
+        return res.status(400).json({ error: 'Channel attachment storage limit exceeded (500 MB)' });
+      }
     }
 
     const message: TeamMessage = formatMessage(
@@ -338,8 +361,22 @@ export function registerChatTeamRoutes(app: any): void {
     if (buf.length > MAX_ATTACHMENT_BYTES) {
       return res.status(400).json({ error: 'File too large (max 10 MB)' });
     }
+    let existingBytes = 0;
+    try {
+      const uploadsDir = uploadDir();
+      for (const f of fs.readdirSync(uploadsDir)) {
+        if (!f.endsWith('.meta.json')) continue;
+        try {
+          const m = JSON.parse(fs.readFileSync(path.join(uploadsDir, f), 'utf8'));
+          if (m && m.channelId === channelId && typeof m.size === 'number') existingBytes += m.size;
+        } catch { /* corrupt meta — skip */ }
+      }
+    } catch { /* dir missing — 0 */ }
+    if (wouldExceedAttachmentQuota(existingBytes, buf.length)) {
+      return res.status(400).json({ error: 'Channel attachment storage limit exceeded (500 MB)' });
+    }
     const kind = detectImageExt(buf) ? 'image' : 'file';
-    const { id, size } = saveAttachment(buf);
+    const { id, size } = saveAttachment(buf, channelId, user.id);
     const name = String(req.file.originalname || 'file').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 255) || 'file';
     res.status(201).json({ attachment: { id, name, kind, size } });
   });
@@ -350,6 +387,13 @@ export function registerChatTeamRoutes(app: any): void {
     if (!/^att-[a-z0-9-]+$/.test(attachmentId)) return res.status(404).json({ error: 'Not found' });
     const p = attachmentPath(attachmentId);
     if (!p) return res.status(404).json({ error: 'Not found' });
+    const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
+    const meta = getAttachmentMeta(attachmentId);
+    if (!meta) return res.status(404).json({ error: 'Not found' });
+    const channel = getChannel(meta.channelId);
+    if (!channel || canAccessChannel(user, channel) === 'none') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.sendFile(p);

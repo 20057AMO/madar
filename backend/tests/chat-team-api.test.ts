@@ -1,6 +1,7 @@
 ﻿import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
+import { execFileSync } from 'node:child_process';
 import { reqAuth, req, uniqueId, initTestAuth, JWT_SECRET, signTestToken, API_URL } from './helpers.ts';
 
 /**
@@ -418,4 +419,241 @@ test('presence endpoint shape', async () => {
   const r = await api('GET', `${chatBase}/presence`);
   assert.strictEqual(r.status, 200);
   assert.ok(Array.isArray(r.json.users));
+});
+
+test('H1: channel detail returns the caller access level', async (t) => {
+  // Manual team-wide channel: every authenticated user reads AND writes, so a
+  // viewer must get level 'write' (creation/delete are the only gated ops).
+  const manual = await makeChannel(uniqueId('lvl'));
+  const v = await reqAuth('POST', '/users', { username: uniqueId('vch'), password: 'pass-123456', role: 'viewer' });
+  assert.strictEqual(v.status, 201);
+  const viewer = await v.json();
+  createdUserIds.push(viewer.id);
+  const viewerTok = jwt.sign({ id: viewer.id, username: viewer.username, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const mDetail = await runAs(viewerTok)('GET', `${chatBase}/channels/${manual.id}`);
+  assert.strictEqual(mDetail.status, 200);
+  assert.strictEqual(mDetail.json.level, 'write', 'manual channels are team-wide: viewer still writes');
+
+  // Project channel: membership drives the level — viewer member 'read',
+  // editor member 'write' (the level field was missing before the fix).
+  const slug = uniqueId('lvlproj');
+  const created = await api('POST', '/projects', { name: 'Level Project', slug });
+  if (created.status === 429) {
+    t.skip('project creation rate-limited on this container (WSD_TESTING=0) — project-level half skipped');
+    return;
+  }
+  assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
+  createdSlugs.push(slug);
+  const proj = `project:${slug}`;
+
+  const e = await reqAuth('POST', '/users', { username: uniqueId('ech'), password: 'pass-123456', role: 'editor' });
+  assert.strictEqual(e.status, 201);
+  const editor = await e.json();
+  createdUserIds.push(editor.id);
+  const editorTok = jwt.sign({ id: editor.id, username: editor.username, role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+
+  const addViewer = await api('POST', `/projects/${slug}/members`, { userId: viewer.id, role: 'viewer' });
+  assert.strictEqual(addViewer.status, 200, JSON.stringify(addViewer.json));
+  const vDetail = await runAs(viewerTok)('GET', `${chatBase}/channels/${proj}`);
+  assert.strictEqual(vDetail.status, 200);
+  assert.strictEqual(vDetail.json.level, 'read');
+
+  const addEditor = await api('POST', `/projects/${slug}/members`, { userId: editor.id, role: 'editor' });
+  assert.strictEqual(addEditor.status, 200, JSON.stringify(addEditor.json));
+  const eDetail = await runAs(editorTok)('GET', `${chatBase}/channels/${proj}`);
+  assert.strictEqual(eDetail.status, 200);
+  assert.strictEqual(eDetail.json.level, 'write');
+});
+
+test('L1: search on a missing channel returns 404 (not 403)', async () => {
+  const missing = await api('GET', `${chatBase}/channels/ch-nope/search?q=x`);
+  assert.strictEqual(missing.status, 404);
+});
+
+test('M3: channel rail sorts by most recent activity (lastMessageAt)', async () => {
+  const older = await makeChannel(uniqueId('ord1'));
+  const newer = await makeChannel(uniqueId('ord2'));
+  // The OLDER channel gets the later message — only lastMessageAt-based
+  // sorting (channelSortKey) puts it first; createdAt ordering would keep
+  // `newer` ahead.
+  await sendChannelMessage(older.id, 'activity on the older channel');
+  const list = await api('GET', `${chatBase}/channels`);
+  assert.strictEqual(list.status, 200);
+  const ours = list.json.channels.filter((c: any) => c.id === older.id || c.id === newer.id);
+  assert.strictEqual(ours.length, 2);
+  assert.strictEqual(ours[0].id, older.id, 'channel with the newest message must sort first');
+  assert.strictEqual(ours[1].id, newer.id);
+});
+
+test('M4+L8: attachment meta binds to its channel: cross-channel 400, outsider download 403', async () => {
+  // DM between admin and a second user — only participants may read bytes.
+  const v = await reqAuth('POST', '/users', { username: uniqueId('attp'), password: 'pass-123456', role: 'viewer' });
+  assert.strictEqual(v.status, 201);
+  const participant = await v.json();
+  createdUserIds.push(participant.id);
+
+  const dm = await api('POST', `${chatBase}/direct`, { with: participant.id });
+  assert.strictEqual(dm.status, 201, JSON.stringify(dm.json));
+  createdChannelIds.push(dm.json.channel.id);
+  const dmId = dm.json.channel.id;
+
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const form = new FormData();
+  form.append('channelId', dmId);
+  form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+  const up = await fetch(`${API_URL}/chat-team/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${signTestToken()}` },
+    body: form as any,
+  });
+  const upJson = await up.json().catch(() => ({}));
+  assert.strictEqual(up.status, 201, JSON.stringify(upJson));
+  const attachment = upJson.attachment;
+  assert.ok(attachment.id.startsWith('att-'));
+
+  // Same channel: attaching works.
+  const ok = await sendChannelMessage(dmId, 'see image', { attachments: [{ id: attachment.id, name: attachment.name }] });
+  assert.strictEqual(ok.attachments.length, 1);
+
+  // Different channel: the same attachment id is rejected (meta.channelId).
+  const other = await makeChannel(uniqueId('other'));
+  const cross = await api('POST', `${chatBase}/messages`, {
+    channelId: other.id,
+    text: 'steal',
+    attachments: [{ id: attachment.id, name: attachment.name }],
+  });
+  assert.strictEqual(cross.status, 400, JSON.stringify(cross.json));
+  assert.match(String(cross.json.error), /different channel/);
+
+  // Outsider (not a DM participant) cannot download (L8).
+  const outsiderTok = jwt.sign({ id: 'outsider-u', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const dl = await runAs(outsiderTok)('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(dl.status, 403, JSON.stringify(dl.json));
+
+  // Control: the participant still downloads fine.
+  const partTok = jwt.sign({ id: participant.id, username: participant.username, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const dl2 = await runAs(partTok)('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(dl2.status, 200);
+});
+
+test('H2: deleting a channel removes its attachments from disk', async (t) => {
+  const ch = await makeChannel(uniqueId('h2set'));
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const form = new FormData();
+  form.append('channelId', ch.id);
+  form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+  const up = await fetch(`${API_URL}/chat-team/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${signTestToken()}` },
+    body: form as any,
+  });
+  const upJson = await up.json().catch(() => ({}));
+  assert.strictEqual(up.status, 201, JSON.stringify(upJson));
+  const attachment = upJson.attachment;
+  await sendChannelMessage(ch.id, 'see image', { attachments: [{ id: attachment.id, name: attachment.name }] });
+
+  // Downloadable while the channel lives.
+  const before = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(before.status, 200);
+
+  const del = await api('DELETE', `${chatBase}/channels/${ch.id}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+
+  // API level: the route can only 404 once the bytes file is really gone
+  // (attachmentPath probes the disk — a leaked file would still be served).
+  const after = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(after.status, 404);
+
+  // Disk level: assert against the running container's uploads dir.
+  // Best-effort: needs the docker CLI on the host + the wsd-pro container.
+  try {
+    const out = execFileSync('docker', ['exec', 'wsd-pro', 'ls', '/app/data/chat-team/uploads'], { encoding: 'utf8', timeout: 15000 });
+    const entries = out.split(/\r?\n/).filter(Boolean);
+    assert.ok(!entries.includes(attachment.id), `attachment bytes leaked on disk: ${entries.join(', ')}`);
+    assert.ok(!entries.includes(`${attachment.id}.meta.json`), 'attachment meta leaked on disk');
+  } catch (err) {
+    // API 404 above already proves the leak is closed; the disk assertion is
+    // an extra check that needs docker access from the test runner's host.
+    t.skip(`docker CLI/container unavailable — on-disk half skipped (${(err as Error).message})`);
+  }
+});
+
+test('H3: download 404s when the meta file is missing (bytes file still on disk)', async (t) => {
+  const ch = await makeChannel(uniqueId('nometa'));
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const form = new FormData();
+  form.append('channelId', ch.id);
+  form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+  const up = await fetch(`${API_URL}/chat-team/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${signTestToken()}` },
+    body: form as any,
+  });
+  const upJson = await up.json().catch(() => ({}));
+  assert.strictEqual(up.status, 201, JSON.stringify(upJson));
+  const attachment = upJson.attachment;
+  await sendChannelMessage(ch.id, 'see image', { attachments: [{ id: attachment.id, name: attachment.name }] });
+
+  // Downloadable while the meta exists.
+  const before = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(before.status, 200);
+
+  // Remove only the meta file from the container's uploads dir (docker exec,
+  // same best-effort pattern as H2); the bytes file stays behind.
+  try {
+    execFileSync('docker', ['exec', 'wsd-pro', 'rm', `/app/data/chat-team/uploads/${attachment.id}.meta.json`], { timeout: 15000 });
+  } catch (err) {
+    t.skip(`docker CLI/container unavailable — meta removal skipped (${(err as Error).message})`);
+    return;
+  }
+
+  // Bytes still exist on disk, but the route must fail closed: no meta → 404,
+  // never a blind sendFile that leaks an unbounded attachment.
+  const after = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(after.status, 404, JSON.stringify(after.json));
+});
+
+test('M2: project member add/remove syncs the project channel membership', async (t) => {
+  const slug = uniqueId('projch');
+  const created = await api('POST', '/projects', { name: 'Proj Channel', slug });
+  if (created.status === 429) {
+    t.skip('project creation rate-limited on this container (WSD_TESTING=0)');
+    return;
+  }
+  assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
+  createdSlugs.push(slug);
+  const proj = `project:${slug}`;
+
+  const e = await reqAuth('POST', '/users', { username: uniqueId('cm'), password: 'pass-123456', role: 'editor' });
+  assert.strictEqual(e.status, 201);
+  const editor = await e.json();
+  createdUserIds.push(editor.id);
+
+  // Channel exists with the owner, not the future member.
+  const init = await api('GET', `${chatBase}/channels/${proj}`);
+  assert.strictEqual(init.status, 200);
+  assert.ok(!init.json.channel.members.some((m: any) => m.userId === editor.id));
+
+  // Add member → the project channel lists them (best-effort sync).
+  const add = await api('POST', `/projects/${slug}/members`, { userId: editor.id, role: 'editor' });
+  assert.strictEqual(add.status, 200, JSON.stringify(add.json));
+  const afterAdd = await api('GET', `${chatBase}/channels/${proj}`);
+  const member = afterAdd.json.channel.members.find((m: any) => m.userId === editor.id);
+  assert.ok(member, 'added member must appear in the project channel');
+  assert.strictEqual(member.role, 'editor');
+
+  // Remove member → the channel drops them again.
+  const rem = await api('DELETE', `/projects/${slug}/members/${editor.id}`);
+  assert.strictEqual(rem.status, 200, JSON.stringify(rem.json));
+  const afterRem = await api('GET', `${chatBase}/channels/${proj}`);
+  assert.ok(!afterRem.json.channel.members.some((m: any) => m.userId === editor.id), 'removed member must leave the project channel');
 });

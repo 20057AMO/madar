@@ -72,6 +72,7 @@ import {
 } from './services/webhooks-store';
 import { sendWebhook } from './services/webhook-sender';
 import { startAlertsAutomation, manualClearCrash } from './services/project-alerts';
+import { startAttachmentGcSweep } from './services/attachment-gc-sweep';
 import { serveStatus, startServeProcess, stopServeProcess } from './services/project-serve';
 import { sanitizeServeConfig } from './services/serve-core';
 import { getStorageMetrics, invalidateStorageCache } from './services/storage-metrics';
@@ -130,7 +131,7 @@ import { attachWebSockets } from './ws/ws-server';
 import { getPresence } from './ws/ws-presence';
 import { saveAvatar, deleteAvatar, getAvatarPath, validAvatarUserId } from './services/avatar-store';
 import { registerChatTeamRoutes } from './services/chat-team-routes';
-import { removeUserChannels, ensureProjectChannel, setChannelMemberRole } from './services/chat-team-store';
+import { removeUserChannels, ensureProjectChannel, addChannelMember, removeChannelMember, setChannelMemberRole } from './services/chat-team-store';
 
 dotenv.config();
 
@@ -1573,7 +1574,7 @@ app.get('/api/projects/:slug/members', requireProjectAccess('viewer'), async (re
 });
 
 // Add member
-app.post('/api/projects/:slug/members', (req: any, res) => {
+app.post('/api/projects/:slug/members', async (req: any, res) => {
   try {
     const meta = loadMeta(req.params.slug);
     if (!meta) return res.status(404).json({ error: 'Project not found' });
@@ -1608,6 +1609,9 @@ app.post('/api/projects/:slug/members', (req: any, res) => {
       meta.members.push({ userId, role: memberRole, addedAt: new Date().toISOString() });
     }
     saveMeta(req.params.slug, meta);
+    try {
+      await addChannelMember(`project:${req.params.slug}`, userId, memberRole);
+    } catch { /* channel sync is cosmetic, never blocks */ }
     invalidateProjectsCache();
     recordAudit(action, true, req.ip, userId);
     res.json({ member: { userId, role: memberRole } });
@@ -1617,7 +1621,7 @@ app.post('/api/projects/:slug/members', (req: any, res) => {
 });
 
 // Remove member
-app.delete('/api/projects/:slug/members/:userId', (req: any, res) => {
+app.delete('/api/projects/:slug/members/:userId', async (req: any, res) => {
   try {
     const meta = loadMeta(req.params.slug);
     if (!meta) return res.status(404).json({ error: 'Project not found' });
@@ -1644,6 +1648,9 @@ app.delete('/api/projects/:slug/members/:userId', (req: any, res) => {
       return res.status(404).json({ error: 'Member not found' });
     }
     saveMeta(req.params.slug, meta);
+    try {
+      await removeChannelMember(`project:${req.params.slug}`, targetUserId);
+    } catch { /* channel sync is cosmetic, never blocks */ }
     invalidateProjectsCache();
     recordAudit('member-removed', true, req.ip, targetUserId);
     res.json({ ok: true });
@@ -2382,7 +2389,11 @@ app.use((err: any, _req: any, res: any, next: any) => {
   if (err?.type === 'entity.parse.failed' || err?.type === 'entity.too.large') {
     return res.status(400).json({ error: err.type === 'entity.parse.failed' ? 'Invalid JSON body' : 'Request body too large' });
   }
-  // multer rejections (oversized uploads, unexpected fields) are client errors.
+  // multer oversize uploads are 413 (Payload Too Large), not generic 400s.
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'File too large' });
+  }
+  // multer rejections (unexpected fields) are client errors.
   if (typeof err?.code === 'string' && err.code.startsWith('LIMIT_')) {
     return res.status(400).json({ error: 'Upload rejected' });
   }
@@ -2412,6 +2423,9 @@ snapAuto.startSnapshotAutomation();
 // Container-crash detection (boot + every WSD_ALERT_SWEEP_MS) — WebSocket-
 // independent, so crashes are caught even with zero browsers connected.
 startAlertsAutomation();
+
+// Orphaned-attachment upload cleanup (boot + every WSD_ATTACHMENT_GC_MS).
+startAttachmentGcSweep();
 
 
 

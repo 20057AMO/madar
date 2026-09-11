@@ -16,6 +16,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import {
   MAX_TEXT_CHARS,
+  MAX_CHANNEL_ATTACHMENT_BYTES,
   buildProjectChannelId,
   buildDirectChannelId,
   sanitizePlain,
@@ -25,6 +26,8 @@ import {
   searchMessages,
   pruneToCap,
   pinnedMessages,
+  channelAttachmentBytes,
+  wouldExceedAttachmentQuota,
   isChannelId,
   isMessageId,
   channelSortKey,
@@ -53,6 +56,20 @@ describe('parseMentions', () => {
   });
   test('does not treat emails as mentions', () => {
     assert.deepStrictEqual(parseMentions('mail me at a@b.com'), []);
+  });
+  test('M5: extracts Arabic usernames (Unicode-aware \p{L}\p{N})', () => {
+    assert.deepStrictEqual(parseMentions('راسل @أحمد لإتمام المهمة'), ['أحمد']);
+    assert.deepStrictEqual(parseMentions('شكراً @محمد_علي!'), ['محمد_علي']);
+    assert.deepStrictEqual(parseMentions('hi @user.name and @أحمد'), ['user.name', 'أحمد']);
+  });
+  test('M5: mention length respects the 50-char username cap', () => {
+    // A >50-char run is capped at 50 by the greedy quantifier (never longer —
+    // user-store rejects usernames over 50, so a longer extract is a bug).
+    assert.strictEqual(parseMentions('@' + 'a'.repeat(51) + ' ')[0].length, 50);
+    assert.strictEqual(parseMentions('@' + 'أ'.repeat(51))[0].length, 50);
+    assert.strictEqual(parseMentions('@' + 'x'.repeat(50))[0].length, 50);
+    // Below the 2-char minimum nothing is extracted.
+    assert.deepStrictEqual(parseMentions('@a ok'), []);
   });
 });
 
@@ -129,6 +146,50 @@ describe('pruneToCap', () => {
   });
   test('custom cap respected', () => {
     assert.strictEqual(pruneToCap(make(30), 20).length, 20);
+  });
+});
+
+describe('channelAttachmentBytes', () => {
+  test('messages without attachments → 0', () => {
+    assert.strictEqual(channelAttachmentBytes([{ id: 'm-1' }, { id: 'm-2' }]), 0);
+  });
+  test('sums sizes across a message with two attachments', () => {
+    const msgs = [{ id: 'm-1', attachments: [{ id: 'att-a', size: 10 }, { id: 'att-b', size: 20 }] }];
+    assert.strictEqual(channelAttachmentBytes(msgs), 30);
+  });
+  test('aggregates across multiple messages', () => {
+    const msgs = [
+      { id: 'm-1', attachments: [{ id: 'att-a', size: 10 }] },
+      { id: 'm-2', attachments: [{ id: 'att-b', size: 20 }, { id: 'att-c', size: 30 }] },
+      { id: 'm-3' },
+    ];
+    assert.strictEqual(channelAttachmentBytes(msgs), 60);
+  });
+  test('attachments without size are ignored (0)', () => {
+    const msgs = [{ id: 'm-1', attachments: [{ id: 'att-a' }, { id: 'att-b', size: 5 }] }];
+    assert.strictEqual(channelAttachmentBytes(msgs), 5);
+  });
+  test('empty message list → 0', () => {
+    assert.strictEqual(channelAttachmentBytes([]), 0);
+  });
+});
+
+describe('wouldExceedAttachmentQuota', () => {
+  test('below the ceiling → false', () => {
+    assert.strictEqual(wouldExceedAttachmentQuota(0, MAX_CHANNEL_ATTACHMENT_BYTES - 1), false);
+    assert.strictEqual(wouldExceedAttachmentQuota(100, MAX_CHANNEL_ATTACHMENT_BYTES - 101), false);
+  });
+  test('exactly at the ceiling → false', () => {
+    assert.strictEqual(wouldExceedAttachmentQuota(0, MAX_CHANNEL_ATTACHMENT_BYTES), false);
+    assert.strictEqual(wouldExceedAttachmentQuota(250 * 1024 * 1024, 250 * 1024 * 1024), false);
+    assert.strictEqual(wouldExceedAttachmentQuota(MAX_CHANNEL_ATTACHMENT_BYTES, 0), false);
+  });
+  test('over the ceiling → true', () => {
+    assert.strictEqual(wouldExceedAttachmentQuota(0, MAX_CHANNEL_ATTACHMENT_BYTES + 1), true);
+    assert.strictEqual(wouldExceedAttachmentQuota(MAX_CHANNEL_ATTACHMENT_BYTES, 1), true);
+  });
+  test('zero + zero → false', () => {
+    assert.strictEqual(wouldExceedAttachmentQuota(0, 0), false);
   });
 });
 

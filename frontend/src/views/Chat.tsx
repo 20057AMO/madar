@@ -139,6 +139,7 @@ export function Chat() {
       if (ev.channelId === activeIdRef.current) {
         skipScroll.current = true;
         setMessages(ev.messages || []);
+        setViewerOnly(ev.level === 'read');
         lastSeen.current.set(ev.channelId, ev.messages?.[ev.messages.length - 1]?.id || '');
         requestAnimationFrame(() => requestAnimationFrame(() => { skipScroll.current = false; }));
       }
@@ -219,6 +220,7 @@ export function Chat() {
     const known = channelsRef.current.find((c) => c.id === activeId);
     setActive(known || null);
     setTyping([]);
+    setViewerOnly(false);
     setSearchResults(null);
     setSearchQ('');
     setComposer({ text: '', attachments: [] });
@@ -231,8 +233,6 @@ export function Chat() {
         setChannels((prev) =>
           prev.map((c) => (c.id === ch.id ? { ...(ch as ChatChannel), unread: c.unread } : c))
         );
-        const level = (ch as ChatChannel & { level?: string }).level;
-        setViewerOnly(level === 'read');
       })
       .catch(() => {});
     return () => { cancelled = true; sock.unsubscribe(activeId); };
@@ -589,7 +589,7 @@ export function Chat() {
                           dangerouslySetInnerHTML={{
                             __html: m.text
                               .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                              .replace(/(^|\s)@([A-Za-z0-9][A-Za-z0-9._-]{1,49})/g, '$1<span class="tchat-mention">@$2</span>')
+                              .replace(/(^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]{1,49})/gu, '$1<span class="tchat-mention">@$2</span>')
                               .replace(/\n/g, '<br />'),
                           }}
                         />
@@ -707,7 +707,7 @@ export function Chat() {
                 </div>
               </div>
             ) : (
-              <div class="tchat-readonly">Viewer — you can read this channel but not reply.</div>
+              <div class="tchat-readonly" role="status">Viewer — you can read this channel but not reply.</div>
             )}
           </>
         ) : (
