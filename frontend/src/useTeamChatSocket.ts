@@ -12,10 +12,12 @@ import type { ChatChannel, TeamChatMessage } from './api';
 export type ChatSocketEvent =
   | { type: 'message'; channel: ChatChannel; message: TeamChatMessage }
   | { type: 'typing'; channelId: string; user: { id: string; username: string } }
+  | { type: 'typing_stop'; channelId: string; user: { id: string; username: string } }
   | { type: 'read'; channelId: string; userId: string; msgId: string }
   | { type: 'pin'; channelId: string; msgId: string; pinned: boolean }
   | { type: 'presence'; users: { id: string; username: string; role: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' }[] }
-  | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write' };
+  | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write' }
+  | { type: 'status_update'; messageId: string; newStatus: TeamChatMessage['status'] };
 
 export interface TeamChatSocket {
   /** Subscribe a channel (fetch its recent history through the socket). */
@@ -89,8 +91,11 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
           case 'message':
             onEventRef.current({ type: 'message', channel: msg.channel, message: msg.message });
             break;
-          case 'typing':
+          case 'typing_start':
             onEventRef.current({ type: 'typing', channelId: msg.channelId, user: msg.user });
+            break;
+          case 'typing_stop':
+            onEventRef.current({ type: 'typing_stop', channelId: msg.channelId, user: msg.user });
             break;
           case 'read':
             onEventRef.current({ type: 'read', channelId: msg.channelId, userId: msg.userId, msgId: msg.msgId });
@@ -100,6 +105,11 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
             break;
           case 'presence':
             onEventRef.current({ type: 'presence', users: msg.users ?? [] });
+            break;
+          case 'status_update':
+            for (const u of (msg.updates ?? [])) {
+              onEventRef.current({ type: 'status_update', messageId: u.id, newStatus: u.status });
+            }
             break;
           default:
             break;
@@ -150,7 +160,7 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
 
   const sendTyping = useCallback(
     (channelId: string) => {
-      send({ type: 'typing', channelId });
+      send({ type: 'typing_start', channelId });
     },
     [send]
   );

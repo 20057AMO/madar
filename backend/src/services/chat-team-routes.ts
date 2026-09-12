@@ -48,10 +48,12 @@ import {
   getAttachmentMeta,
   uploadDir,
   genId,
+  getLastMessage,
+  setPinnedMessage,
 } from './chat-team-store';
 import { canAccessChannel, type ChatUser } from './chat-team-access';
 import { detectImageExt } from './avatar-store';
-import { broadcastChatMessage, broadcastPinChange, getChatTeamPresence } from '../ws/ws-chat-team';
+import { broadcastChatMessage, broadcastPinChange, broadcastPinnedUpdate, getChatTeamPresence } from '../ws/ws-chat-team';
 
 const chatUpload = multer({
   storage: multer.memoryStorage(),
@@ -120,11 +122,15 @@ export function registerChatTeamRoutes(app: any): void {
     const channels = visibleChannels(user, idx);
     const unread = getUnreadByChannel(user.id, channels);
     res.json({
-      channels: channels.map((c) => ({
-        ...c,
-        unread: unread[c.id]?.count || 0,
-        firstUnreadId: unread[c.id]?.firstUnreadId,
-      })),
+      channels: channels.map((c) => {
+        const lastMsg = getLastMessage(c.id);
+        return {
+          ...c,
+          unread: unread[c.id]?.count || 0,
+          firstUnreadId: unread[c.id]?.firstUnreadId,
+          lastMessage: lastMsg ? { text: lastMsg.text, timestamp: lastMsg.createdAt } : null,
+        };
+      }),
     });
   });
 
@@ -203,6 +209,28 @@ export function registerChatTeamRoutes(app: any): void {
     }
     await deleteChannel(cid);
     res.json({ ok: true });
+  });
+
+  // Pin a specific message as the channel's primary pinned message (editor+).
+  r.put('/channels/:id/pin', chatWriteLimiter, async (req: any, res) => {
+    const cid = req.params.id;
+    if (!isChannelId(cid)) return res.status(400).json({ error: 'Invalid channel id' });
+    
+    const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
+    const channel = getChannel(cid);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    
+    const level = canAccessChannel(user, channel);
+    if (level !== 'write') return res.status(403).json({ error: 'Write access required to pin' });
+
+    const messageId = typeof req.body?.messageId === 'string' ? req.body.messageId : null;
+    if (messageId !== null && !isMessageId(messageId)) return res.status(400).json({ error: 'Invalid message id' });
+
+    await setPinnedMessage(cid, messageId);
+    const updatedChannel = getChannel(cid) || channel;
+    
+    broadcastPinnedUpdate(cid, updatedChannel.pinnedMessageId || null);
+    res.json({ channel: updatedChannel });
   });
 
   // ── Messages ─────────────────────────────────────────────────

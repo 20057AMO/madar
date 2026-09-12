@@ -185,13 +185,16 @@ describe('User profile & avatar (real Docker)', () => {
     assert.strictEqual(asOther.profile.email, undefined, 'email withheld from other members when hidden');
     assert.strictEqual(asOther.profile.emailVisible, false, 'toggle state stays visible so the UI can explain the hidden field');
 
-    // The admin surface is non-self too → filtered on this route, but the
-    // admin roster (/api/users) still carries the email as before.
+    // The admin surface is non-self too → filtered on this route. The roster
+    // surfaces (/api/users and /api/users/with-memberships) apply the SAME
+    // privacy rule — a hidden email is readable only by its OWNER, never by
+    // other members nor admins (CWE-359 closure).
     const asAdmin = await (await reqAuth('GET', `/users/${myId}/profile`)).json();
     assert.strictEqual(asAdmin.profile.email, undefined);
     const roster = await (await reqAuth('GET', '/users')).json();
     const rec = roster.find((u: any) => u.id === myId);
-    assert.strictEqual(rec.profile.email, 'hidden@example.com', 'admin roster keeps the email');
+    assert.strictEqual(rec.profile.email, undefined, 'hidden email is withheld from the roster');
+    assert.strictEqual(rec.profile.emailVisible, false, 'toggle state stays visible so the UI can explain the hidden field');
 
     // Re-enable → visible to others again.
     const on = await req('PUT', '/users/me/profile', { emailVisible: true }, { Authorization: `Bearer ${myTok}` });

@@ -601,15 +601,33 @@ app.post('/api/settings/import', requireAdmin, authLimiter, async (req: any, res
 
 // ── User management (admin only) ──────────────────────────────
 
+/**
+ * Privacy filter shared by every user-LIST surface: once a member opts out
+ * (profile.emailVisible === false) their email is readable ONLY by themselves —
+ * the exact rule of GET /api/users/:userId/profile. Read copy only, never the
+ * stored record. CWE-359: any authenticated user could previously read hidden
+ * emails straight off the roster.
+ */
+function withEmailPrivacy(
+  users: ReturnType<typeof listUsers>,
+  viewerId?: string
+): ReturnType<typeof listUsers> {
+  return users.map((u) =>
+    u.id === viewerId
+      ? u
+      : { ...u, profile: u.profile?.emailVisible === false ? { ...u.profile, email: undefined } : u.profile }
+  );
+}
+
 app.get('/api/users', (req: any, res) => {
-  res.json(listUsers());
+  res.json(withEmailPrivacy(listUsers(), req.user?.id));
 });
 
 // Team overview — every user + their project memberships (owner/admin/editor/
 // viewer). Admin-only roster for the admin Team page; the project-level Team
 // tab stays served by the open GET /api/users route (members may view it).
 app.get('/api/users/with-memberships', requireAdmin, (req: any, res) => {
-  const users = listUsers();
+  const users = withEmailPrivacy(listUsers(), req.user?.id);
   const memberships = new Map<string, Array<{ slug: string; name: string; role: string; isOwner: boolean }>>();
   for (const slug of listMetaSlugs()) {
     const meta = loadMeta(slug);

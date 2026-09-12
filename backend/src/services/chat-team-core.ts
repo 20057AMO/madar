@@ -28,6 +28,10 @@ export interface TeamMessage {
   attachments?: ChatAttachment[];
   pinned?: boolean;
   createdAt: string;
+  /** Lifecycle status. */
+  status: 'sent' | 'delivered' | 'read';
+  /** Users who have read this message. */
+  readBy: string[];
 }
 
 export interface ChannelMember {
@@ -47,6 +51,7 @@ export interface TeamChannel {
   createdBy?: string;
   createdAt: string;
   lastMessageAt?: string;
+  pinnedMessageId?: string | null;
 }
 
 export const MAX_TEXT_CHARS = 5000;
@@ -139,6 +144,8 @@ export function formatMessage(
     username,
     text: normalized.text,
     createdAt,
+    status: 'sent',
+    readBy: [],
     ...(replyTo ? { replyTo } : {}),
     ...(normalized.mentions.length ? { mentions: normalized.mentions } : {}),
     ...(attachments?.length ? { attachments } : {}),

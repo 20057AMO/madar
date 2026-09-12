@@ -1261,6 +1261,7 @@ export interface TeamChatMessage {
   attachments?: ChatAttachment[];
   pinned?: boolean;
   createdAt: string;
+  status?: 'sent' | 'delivered' | 'read';
 }
 
 export interface ChatChannel {
@@ -1351,7 +1352,7 @@ export const uploadChatAttachment = (channelId: string, file: Blob) => {
 /** Authenticated attachment URL (raw bytes; a token is never in the URL). */
 export const chatAttachmentUrl = (attachmentId: string): string => `/api/chat-team/uploads/${attachmentId}`;
 
-const _chatBlob = new Map<string, Promise<string>>();
+const _chatBlob = new Map<string, { promise: Promise<string>; count: number }>();
 /**
  * Fetch an authenticated attachment and return a cached object URL.
  * The uploads route sits behind authMiddleware, so `<img>` cannot load it
@@ -1359,8 +1360,11 @@ const _chatBlob = new Map<string, Promise<string>>();
  * attachment id so repeated renders don't re-download.
  */
 export function chatAttachmentObjectUrl(attachmentId: string): Promise<string> {
-  const cached = _chatBlob.get(attachmentId);
-  if (cached) return cached;
+  const entry = _chatBlob.get(attachmentId);
+  if (entry) {
+    entry.count++;
+    return entry.promise;
+  }
   const p = fetch(chatAttachmentUrl(attachmentId), {
     headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
   })
@@ -1369,9 +1373,22 @@ export function chatAttachmentObjectUrl(attachmentId: string): Promise<string> {
       return r.blob();
     })
     .then((blob) => URL.createObjectURL(blob));
-  _chatBlob.set(attachmentId, p);
+  _chatBlob.set(attachmentId, { promise: p, count: 1 });
   p.catch(() => _chatBlob.delete(attachmentId));
   return p;
+}
+
+/**
+ * Decrements the reference count for a cached attachment URL and revokes it if it reaches zero.
+ */
+export function revokeChatAttachmentObjectUrl(attachmentId: string) {
+  const entry = _chatBlob.get(attachmentId);
+  if (!entry) return;
+  entry.count--;
+  if (entry.count <= 0) {
+    entry.promise.then((url) => URL.revokeObjectURL(url)).catch(() => {});
+    _chatBlob.delete(attachmentId);
+  }
 }
 
 /** Current online team-chat users (labels only). */

@@ -95,6 +95,11 @@ function writeReadMap(map: ReadMap): void {
   fs.writeFileSync(READ_FILE, JSON.stringify(map), 'utf8');
 }
 
+export function getLastMessage(channelId: string): TeamMessage | null {
+  const messages = readMessagesRaw(channelId);
+  return messages.length > 0 ? messages[messages.length - 1] : null;
+}
+
 /** All channels (raw — access filtering happens in the caller). */
 export function listChannels(): TeamChannel[] {
   return readChannelsRaw().channels;
@@ -313,6 +318,67 @@ export async function pinUnpinMessage(channelId: string, msgId: string, pinned: 
   return updated;
 }
 
+/** Mark a specific message as delivered. */
+export async function markMessageAsDelivered(channelId: string, msgId: string): Promise<TeamMessage | null> {
+  let updated: TeamMessage | null = null;
+  await withFileLockAsync(`msgs:${channelId}`, async () => {
+    const messages = readMessagesRaw(channelId);
+    const idx = messages.findIndex((m) => m.id === msgId);
+    if (idx === -1) return;
+    if (messages[idx].status === 'sent') {
+      messages[idx] = { ...messages[idx], status: 'delivered' };
+      writeMessagesRaw(channelId, messages);
+    }
+    updated = messages[idx];
+  });
+  return updated;
+}
+
+/**
+ * Mark messages read by a user, up to and including the anchor message.
+ * The anchor must actually EXIST in the channel (a client can never forge a
+ * read receipt against a nonexistent `msgId`), and only messages at or before
+ * the anchor's position change status — an anchor mid-history never marks
+ * newer messages as read (anti-spoofing: read receipts stay honest).
+ * Returns the messages whose status changed, or null when the anchor message
+ * is unknown — callers must then skip persisting the read position too.
+ */
+export async function markMessagesAsRead(
+  channelId: string,
+  userId: string,
+  anchorMsgId?: string
+): Promise<{ id: string; status: string }[] | null> {
+  const changed: { id: string; status: string }[] = [];
+  let anchorMissing = false;
+  await withFileLockAsync(`msgs:${channelId}`, async () => {
+    const messages = readMessagesRaw(channelId);
+    let upTo = messages.length - 1;
+    if (anchorMsgId) {
+      const anchorIdx = messages.findIndex((m) => m.id === anchorMsgId);
+      if (anchorIdx === -1) {
+        anchorMissing = true;
+        return;
+      }
+      upTo = anchorIdx;
+    }
+    let modified = false;
+    for (let i = 0; i <= upTo; i++) {
+      const m = messages[i];
+      if (!m.readBy.includes(userId)) {
+        m.readBy.push(userId);
+        modified = true;
+        // Mark as read if it's not the sender reading their own message
+        if (m.userId !== userId && m.status !== 'read') {
+          m.status = 'read';
+          changed.push({ id: m.id, status: 'read' });
+        }
+      }
+    }
+    if (modified) writeMessagesRaw(channelId, messages);
+  });
+  return anchorMissing ? null : changed;
+}
+
 /** Record the last read message id for a user in a channel. */
 export async function setReadPosition(channelId: string, userId: string, msgId: string): Promise<void> {
   if (!isChannelId(channelId) || !isMessageId(msgId)) return;
@@ -327,6 +393,33 @@ export async function setReadPosition(channelId: string, userId: string, msgId: 
 
 export function getReadPosition(channelId: string, userId: string): string | null {
   return readReadMap()[channelId]?.[userId] || null;
+}
+
+/**
+ * Sets the pinned message for a channel.
+ * If messageId is provided, it verifies the message exists in the channel before pinning.
+ */
+export async function setPinnedMessage(channelId: string, messageId: string | null): Promise<void> {
+  if (!isChannelId(channelId)) return;
+  
+  if (messageId !== null && !isMessageId(messageId)) return;
+
+  // Verify existence if we are pinning a specific message
+  if (messageId !== null) {
+    const messages = readMessagesRaw(channelId);
+    if (!messages.some(m => m.id === messageId)) return;
+  }
+
+  await withFileLockAsync(`channel:${channelId}`, async () => {
+    const all = readChannelsRaw().channels;
+    const ch = all.find((c) => c.id === channelId);
+    if (!ch) return;
+    
+    if (ch.pinnedMessageId !== messageId) {
+      ch.pinnedMessageId = messageId;
+      writeChannelsRaw({ channels: all });
+    }
+  });
 }
 
 /** Unread message id per channel for a user (id of the first unread). */

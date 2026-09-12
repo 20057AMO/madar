@@ -30,6 +30,8 @@ import {
   getChannel,
   getMessages,
   setReadPosition,
+  markMessageAsDelivered,
+  markMessagesAsRead,
 } from '../services/chat-team-store';
 import { canAccessChannel, type ChatUser } from '../services/chat-team-access';
 import type { TeamChannel } from '../services/chat-team-core';
@@ -75,6 +77,11 @@ export function broadcastChatMessage(channel: TeamChannel, message: unknown): vo
 /** Push a pin/unpin change to the channel. */
 export function broadcastPinChange(channelId: string, msgId: string, pinned: boolean): void {
   broadcastToChannel(channelId, { type: 'pin', channelId, msgId, pinned });
+}
+
+/** Push a pinned message update (change of the channel's primary pinned message). */
+export function broadcastPinnedUpdate(channelId: string, pinnedMessageId: string | null): void {
+  broadcastToChannel(channelId, { type: 'pinned_update', channelId, pinnedMessageId });
 }
 
 function sendPresence(ws: WebSocket): void {
@@ -138,14 +145,15 @@ export function handleChatTeamSocket(
     onRelease();
   };
 
-  ws.on('message', (data) => {
-    let msg: any;
-    try {
-      msg = JSON.parse(data.toString('utf8'));
-    } catch {
-      send(ws, { type: 'error', message: 'Invalid JSON payload' });
-      return;
-    }
+    ws.on('message', async (data) => {
+      let msg: any;
+      try {
+        msg = JSON.parse(data.toString('utf8'));
+      } catch {
+        send(ws, { type: 'error', message: 'Invalid JSON payload' });
+        return;
+      }
+
 
     const channelId = typeof msg.channelId === 'string' ? msg.channelId : '';
 
@@ -180,14 +188,44 @@ export function handleChatTeamSocket(
         send(ws, { type: 'unsubscribed', channelId });
         return;
       }
-      case 'typing': {
+      case 'message_delivered': {
         if (!client.channels.has(channelId)) return;
-        const last = client.typingAt.get(channelId) || 0;
+        if (typeof msg.msgId !== 'string' || !/^m-[a-z0-9-]+$/.test(msg.msgId)) {
+          send(ws, { type: 'error', message: 'Invalid message id' });
+          return;
+        }
+        const updated = await markMessageAsDelivered(channelId, msg.msgId);
+        if (updated) {
+          broadcastToChannel(channelId, {
+            type: 'status_update',
+            channelId,
+            updates: [{ id: updated.id, status: updated.status }],
+          });
+        }
+        return;
+      }
+      case 'typing_start': {
+        if (!client.channels.has(channelId)) return;
+        // Debounced 3s per socket+channel: while a user types continuously the
+        // client re-sends typing_start on every keypress — broadcast at most
+        // once per PRESENCE_TYPING_MS so the channel isn't flooded with frames.
         const now = Date.now();
-        if (now - last < PRESENCE_TYPING_MS) return;
+        if (now - (client.typingAt.get(channelId) || 0) < PRESENCE_TYPING_MS) return;
         client.typingAt.set(channelId, now);
         broadcastToChannel(channelId, {
-          type: 'typing',
+          type: 'typing_start',
+          channelId,
+          user: { id: client.user.id, username: client.user.username },
+        });
+        return;
+      }
+      case 'typing_stop': {
+        if (!client.channels.has(channelId)) return;
+        // Broadcast immediately on arrival; clear the throttle so a NEW typing
+        // burst starts fresh (only repeats within an ongoing burst are capped).
+        client.typingAt.delete(channelId);
+        broadcastToChannel(channelId, {
+          type: 'typing_stop',
           channelId,
           user: { id: client.user.id, username: client.user.username },
         });
@@ -199,7 +237,22 @@ export function handleChatTeamSocket(
           send(ws, { type: 'error', message: 'Invalid message id' });
           return;
         }
+        // The anchor must genuinely exist in the channel: markMessagesAsRead
+        // returns null (and changes nothing) for a nonexistent msgId — no
+        // readBy/status mutation, no read position, no broadcast to the room.
+        const changed = await markMessagesAsRead(channelId, client.user.id, msg.msgId);
+        if (changed === null) {
+          send(ws, { type: 'error', message: 'Message not found' });
+          return;
+        }
         void setReadPosition(channelId, client.user.id, msg.msgId);
+        if (changed.length > 0) {
+          broadcastToChannel(channelId, {
+            type: 'status_update',
+            channelId,
+            updates: changed,
+          });
+        }
         broadcastToChannel(channelId, {
           type: 'read',
           channelId,

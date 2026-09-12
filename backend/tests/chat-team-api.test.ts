@@ -363,10 +363,10 @@ test('access matrix: project channel mirrors project membership; manual is team-
   assert.strictEqual(eManualSend.status, 201);
   const vManualRead = await runAsViewer('GET', `${chatBase}/channels/${manual.id}/messages`);
   assert.strictEqual(vManualRead.status, 200);
-  // Manual channels are team-wide by design: every authenticated user reads
-  // AND writes â€” only creation/deletion are gated by the editor level.
+  // Manual channels: viewers are READ-ONLY by the documented access contract —
+  // editors+ write, creation/deletion are gated by the editor level too.
   const vManualSend = await runAsViewer('POST', `${chatBase}/messages`, { channelId: manual.id, text: 'viewer on team channel' });
-  assert.strictEqual(vManualSend.status, 201, JSON.stringify(vManualSend.json));
+  assert.strictEqual(vManualSend.status, 403, JSON.stringify(vManualSend.json));
 });
 
 test('attachment upload + authenticated download + oversize/junk rejection', async () => {
@@ -422,8 +422,8 @@ test('presence endpoint shape', async () => {
 });
 
 test('H1: channel detail returns the caller access level', async (t) => {
-  // Manual team-wide channel: every authenticated user reads AND writes, so a
-  // viewer must get level 'write' (creation/delete are the only gated ops).
+  // Manual team-wide channel: every authenticated user READS; editors+ write.
+  // A viewer must therefore get level 'read' (creation/delete are gated too).
   const manual = await makeChannel(uniqueId('lvl'));
   const v = await reqAuth('POST', '/users', { username: uniqueId('vch'), password: 'pass-123456', role: 'viewer' });
   assert.strictEqual(v.status, 201);
@@ -432,7 +432,7 @@ test('H1: channel detail returns the caller access level', async (t) => {
   const viewerTok = jwt.sign({ id: viewer.id, username: viewer.username, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
   const mDetail = await runAs(viewerTok)('GET', `${chatBase}/channels/${manual.id}`);
   assert.strictEqual(mDetail.status, 200);
-  assert.strictEqual(mDetail.json.level, 'write', 'manual channels are team-wide: viewer still writes');
+  assert.strictEqual(mDetail.json.level, 'read', 'manual channels are team-wide: viewers read, editors+ write');
 
   // Project channel: membership drives the level — viewer member 'read',
   // editor member 'write' (the level field was missing before the fix).
