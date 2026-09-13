@@ -1431,6 +1431,72 @@ textarea.agent-prompt-input {
 .activity-act { color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-at { color: var(--text-3); flex-shrink: 0; margin-left: 10px; }
 
+/* ── Project Activity feed (tab) — rests on the legacy list/row skeleton ── */
+.activity-head { display: flex; align-items: center; gap: 8px; }
+.activity-count { font-size: 0.68rem; color: var(--text-3); font-weight: 500; margin-right: 2px; }
+.activity-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-2) 10%, transparent);
+}
+.activity-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.activity-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.activity-line .activity-act { flex-shrink: 0; }
+.activity-actor {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex: 1; min-width: 0;
+  overflow: hidden; white-space: nowrap;
+  color: var(--text-2);
+}
+.activity-actor-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-actor.system { flex: none; color: var(--text-3); font-weight: 600; }
+.activity-actor.system .icon { margin-top: -1px; }
+.activity-detail {
+  font-size: 0.68rem; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.activity-load { pointer-events: none; }
+.activity-ico-skel {
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  background: linear-gradient(90deg, var(--border) 25%, var(--border-2) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s ease infinite;
+}
+
+/* Activity action colors — new action types only (legacy
+   created/started/stopped/recreated/cloned dots untouched above) */
+.activity-dot.duplicated { background: var(--accent); } .activity-ico.duplicated { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.activity-dot.imported { background: var(--blue); } .activity-ico.imported { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.activity-dot.restored { background: var(--accent); } .activity-ico.restored { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.activity-dot.deleted { background: var(--red); } .activity-ico.deleted { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.activity-dot.updated { background: var(--yellow); } .activity-ico.updated { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.activity-dot.env_updated { background: var(--blue); } .activity-ico.env_updated { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.activity-dot.tags_updated { background: var(--yellow); } .activity-ico.tags_updated { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.activity-dot.ports_updated { background: var(--blue); } .activity-ico.ports_updated { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.activity-dot.limits_updated { background: var(--yellow); } .activity-ico.limits_updated { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.activity-dot.notes_saved { background: var(--green); } .activity-ico.notes_saved { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.activity-dot.canvas_saved { background: var(--accent); } .activity-ico.canvas_saved { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.activity-dot.member_added { background: var(--green); } .activity-ico.member_added { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.activity-dot.member_removed { background: var(--red); } .activity-ico.member_removed { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.activity-dot.member_role_changed { background: var(--yellow); } .activity-ico.member_role_changed { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.activity-dot.ownership_transferred { background: #eab308; } .activity-ico.ownership_transferred { color: #eab308; background: color-mix(in srgb, #eab308 12%, transparent); }
+.activity-dot.snapshot_captured { background: var(--accent); } .activity-ico.snapshot_captured { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.activity-dot.snapshot_deleted { background: var(--red); } .activity-ico.snapshot_deleted { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.activity-dot.snapshot_config { background: var(--text-2); } .activity-ico.snapshot_config { color: var(--text-2); background: color-mix(in srgb, var(--text-2) 12%, transparent); }
+.activity-dot.exported { background: var(--blue); } .activity-ico.exported { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.activity-dot.serve_started { background: var(--green); } .activity-ico.serve_started { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.activity-dot.serve_stopped { background: var(--text-2); } .activity-ico.serve_stopped { color: var(--text-2); background: color-mix(in srgb, var(--text-2) 12%, transparent); }
+.activity-dot.crashed { background: var(--red); } .activity-ico.crashed { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.activity-dot.crash_cleared { background: var(--green); } .activity-ico.crash_cleared { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.activity-dot.unknown { background: var(--text-3); } .activity-ico.unknown { color: var(--text-3); background: color-mix(in srgb, var(--text-3) 12%, transparent); }
+/* Icon tints for the five legacy dot classes (their dots are styled above) */
+.activity-ico.created { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.activity-ico.started { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.activity-ico.stopped { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.activity-ico.recreated { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.activity-ico.cloned { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
 .danger-zone { border-color: rgba(248,81,73,0.3); }
 .danger-desc { display: flex; align-items: flex-start; gap: 8px; color: var(--text-2); font-size: 0.78rem; line-height: 1.5; }
 .danger-desc .icon { flex-shrink: 0; margin-top: 2px; color: var(--red); }

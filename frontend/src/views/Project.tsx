@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -47,11 +47,13 @@ import type {
 } from '../api';
 import { NotesPanel } from '../components/NotesPanel';
 import { fmtCpu, fmtMem, limitsPending } from '../lib/limits';
+import { fmtAction } from '../lib/activity-meta';
 import { ProjectChat } from '../components/ProjectChat';
 import { ProjectTerminal } from '../components/ProjectTerminal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { TeamPanel } from '../components/TeamPanel';
 import { SnapshotsPanel } from '../components/SnapshotsPanel';
+import { ActivityPanel } from '../components/ActivityPanel';
 import { ProjectCanvas } from '../components/ProjectCanvas';
 import { CrashBadge } from '../components/CrashBadge';
 import { useAuth } from '../auth';
@@ -59,9 +61,9 @@ import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
 import { VSCodeIcon, OpencodeIcon } from '../components/brand-icons';
 
-type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'snapshots' | 'canvas';
+type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'activity' | 'snapshots' | 'canvas';
 
-const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'logs', 'terminal', 'notes', 'scripts', 'team', 'snapshots', 'canvas'];
+const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'logs', 'terminal', 'notes', 'scripts', 'team', 'activity', 'snapshots', 'canvas'];
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'Overview',
@@ -72,6 +74,7 @@ const TAB_LABELS: Record<Tab, string> = {
   notes: 'Notes',
   scripts: 'Scripts',
   team: 'Team',
+  activity: 'Activity',
   snapshots: 'Snapshots',
   canvas: 'Canvas',
 };
@@ -85,6 +88,7 @@ const TAB_ICON: Record<Tab, any> = {
   notes: StickyNote,
   scripts: Wrench,
   team: Users,
+  activity: History,
   snapshots: Camera,
   canvas: PenTool,
 };
@@ -116,21 +120,6 @@ function relTime(iso: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
-}
-
-function fmtAction(action: string): string {
-  switch (action) {
-    case 'created': return 'Created';
-    case 'started': return 'Started';
-    case 'stopped': return 'Stopped';
-    case 'recreated': return 'Recreated';
-    case 'cloned': return 'Git cloned';
-    case 'env_updated': return 'Env updated';
-    case 'ports_updated': return 'Ports updated';
-    case 'limits_updated': return 'Limits updated';
-    case 'deleted': return 'Deleted';
-    default: return action.charAt(0).toUpperCase() + action.slice(1);
-  }
 }
 
 export function Project({ params }: { params: { slug: string } }) {
@@ -677,6 +666,7 @@ export function Project({ params }: { params: { slug: string } }) {
         {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
         {tab === 'scripts' && <ScriptsPanel slug={slug} />}
         {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}
+        {tab === 'activity' && <ActivityPanel slug={slug} readOnly={readOnly} />}
         {tab === 'snapshots' && <SnapshotsPanel slug={slug} />}
         {tab === 'canvas' && <ProjectCanvas slug={slug} readOnly={readOnly} />}
       </div>

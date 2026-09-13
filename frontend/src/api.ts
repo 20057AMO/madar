@@ -537,6 +537,32 @@ export const saveProjectNotes = (slug: string, items: NoteItem[]) =>
     body: JSON.stringify({ items }),
   });
 
+// ── Project activity feed ───────────────────────────────────────────────
+export type ActivityDetails = Record<string, string | number | boolean | string[] | null | undefined>;
+
+export interface ProjectActivityEntry {
+  id: string;
+  action: string;
+  at: string;
+  /** Actor identity — absent on automated/system events (render "System"). */
+  userId?: string;
+  actorName?: string;
+  actorDisplayName?: string;
+  actorAvatarExt?: 'png' | 'jpg' | 'webp';
+  /** Action-specific payload — numbers, strings or string arrays. */
+  details?: ActivityDetails;
+}
+
+export interface ProjectActivityPage {
+  entries: ProjectActivityEntry[];
+  total: number;
+}
+
+export const getProjectActivity = (slug: string, limit = 50, offset = 0) =>
+  api<ProjectActivityPage>(
+    `/api/projects/${encodeURIComponent(slug)}/activity?limit=${limit}&offset=${offset}`
+  );
+
 // ── Project canvas (visual planning) ────────────────────────────────────
 export type CanvasNodeType = 'note' | 'card';
 export type CanvasColor = 'yellow' | 'blue' | 'red' | 'green';
