@@ -11,7 +11,7 @@
  */
 import { checkProjectAccess } from '../middleware/auth';
 import type { UserRole } from '../services/user-store';
-import type { TeamChannel } from '../services/chat-team-core';
+import { isChannelAdmin, type CanSendMode, type TeamChannel } from '../services/chat-team-core';
 
 export type AccessLevel = 'none' | 'read' | 'write';
 
@@ -40,4 +40,28 @@ export function canAccessChannel(user: ChatUser, channel: TeamChannel): AccessLe
   // Viewers are READ-ONLY here (matches the documented access contract) —
   // only admins/editors may create or delete, checked at the routes.
   return user.role === 'viewer' ? 'read' : 'write';
+}
+
+/**
+ * Channel-level SEND gate — a second, orthogonal layer under the regular
+ * access level. canAccessChannel stays the single read/visibility authority;
+ * this only narrows WHO may write when the channel is locked down:
+ *   - not write-level (viewer / no access)                → never may send
+ *   - canSend 'everyone' (or absent on legacy channels)   → write-level passes
+ *   - canSend 'admins'                                    → system admins +
+ *     the channel creator / explicit admin members only
+ * 'project'/'direct' channels never carry canSend, so they are unaffected.
+ */
+export function canSendInChannel(
+  user: { id: string; role: string },
+  channel: {
+    createdBy?: string;
+    members?: { userId: string; role: string }[];
+    canSend?: CanSendMode;
+  },
+  level: 'read' | 'write'
+): boolean {
+  if (level !== 'write') return false;
+  if (channel.canSend !== 'admins') return true;
+  return user.role === 'admin' || isChannelAdmin(channel, user.id);
 }

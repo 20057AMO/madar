@@ -20,6 +20,8 @@ import {
   buildProjectChannelId,
   buildDirectChannelId,
   sanitizePlain,
+  sanitizeCanSend,
+  isChannelAdmin,
   parseMentions,
   normalizeMessage,
   formatMessage,
@@ -30,6 +32,7 @@ import {
   wouldExceedAttachmentQuota,
   isChannelId,
   isMessageId,
+  CHANNEL_ID_RE,
   channelSortKey,
   channelLabel,
   type TeamChannel,
@@ -213,6 +216,17 @@ describe('channel id discipline', () => {
     assert.ok(!isChannelId('a b'));
     assert.ok(!isChannelId('x'.repeat(90)));
   });
+  // L3: the safe charset would otherwise accept '.' / '..' as full ids —
+  // both regex-pass and rejected today so a future path-join can never
+  // accidentally walk a parent with an id alone.
+  test('L3: dot-only ids rejected (passes regex, blocked explicitly)', () => {
+    assert.ok(CHANNEL_ID_RE.test('.'));
+    assert.ok(CHANNEL_ID_RE.test('..'));
+    assert.strictEqual(isChannelId('.'), false);
+    assert.strictEqual(isChannelId('..'), false);
+    assert.strictEqual(isChannelId('.'), false);
+    assert.strictEqual(isChannelId(undefined), false);
+  });
   test('message id format', () => {
     assert.ok(isMessageId('m-abc123'));
     assert.ok(!isMessageId('abc'));
@@ -249,4 +263,71 @@ describe('channelSortKey + channelLabel', () => {
     assert.strictEqual(channelLabel(p, 'u-1', users), '#web');
     assert.strictEqual(channelLabel(m, 'u-1', users), 'Design');
   });
+});
+
+describe('sanitizeCanSend', () => {
+  test('accepts the two valid modes as-is', () => {
+    assert.strictEqual(sanitizeCanSend('everyone'), 'everyone');
+    assert.strictEqual(sanitizeCanSend('admins'), 'admins');
+  });
+  test('rejects junk / absent / non-string values', () => {
+    assert.strictEqual(sanitizeCanSend(null), null);
+    assert.strictEqual(sanitizeCanSend(undefined), null);
+    assert.strictEqual(sanitizeCanSend(42), null);
+    assert.strictEqual(sanitizeCanSend(''), null);
+    assert.strictEqual(sanitizeCanSend('all'), null);
+    assert.strictEqual(sanitizeCanSend('EVERYONE'), null);
+    assert.strictEqual(sanitizeCanSend({}), null);
+  });
+});
+
+describe('isChannelAdmin', () => {
+  const channel = {
+    createdBy: 'u-owner',
+    members: [
+      { userId: 'u-admin', role: 'admin' },
+      { userId: 'u-editor', role: 'editor' },
+      { userId: 'u-viewer', role: 'viewer' },
+    ],
+  };
+  test('creator → true', () => {
+    assert.strictEqual(isChannelAdmin(channel, 'u-owner'), true);
+  });
+  test('explicit admin member → true', () => {
+    assert.strictEqual(isChannelAdmin(channel, 'u-admin'), true);
+  });
+  test('editor member → false', () => {
+    assert.strictEqual(isChannelAdmin(channel, 'u-editor'), false);
+  });
+  test('viewer member → false', () => {
+    assert.strictEqual(isChannelAdmin(channel, 'u-viewer'), false);
+  });
+  test('non-member → false', () => {
+    assert.strictEqual(isChannelAdmin(channel, 'u-stranger'), false);
+  });
+  test('missing createdBy → a listed admin member still passes', () => {
+    assert.strictEqual(isChannelAdmin({ members: [{ userId: 'x', role: 'admin' }] }, 'x'), true);
+  });
+  test('empty/absent members + no createdBy → false', () => {
+    assert.strictEqual(isChannelAdmin({}, 'u-owner'), false);
+    assert.strictEqual(isChannelAdmin({ members: [] }, 'u-owner'), false);
+  });
+  // G1: the reviewer-specified fixture — an explicit admin member who is NOT
+  // the channel creator must still be an admin (createdBy alone decides
+  // nothing for a third user).
+  test('G1: explicit admin member on a channel created by someone else → true', () => {
+    assert.strictEqual(isChannelAdmin({ members: [{ userId: 'u1', role: 'admin' }], createdBy: 'u2' }, 'u1'), true);
+  });
+  test('G1: an editor member on the same shape → false', () => {
+    assert.strictEqual(isChannelAdmin({ members: [{ userId: 'u1', role: 'editor' }], createdBy: 'u2' }, 'u1'), false);
+  });
+  test('G1: creator without any membership row → true (createdBy is the admin authority)', () => {
+    assert.strictEqual(isChannelAdmin({ members: [], createdBy: 'u0' }, 'u0'), true);
+    assert.strictEqual(isChannelAdmin({ createdBy: 'u0' }, 'u0'), true);
+  });
+  // NOTE: the G1 "system admin" bullet (role 'admin' bypasses the admins-lock
+  // without creation/membership) lives in canSendInChannel (chat-team-access),
+  // which imports middleware/auth — NOT import-free, so it cannot load under
+  // node --test here. It is covered in the real-API suite (G1 test in
+  // chat-team-api.test.ts + maySend assertions in CS1/CS3/CS5/CS6v).
 });

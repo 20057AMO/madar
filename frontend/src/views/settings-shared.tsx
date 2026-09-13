@@ -34,6 +34,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   'serve-stop': 'Static site stopped',
   'project-files-deleted': 'Project files deleted',
   'canvas-save': 'Planning canvas saved',
+  'chat-channel-settings': 'Channel send permissions changed',
+  'chat-channel-settings-failed': 'Channel send permissions change failed',
   'workspace-janitor': 'Orphan workspaces archived',
   'opencode-studio': 'Opencode Studio edited',
   'opencode-update': 'Opencode updated',

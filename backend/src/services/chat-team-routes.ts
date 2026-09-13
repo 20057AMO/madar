@@ -10,6 +10,8 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 
+import { HttpError } from './docker-manager';
+
 import {
   listUsers,
 } from './user-store';
@@ -17,6 +19,7 @@ import { checkUserWrite } from './user-write-limiter';
 import {
   isChannelId,
   isMessageId,
+  sanitizeCanSend,
   normalizeMessage,
   formatMessage,
   searchMessages,
@@ -26,11 +29,14 @@ import {
   MAX_CHANNEL_ATTACHMENT_BYTES,
   channelAttachmentBytes,
   wouldExceedAttachmentQuota,
+  isChannelAdmin,
+  type CanSendMode,
   type ChannelMember,
   type ChatAttachment,
   type TeamChannel,
   type TeamMessage,
 } from './chat-team-core';
+import { recordAudit } from './audit-store';
 import {
   listChannels,
   getChannel,
@@ -50,14 +56,39 @@ import {
   genId,
   getLastMessage,
   setPinnedMessage,
+  setChannelCanSend,
 } from './chat-team-store';
-import { canAccessChannel, type ChatUser } from './chat-team-access';
+import { canAccessChannel, canSendInChannel, type ChatUser } from './chat-team-access';
 import { detectImageExt } from './avatar-store';
-import { broadcastChatMessage, broadcastPinChange, broadcastPinnedUpdate, getChatTeamPresence } from '../ws/ws-chat-team';
+import {
+  broadcastChatMessage,
+  broadcastPinChange,
+  broadcastPinnedUpdate,
+  broadcastChannelUpdate,
+  getChatTeamPresence,
+} from '../ws/ws-chat-team';
 
 const chatUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_ATTACHMENT_BYTES, files: 1 },
+  // L1: reject unauthorized uploads BEFORE any bytes land in memory — a
+  // blocked editor must never make the server buffer up to 10 MB for a 403.
+  // Fail-closed when the caller streams the file before channelId (our client
+  // always appends channelId first — see uploadChatAttachment in api.ts).
+  fileFilter: (req: any, _file, cb) => {
+    const channelId = typeof req.body?.channelId === 'string' ? req.body.channelId : '';
+    if (!isChannelId(channelId)) return cb(new HttpError(400, 'Missing or invalid channelId'));
+    const channel = getChannel(channelId);
+    if (!channel) return cb(new HttpError(404, 'Channel not found'));
+    const user: ChatUser = { id: req.user?.id, username: req.user?.username, role: req.user?.role };
+    if (canAccessChannel(user, channel) !== 'write') {
+      return cb(new HttpError(403, 'Write access required to upload'));
+    }
+    if (!canSendInChannel(user, channel, 'write')) {
+      return cb(new HttpError(403, 'Only admins can send in this channel'));
+    }
+    cb(null, true);
+  },
 });
 
 /**
@@ -74,6 +105,20 @@ function chatWriteLimiter(req: any, res: any, next: any): void {
 }
 
 type SafeUserRow = { id: string; username: string; displayName?: string; avatarExt?: string };
+
+type EnrichedChannel = TeamChannel & {
+  members: {
+    userId: string;
+    role: ChannelMember['role'];
+    username: string;
+    displayName?: string;
+    avatarExt?: string;
+  }[];
+  /** Persisted send mode, surfaced with the legacy default. */
+  canSend: CanSendMode;
+  /** May THIS requesting user send/upload/pin right now (canSendInChannel)? */
+  maySend: boolean;
+};
 
 /** id → { username, displayName, avatarExt } for channel/message enrichment. */
 function userIndex(): Map<string, SafeUserRow> {
@@ -97,7 +142,7 @@ function visibleChannels(user: ChatUser, idx: Map<string, SafeUserRow>): TeamCha
     .sort((a, b) => channelSortKey(b) - channelSortKey(a));
 }
 
-function enrichChannel(c: TeamChannel, idx: Map<string, SafeUserRow>, user: ChatUser): TeamChannel {
+function enrichChannel(c: TeamChannel, idx: Map<string, SafeUserRow>, user: ChatUser): EnrichedChannel {
   const members = c.members.map((m) => {
     const row = idx.get(m.userId);
     return {
@@ -108,7 +153,13 @@ function enrichChannel(c: TeamChannel, idx: Map<string, SafeUserRow>, user: Chat
       avatarExt: row?.avatarExt,
     };
   });
-  return { ...c, members } as TeamChannel;
+  const level = canAccessChannel(user, c);
+  return {
+    ...c,
+    members,
+    canSend: c.canSend || 'everyone',
+    maySend: canSendInChannel(user, c, level === 'write' ? 'write' : 'read'),
+  } as EnrichedChannel;
 }
 
 export function registerChatTeamRoutes(app: any): void {
@@ -147,6 +198,11 @@ export function registerChatTeamRoutes(app: any): void {
     if (listChannels().some((c) => c.kind === 'channel' && (c.name || '').toLowerCase() === name.toLowerCase())) {
       return res.status(409).json({ error: 'A channel with that name already exists' });
     }
+    // Explicit canSend must be valid — junk fails closed (400) exactly like
+    // PUT /settings; it is never silently widened to the open 'everyone'.
+    if (req.body?.canSend !== undefined && !sanitizeCanSend(req.body.canSend)) {
+      return res.status(400).json({ error: 'Invalid canSend value' });
+    }
     const channel: TeamChannel = {
       id: genId('ch'),
       kind: 'channel',
@@ -154,11 +210,14 @@ export function registerChatTeamRoutes(app: any): void {
       members: [],
       createdBy: user.id,
       createdAt: new Date().toISOString(),
+      // Optional send mode — absent defaults to the open 'everyone'.
+      canSend: sanitizeCanSend(req.body?.canSend) ?? 'everyone',
     };
     try {
       const { created, channel: ch } = await createChannel(channel);
       if (!created) return res.status(409).json({ error: 'Channel already exists' });
-      res.status(201).json({ channel: ch });
+      const idx = userIndex();
+      res.status(201).json({ channel: enrichChannel(ch, idx, user) });
     } catch (err) {
       res.status(500).json({ error: 'Failed to create channel' });
     }
@@ -222,6 +281,9 @@ export function registerChatTeamRoutes(app: any): void {
     
     const level = canAccessChannel(user, channel);
     if (level !== 'write') return res.status(403).json({ error: 'Write access required to pin' });
+    if (!canSendInChannel(user, channel, level)) {
+      return res.status(403).json({ error: 'Only admins can send in this channel' });
+    }
 
     const messageId = typeof req.body?.messageId === 'string' ? req.body.messageId : null;
     if (messageId !== null && !isMessageId(messageId)) return res.status(400).json({ error: 'Invalid message id' });
@@ -231,6 +293,38 @@ export function registerChatTeamRoutes(app: any): void {
     
     broadcastPinnedUpdate(cid, updatedChannel.pinnedMessageId || null);
     res.json({ channel: updatedChannel });
+  });
+
+  // Channel send-mode settings (creator / explicit channel admin / system admin).
+  r.put('/channels/:channelId/settings', chatWriteLimiter, async (req: any, res) => {
+    const cid = req.params.channelId;
+    if (!isChannelId(cid)) return res.status(400).json({ error: 'Invalid channel id' });
+    const canSend = sanitizeCanSend(req.body?.canSend);
+    if (!canSend) return res.status(400).json({ error: 'Invalid canSend value' });
+    const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
+    const channel = getChannel(cid);
+    if (!channel) {
+      recordAudit('chat-channel-settings-failed', false, req.ip, user.id);
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+    if (channel.kind !== 'channel') {
+      recordAudit('chat-channel-settings-failed', false, req.ip, user.id);
+      return res.status(400).json({ error: 'Only manual channels have send settings' });
+    }
+    const level = canAccessChannel(user, channel);
+    if (level !== 'write' || (user.role !== 'admin' && !isChannelAdmin(channel, user.id))) {
+      recordAudit('chat-channel-settings-failed', false, req.ip, user.id);
+      return res.status(403).json({ error: 'Only the creator or a channel admin can change send settings' });
+    }
+    const updated = await setChannelCanSend(cid, canSend);
+    if (!updated) {
+      recordAudit('chat-channel-settings-failed', false, req.ip, user.id);
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+    broadcastChannelUpdate(cid, canSend);
+    recordAudit('chat-channel-settings', true, req.ip, user.id);
+    const idx = userIndex();
+    res.json({ channel: enrichChannel(updated, idx, user) });
   });
 
   // ── Messages ─────────────────────────────────────────────────
@@ -271,6 +365,9 @@ export function registerChatTeamRoutes(app: any): void {
     if (level !== 'write') {
       if (level === 'read') return res.status(403).json({ error: 'Read-only channel' });
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!canSendInChannel(user, channel, level)) {
+      return res.status(403).json({ error: 'Only admins can send in this channel' });
     }
 
     const normalized = normalizeMessage(req.body);
@@ -350,6 +447,9 @@ export function registerChatTeamRoutes(app: any): void {
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
     const level = canAccessChannel(user, channel);
     if (level !== 'write') return res.status(403).json({ error: 'Write access required to pin' });
+    if (!canSendInChannel(user, channel, level)) {
+      return res.status(403).json({ error: 'Only admins can send in this channel' });
+    }
     const pinned = req.body?.pinned === true;
     const updated = await pinUnpinMessage(cid, msgId, pinned);
     if (!updated) return res.status(404).json({ error: 'Message not found' });
@@ -381,6 +481,9 @@ export function registerChatTeamRoutes(app: any): void {
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
     if (canAccessChannel(user, channel) !== 'write') {
       return res.status(403).json({ error: 'Write access required to upload' });
+    }
+    if (!canSendInChannel(user, channel, 'write')) {
+      return res.status(403).json({ error: 'Only admins can send in this channel' });
     }
     if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
       return res.status(400).json({ error: 'No file provided' });

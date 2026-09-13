@@ -8,6 +8,9 @@
 
 export type ChatChannelKind = 'channel' | 'project' | 'direct';
 
+/** Who may SEND in a manual channel — 'everyone' (editors+) | 'admins' only. */
+export type CanSendMode = 'everyone' | 'admins';
+
 export interface ChatAttachment {
   /** Saved upload id (file lives at data/chat-team/uploads/<id>). */
   id: string;
@@ -46,6 +49,8 @@ export interface TeamChannel {
   name?: string;
   /** Present on 'project' channels — the owning project slug. */
   projectSlug?: string;
+  /** Manual channels only: who may send/upload/pin ('everyone' when absent). */
+  canSend?: CanSendMode;
   /** 'direct' = exactly the two participants. */
   members: ChannelMember[];
   createdBy?: string;
@@ -188,11 +193,29 @@ export function pinnedMessages(messages: TeamMessage[]): TeamMessage[] {
 }
 
 export function isChannelId(id: unknown): id is string {
+  // L3: the safe charset regex alone would accept '.' / '..' as full ids —
+  // harmless today (ids are never used for raw path math) but a future-proof
+  // guard against any path-joining that skips its own normalization.
+  if (id === '.' || id === '..') return false;
   return typeof id === 'string' && CHANNEL_ID_RE.test(id);
 }
 
 export function isMessageId(id: unknown): id is string {
   return typeof id === 'string' && MESSAGE_ID_RE.test(id);
+}
+
+/** Validate an inbound canSend mode — junk/absent → null (caller defaults). */
+export function sanitizeCanSend(raw: unknown): CanSendMode | null {
+  if (raw === 'everyone' || raw === 'admins') return raw;
+  return null;
+}
+
+/** True for the channel creator or an explicit admin member on the channel. */
+export function isChannelAdmin(
+  channel: { createdBy?: string; members?: { userId: string; role: string }[] },
+  userId: string
+): boolean {
+  return channel.createdBy === userId || (channel.members || []).some((m) => m.userId === userId && m.role === 'admin');
 }
 
 /** Sort key for the conversation rail — most recent activity first. */

@@ -29,12 +29,13 @@ import { getUserInfo } from '../services/user-store';
 import {
   getChannel,
   getMessages,
+  getAllMessages,
   setReadPosition,
   markMessageAsDelivered,
   markMessagesAsRead,
 } from '../services/chat-team-store';
 import { canAccessChannel, type ChatUser } from '../services/chat-team-access';
-import type { TeamChannel } from '../services/chat-team-core';
+import type { CanSendMode, TeamChannel } from '../services/chat-team-core';
 
 const PRESENCE_TYPING_MS = 3000;
 
@@ -82,6 +83,11 @@ export function broadcastPinChange(channelId: string, msgId: string, pinned: boo
 /** Push a pinned message update (change of the channel's primary pinned message). */
 export function broadcastPinnedUpdate(channelId: string, pinnedMessageId: string | null): void {
   broadcastToChannel(channelId, { type: 'pinned_update', channelId, pinnedMessageId });
+}
+
+/** Push a send-mode change (canSend) to everyone subscribed to the channel. */
+export function broadcastChannelUpdate(channelId: string, canSend: CanSendMode): void {
+  broadcastToChannel(channelId, { type: 'channel_update', channel: { id: channelId, canSend } });
 }
 
 function sendPresence(ws: WebSocket): void {
@@ -178,7 +184,13 @@ export function handleChatTeamSocket(
           if (!channelSubscribers.has(channelId)) channelSubscribers.set(channelId, new Set());
           channelSubscribers.get(channelId)!.add(ws);
         }
-        send(ws, { type: 'subscribed', channelId, messages: getMessages(channelId, { limit: 100 }), level });
+        send(ws, {
+          type: 'subscribed',
+          channelId,
+          messages: getMessages(channelId, { limit: 100 }),
+          level,
+          canSend: channel.canSend || 'everyone',
+        });
         return;
       }
       case 'unsubscribe': {
@@ -192,6 +204,19 @@ export function handleChatTeamSocket(
         if (!client.channels.has(channelId)) return;
         if (typeof msg.msgId !== 'string' || !/^m-[a-z0-9-]+$/.test(msg.msgId)) {
           send(ws, { type: 'error', message: 'Invalid message id' });
+          return;
+        }
+        // Delivery receipts are OWNER-ONLY: only the message's own sender may
+        // move it from sent → delivered. A subscribed third party (even an
+        // editor in an 'admins'-locked manual channel) must never flip some
+        // else's delivery state — that is exactly the L2 escalation path.
+        const target = getAllMessages(channelId).find((m) => m.id === msg.msgId);
+        if (!target) {
+          send(ws, { type: 'error', message: 'Message not found' });
+          return;
+        }
+        if (target.userId !== client.user.id) {
+          send(ws, { type: 'error', message: 'Access denied' });
           return;
         }
         const updated = await markMessageAsDelivered(channelId, msg.msgId);

@@ -1275,17 +1275,29 @@ export interface ChatChannel {
   lastMessageAt?: string;
   unread?: number;
   firstUnreadId?: string;
+  /** Send permission for manual channels: 'everyone' (default) or 'admins'. */
+  canSend?: 'everyone' | 'admins';
+  /** Whether the current user may send messages (server-resolved). */
+  maySend?: boolean;
 }
 
 /** All channels the user can see, with unread counts. */
 export const listChatChannels = () => api<{ channels: ChatChannel[] }>('/api/chat-team/channels');
 
 /** Create a team-wide manual channel (editor+). */
-export const createChatChannel = (name: string) =>
+export const createChatChannel = (name: string, canSend?: 'everyone' | 'admins') =>
   api<{ channel: ChatChannel }>('/api/chat-team/channels', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, canSend }),
+  });
+
+/** Update a manual channel's send permission (creator/admin only). */
+export const updateChatChannelSettings = (channelId: string, canSend: 'everyone' | 'admins') =>
+  api<{ channel: ChatChannel }>(`/api/chat-team/channels/${encodeURIComponent(channelId)}/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ canSend }),
   });
 
 /** Open (or already-existing) direct 1:1 conversation. */

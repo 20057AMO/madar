@@ -203,6 +203,62 @@
   color: var(--text-3);
 }
 
+/* Channel settings (canSend) popover */
+.tchat-settings-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.tchat-settings-btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+.tchat-settings-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 230px;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tchat-settings-title {
+  font-size: 0.64rem;
+  color: var(--text-2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 6px 6px;
+}
+.tchat-settings-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.tchat-settings-option svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.tchat-settings-option:hover { background: var(--panel-2); }
+.tchat-settings-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-settings-option:disabled { opacity: 1; cursor: default; }
+.tchat-settings-option.active { background: var(--panel-2); }
+.tchat-settings-option-name { font-size: 0.78rem; font-weight: 500; display: block; }
+.tchat-settings-option-sub { font-size: 0.66rem; color: var(--text-2); display: block; margin-top: 1px; }
+
 .tchat-pinned-header {
   display: flex;
   align-items: center;

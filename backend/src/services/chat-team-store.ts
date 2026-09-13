@@ -18,6 +18,7 @@ import {
   isChannelId,
   isMessageId,
   pruneToCap,
+  type CanSendMode,
   type ChatAttachment,
   type ChannelMember,
   type TeamChannel,
@@ -227,6 +228,25 @@ export async function setChannelMemberRole(channelId: string, userId: string, ro
     else ch.members.push({ userId, role });
     writeChannelsRaw({ channels: all });
   });
+}
+
+/**
+ * Persist a manual channel's send mode ('everyone' | 'admins'). Same locked
+ * write discipline as setChannelMemberRole. Returns the updated channel row,
+ * or null when the id is invalid/unknown.
+ */
+export async function setChannelCanSend(channelId: string, canSend: CanSendMode): Promise<TeamChannel | null> {
+  if (!isChannelId(channelId)) return null;
+  let updated: TeamChannel | null = null;
+  await withFileLockAsync(`channel:${channelId}`, async () => {
+    const all = readChannelsRaw().channels;
+    const ch = all.find((c) => c.id === channelId);
+    if (!ch) return;
+    ch.canSend = canSend;
+    writeChannelsRaw({ channels: all });
+    updated = { ...ch };
+  });
+  return updated;
 }
 
 /** Remove a deleted project's auto-channel + its messages + uploads. */

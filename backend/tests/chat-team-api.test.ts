@@ -1,6 +1,7 @@
 ﻿import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
+import WebSocket from 'ws';
 import { execFileSync } from 'node:child_process';
 import { reqAuth, req, uniqueId, initTestAuth, JWT_SECRET, signTestToken, API_URL } from './helpers.ts';
 
@@ -16,6 +17,10 @@ const createdSlugs: string[] = [];
 const createdUserIds: string[] = [];
 const createdChannelIds: string[] = [];
 const chatBase = '/chat-team';
+
+const WS_BASE = (process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api')
+  .replace('/api', '')
+  .replace(/^http/, 'ws');
 
 let testAdminId: string;
 
@@ -656,4 +661,455 @@ test('M2: project member add/remove syncs the project channel membership', async
   assert.strictEqual(rem.status, 200, JSON.stringify(rem.json));
   const afterRem = await api('GET', `${chatBase}/channels/${proj}`);
   assert.ok(!afterRem.json.channel.members.some((m: any) => m.userId === editor.id), 'removed member must leave the project channel');
+});
+
+// ── canSend (channel send-permissions) ────────────────────────
+/** Create + track a fresh user, mint their own session token. */
+async function makeUser(username: string, role: 'editor' | 'viewer'): Promise<{ id: string; username: string; token: string }> {
+  const res = await reqAuth('POST', '/users', { username: uniqueId(username), password: 'pass-123456', role });
+  const body = await res.json();
+  assert.strictEqual(res.status, 201, `create ${role} user: ${res.status} ${JSON.stringify(body)}`);
+  createdUserIds.push(body.id);
+  const token = jwt.sign({ id: body.id, username: body.username, role, tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  return { id: body.id, username: body.username, token };
+}
+
+test('CS1: canSend roundtrip — default everyone, PUT admins, GET persists', async () => {
+  const created = await api('POST', `${chatBase}/channels`, { name: uniqueId('cs1') });
+  assert.strictEqual(created.status, 201, JSON.stringify(created.json));
+  const id = created.json.channel.id;
+  createdChannelIds.push(id);
+  assert.strictEqual(created.json.channel.canSend, 'everyone');
+  assert.strictEqual(created.json.channel.maySend, true, 'creator (system admin) may send on a fresh channel');
+
+  const set = await api('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200, JSON.stringify(set.json));
+  assert.strictEqual(set.json.channel.canSend, 'admins');
+  assert.strictEqual(set.json.channel.maySend, true);
+  assert.strictEqual(set.json.channel.id, id);
+
+  const get = await api('GET', `${chatBase}/channels/${id}`);
+  assert.strictEqual(get.status, 200);
+  assert.strictEqual(get.json.channel.canSend, 'admins');
+
+  const list = await api('GET', `${chatBase}/channels`);
+  const row = list.json.channels.find((c: any) => c.id === id);
+  assert.ok(row, 'channel must appear in the rail');
+  assert.strictEqual(row.canSend, 'admins');
+});
+
+test('CS2: settings junk — bad value 400, missing 400, project 400, dm 400, unknown 404', async (t) => {
+  const created = await api('POST', `${chatBase}/channels`, { name: uniqueId('cs2') });
+  assert.strictEqual(created.status, 201, JSON.stringify(created.json));
+  const id = created.json.channel.id;
+  createdChannelIds.push(id);
+
+  const bad = await api('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'all' });
+  assert.strictEqual(bad.status, 400, JSON.stringify(bad.json));
+  const missing = await api('PUT', `${chatBase}/channels/${id}/settings`, {});
+  assert.strictEqual(missing.status, 400, JSON.stringify(missing.json));
+  const traversal = await api('PUT', `${chatBase}/channels/../etc/settings`, { canSend: 'admins' });
+  assert.ok(traversal.status === 400 || traversal.status === 404, `traversal: ${traversal.status}`);
+
+  const unknown = await api('PUT', `${chatBase}/channels/ch-nope/settings`, { canSend: 'admins' });
+  assert.strictEqual(unknown.status, 404);
+
+  // Project auto-channel: exists but kind !== 'channel' → 400.
+  const slug = uniqueId('cs2p');
+  const createdProj = await api('POST', '/projects', { name: 'CS2 Project', slug });
+  if (createdProj.status === 429) {
+    t.skip('project creation rate-limited on this container (WSD_TESTING=0) — project-kind half skipped');
+    return;
+  }
+  assert.strictEqual(createdProj.status, 201, `create project: ${createdProj.status} ${JSON.stringify(createdProj.json)}`);
+  createdSlugs.push(slug);
+  const projSet = await api('PUT', `${chatBase}/channels/project:${slug}/settings`, { canSend: 'admins' });
+  assert.strictEqual(projSet.status, 400, JSON.stringify(projSet.json));
+
+  // Direct channel: kind !== 'channel' → 400.
+  const viewer = await makeUser('cs2v', 'viewer');
+  const dm = await api('POST', `${chatBase}/direct`, { with: viewer.id });
+  assert.strictEqual(dm.status, 201, JSON.stringify(dm.json));
+  createdChannelIds.push(dm.json.channel.id);
+  const dmSet = await api('PUT', `${chatBase}/channels/${dm.json.channel.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(dmSet.status, 400, JSON.stringify(dmSet.json));
+});
+
+test('CS2b: create rejects junk canSend with 400 — absent still defaults to everyone', async () => {
+  // Explicit junk must fail closed on creation too, mirroring PUT /settings
+  // (it used to be silently widened to 'everyone').
+  const junk = await api('POST', `${chatBase}/channels`, { name: uniqueId('cs2b'), canSend: 'all' });
+  assert.strictEqual(junk.status, 400, JSON.stringify(junk.json));
+  assert.match(String(junk.json.error), /Invalid canSend/i);
+
+  const nullJunk = await api('POST', `${chatBase}/channels`, { name: uniqueId('cs2bn'), canSend: null });
+  assert.strictEqual(nullJunk.status, 400, JSON.stringify(nullJunk.json));
+
+  // Valid explicit modes are still accepted and persisted.
+  const admins = await api('POST', `${chatBase}/channels`, { name: uniqueId('cs2ba'), canSend: 'admins' });
+  assert.strictEqual(admins.status, 201, JSON.stringify(admins.json));
+  assert.strictEqual(admins.json.channel.canSend, 'admins');
+  createdChannelIds.push(admins.json.channel.id);
+
+  // Absent field keeps the legacy open default.
+  const absent = await api('POST', `${chatBase}/channels`, { name: uniqueId('cs2bo') });
+  assert.strictEqual(absent.status, 201, JSON.stringify(absent.json));
+  assert.strictEqual(absent.json.channel.canSend, 'everyone');
+  createdChannelIds.push(absent.json.channel.id);
+});
+
+test('CS3: settings authz — creator 200, system admin 200, non-creator editor 403, viewer 403', async () => {
+  const creator = await makeUser('cs3c', 'editor');
+  const other = await makeUser('cs3o', 'editor');
+  const viewer = await makeUser('cs3v', 'viewer');
+  const runAsCreator = runAs(creator.token);
+  const runAsOther = runAs(other.token);
+  const runAsViewer = runAs(viewer.token);
+
+  const created = await runAsCreator('POST', `${chatBase}/channels`, { name: uniqueId('cs3') });
+  assert.strictEqual(created.status, 201, JSON.stringify(created.json));
+  const id = created.json.channel.id;
+  createdChannelIds.push(id);
+  assert.strictEqual(created.json.channel.createdBy, creator.id, 'the editing creator owns the channel');
+
+  const asCreator = await runAsCreator('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(asCreator.status, 200, JSON.stringify(asCreator.json));
+
+  const asAdmin = await api('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'everyone' });
+  assert.strictEqual(asAdmin.status, 200, JSON.stringify(asAdmin.json));
+
+  const asOther = await runAsOther('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(asOther.status, 403, JSON.stringify(asOther.json));
+
+  const asViewer = await runAsViewer('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(asViewer.status, 403, JSON.stringify(asViewer.json));
+
+  // Neither failed attempt may have flipped the mode.
+  const after = await api('GET', `${chatBase}/channels/${id}`);
+  assert.strictEqual(after.json.channel.canSend, 'everyone');
+});
+
+test('CS4: send enforcement — editor blocked under admins, allowed after everyone', async () => {
+  const editor = await makeUser('cs4e', 'editor');
+  const runAsEditor = runAs(editor.token);
+  const ch = await makeChannel(uniqueId('cs4'));
+  const set = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200);
+
+  const blocked = await runAsEditor('POST', `${chatBase}/messages`, { channelId: ch.id, text: 'locked out' });
+  assert.strictEqual(blocked.status, 403, JSON.stringify(blocked.json));
+  assert.match(String(blocked.json.error), /Only admins can send/i);
+
+  // The lock only narrows writing — reading stays open.
+  const msgs = await runAsEditor('GET', `${chatBase}/channels/${ch.id}/messages`);
+  assert.strictEqual(msgs.status, 200);
+
+  const back = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'everyone' });
+  assert.strictEqual(back.status, 200);
+  const ok = await runAsEditor('POST', `${chatBase}/messages`, { channelId: ch.id, text: 'unlocked' });
+  assert.strictEqual(ok.status, 201, JSON.stringify(ok.json));
+});
+
+test('CS5: upload enforcement — editor 403 under admins, admin 201', async () => {
+  const editor = await makeUser('cs5e', 'editor');
+  const ch = await makeChannel(uniqueId('cs5'));
+  const set = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200);
+
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const formEditor = new FormData();
+  formEditor.append('channelId', ch.id);
+  formEditor.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+  const upEditor = await fetch(`${API_URL}/chat-team/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${editor.token}` },
+    body: formEditor as any,
+  });
+  assert.strictEqual(upEditor.status, 403, JSON.stringify(await upEditor.json().catch(() => ({}))));
+
+  const formAdmin = new FormData();
+  formAdmin.append('channelId', ch.id);
+  formAdmin.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+  const upAdmin = await fetch(`${API_URL}/chat-team/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${signTestToken()}` },
+    body: formAdmin as any,
+  });
+  const adminJson = await upAdmin.json().catch(() => ({}));
+  assert.strictEqual(upAdmin.status, 201, JSON.stringify(adminJson));
+  assert.ok(adminJson.attachment.id.startsWith('att-'));
+});
+
+test('CS6: pin enforcement — editor 403 under admins, admin 200', async () => {
+  const editor = await makeUser('cs6e', 'editor');
+  const runAsEditor = runAs(editor.token);
+  const ch = await makeChannel(uniqueId('cs6'));
+  const m = await sendChannelMessage(ch.id, 'pin me later');
+  const set = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200);
+
+  const editorPin = await runAsEditor('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}/pin`, { pinned: true });
+  assert.strictEqual(editorPin.status, 403, JSON.stringify(editorPin.json));
+
+  const adminPin = await api('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}/pin`, { pinned: true });
+  assert.strictEqual(adminPin.status, 200, JSON.stringify(adminPin.json));
+  assert.strictEqual(adminPin.json.message.pinned, true);
+});
+
+test('CS6v: primary-pin (PUT /channels/:id/pin) enforcement — non-creator editor 403 under admins, admin 200', async () => {
+  const editor = await makeUser('cs6ve', 'editor');
+  const runAsEditor = runAs(editor.token);
+  const ch = await makeChannel(uniqueId('cs6v'));
+  const m = await sendChannelMessage(ch.id, 'primary pin candidate');
+  const set = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200);
+
+  // The message-level pin route sends { pinned } — the primary-pin route takes
+  // { messageId } and is the handler the UI actually drives.
+  const editorPin = await runAsEditor('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: m.id });
+  assert.strictEqual(editorPin.status, 403, JSON.stringify(editorPin.json));
+  assert.match(String(editorPin.json.error), /Only admins can send/i);
+
+  const adminPin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: m.id });
+  assert.strictEqual(adminPin.status, 200, JSON.stringify(adminPin.json));
+  assert.strictEqual(adminPin.json.channel.pinnedMessageId, m.id);
+
+  // Unpin via the main route restores null (no dangling primary pin).
+  const adminUnpin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: null });
+  assert.strictEqual(adminUnpin.status, 200, JSON.stringify(adminUnpin.json));
+  assert.strictEqual(adminUnpin.json.channel.pinnedMessageId, null);
+});
+
+test('G2: primary-pin unpin via {pinned:false} shape restores pinnedMessageId null', async () => {
+  const ch = await makeChannel(uniqueId('g2'));
+  const m = await sendChannelMessage(ch.id, 'unpin candidate');
+
+  // Pin as the primary message first — pinnedMessageId must point at it.
+  const pin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: m.id });
+  assert.strictEqual(pin.status, 200, JSON.stringify(pin.json));
+  assert.strictEqual(pin.json.channel.pinnedMessageId, m.id);
+
+  // The unpin half: the {pinned:false} body (the sibling message-level route's
+  // shape) must clear the primary pin — never a dangling pinnedMessageId.
+  const unpin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { pinned: false });
+  assert.strictEqual(unpin.status, 200, JSON.stringify(unpin.json));
+  assert.strictEqual(unpin.json.channel.pinnedMessageId, null);
+
+  // And the channel list/detail read it back as truly unpinned.
+  const detail = await api('GET', `${chatBase}/channels/${ch.id}`);
+  assert.strictEqual(detail.status, 200);
+  assert.strictEqual(detail.json.channel.pinnedMessageId, null);
+});
+
+test('G1: system admin bypasses the admins-lock without creation or membership', async () => {
+  // The last G1 bullet: user.role === 'admin' short-circuits canSendInChannel
+  // to true — a system admin who neither created the channel nor holds a
+  // member row can still send inside an admins-locked manual channel.
+  const creator = await makeUser('g1c', 'editor');
+  const runAsCreator = runAs(creator.token);
+
+  const created = await runAsCreator('POST', `${chatBase}/channels`, { name: uniqueId('g1') });
+  assert.strictEqual(created.status, 201, JSON.stringify(created.json));
+  const id = created.json.channel.id;
+  createdChannelIds.push(id);
+
+  const set = await runAsCreator('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200, JSON.stringify(set.json));
+
+  // System admin (not the creator, not a member): maySend true + send 201.
+  const detail = await api('GET', `${chatBase}/channels/${id}`);
+  assert.strictEqual(detail.status, 200);
+  assert.strictEqual(detail.json.channel.maySend, true, 'system admin may send in an admins-locked channel');
+
+  const send = await api('POST', `${chatBase}/messages`, { channelId: id, text: 'system admin speaks' });
+  assert.strictEqual(send.status, 201, JSON.stringify(send.json));
+
+  // Control: the non-creator editor stays locked out.
+  const other = await makeUser('g1o', 'editor');
+  const blocked = await runAs(other.token)('POST', `${chatBase}/messages`, { channelId: id, text: 'no' });
+  assert.strictEqual(blocked.status, 403, JSON.stringify(blocked.json));
+});
+
+test('CS7: viewer stays 403 in an admins-locked channel (read unaffected)', async () => {
+  const viewer = await makeUser('cs7v', 'viewer');
+  const runAsViewer = runAs(viewer.token);
+  const ch = await makeChannel(uniqueId('cs7'));
+  const set = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200);
+
+  const send = await runAsViewer('POST', `${chatBase}/messages`, { channelId: ch.id, text: 'hi' });
+  assert.strictEqual(send.status, 403, JSON.stringify(send.json));
+
+  const detail = await runAsViewer('GET', `${chatBase}/channels/${ch.id}`);
+  assert.strictEqual(detail.status, 200);
+  assert.strictEqual(detail.json.channel.canSend, 'admins');
+  assert.strictEqual(detail.json.channel.maySend, false);
+  assert.strictEqual(detail.json.level, 'read');
+
+  const read = await runAsViewer('GET', `${chatBase}/channels/${ch.id}/messages`);
+  assert.strictEqual(read.status, 200);
+});
+
+test('CS8: legacy channel without canSend — editor+ maySend stays true', async (t) => {
+  // Project auto-channels never receive a canSend field — they are the legacy
+  // shape proving the 'everyone' default keeps editor writes working.
+  const slug = uniqueId('cs8');
+  const created = await api('POST', '/projects', { name: 'CS8 Legacy', slug });
+  if (created.status === 429) {
+    t.skip('project creation rate-limited on this container (WSD_TESTING=0) — legacy half skipped');
+    return;
+  }
+  assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
+  createdSlugs.push(slug);
+
+  const editor = await makeUser('cs8e', 'editor');
+  const add = await api('POST', `/projects/${slug}/members`, { userId: editor.id, role: 'editor' });
+  assert.strictEqual(add.status, 200, JSON.stringify(add.json));
+
+  const detail = await runAs(editor.token)('GET', `${chatBase}/channels/project:${slug}`);
+  assert.strictEqual(detail.status, 200);
+  assert.strictEqual(detail.json.channel.canSend, 'everyone', 'legacy default surfaced');
+  assert.strictEqual(detail.json.channel.maySend, true, 'editor member may send on a legacy channel');
+
+  const send = await runAs(editor.token)('POST', `${chatBase}/messages`, { channelId: `project:${slug}`, text: 'legacy ok' });
+  assert.strictEqual(send.status, 201, JSON.stringify(send.json));
+});
+
+test('CS9: WS subscribed carries canSend; settings change broadcasts channel_update', async () => {
+  const ch = await makeChannel(uniqueId('cs9'));
+  const token = signTestToken();
+  const url = `${WS_BASE}/ws/chat-team?token=${encodeURIComponent(token)}`;
+  const frames: any[] = [];
+  let subFrame: any = null;
+  let putStatus: number | null = null;
+  let updateArrived = false;
+
+  const ws = new WebSocket(url);
+  await new Promise<void>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error('timeout waiting for subscribed/channel_update frames')), 8000);
+    // The broadcast may land before the REST PUT response returns — resolve
+    // only once BOTH have happened.
+    const maybeDone = () => {
+      if (updateArrived && putStatus !== null) {
+        clearTimeout(to);
+        resolve();
+      }
+    };
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'subscribe', channelId: ch.id })));
+    ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      frames.push(m);
+      if (m.type === 'subscribed' && m.channelId === ch.id) {
+        subFrame = m;
+        // Trigger the settings change over REST once subscribed — the room
+        // broadcast must reach this socket.
+        void api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' }).then((r) => {
+          putStatus = r.status;
+          maybeDone();
+        });
+        return;
+      }
+      if (m.type === 'channel_update' && m.channel?.id === ch.id) {
+        updateArrived = true;
+        maybeDone();
+      }
+    });
+    ws.on('error', (e) => { clearTimeout(to); reject(e); });
+  });
+  try { ws.terminate(); } catch { /* gone */ }
+
+  assert.strictEqual(putStatus, 200, 'settings PUT must succeed');
+  assert.ok(subFrame, 'expected a subscribed frame');
+  assert.strictEqual(subFrame.canSend, 'everyone', 'subscribed must expose the channel canSend');
+  const update = frames.find((f) => f.type === 'channel_update');
+  assert.ok(update, 'expected a channel_update frame');
+  assert.deepStrictEqual(update.channel, { id: ch.id, canSend: 'admins' });
+});
+
+test('CS10: editor-scoped canSend — non-creator editor locked via channel_update, unlocked on revert', async () => {
+  // CS9 signed the SYSTEM ADMIN, whose maySend stays true under both modes —
+  // it never proved an editor actually loses the composer through a
+  // channel_update broadcast. Here the creator AND the subscriber are both
+  // plain editors, so the lock must really land on the non-creator.
+  const creator = await makeUser('cs10c', 'editor');
+  const other = await makeUser('cs10o', 'editor');
+  const runAsCreator = runAs(creator.token);
+  const runAsOther = runAs(other.token);
+
+  const created = await runAsCreator('POST', `${chatBase}/channels`, { name: uniqueId('cs10') });
+  assert.strictEqual(created.status, 201, JSON.stringify(created.json));
+  const id = created.json.channel.id;
+  createdChannelIds.push(id);
+  assert.strictEqual(created.json.channel.createdBy, creator.id, 'the editing creator owns the channel');
+
+  // The OTHER editor (a non-creator) subscribes over WS.
+  const url = `${WS_BASE}/ws/chat-team?token=${encodeURIComponent(other.token)}`;
+  const frames: any[] = [];
+  let subFrame: any = null;
+  let putStatus: number | null = null;
+  let updateArrived = false;
+
+  const ws = new WebSocket(url);
+  await new Promise<void>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error('timeout waiting for subscribed/channel_update frames')), 8000);
+    const maybeDone = () => {
+      if (updateArrived && putStatus !== null) {
+        clearTimeout(to);
+        resolve();
+      }
+    };
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'subscribe', channelId: id })));
+    ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      frames.push(m);
+      if (m.type === 'subscribed' && m.channelId === id) {
+        subFrame = m;
+        // Lock the channel to admins as the CREATOR once subscribed — the
+        // room broadcast must reach this non-creator editor socket.
+        void runAsCreator('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'admins' }).then((r) => {
+          putStatus = r.status;
+          maybeDone();
+        });
+        return;
+      }
+      if (m.type === 'channel_update' && m.channel?.id === id) {
+        updateArrived = true;
+        maybeDone();
+      }
+    });
+    ws.on('error', (e) => { clearTimeout(to); reject(e); });
+  });
+  try { ws.terminate(); } catch { /* gone */ }
+
+  assert.strictEqual(putStatus, 200, 'creator settings PUT must succeed');
+  assert.ok(subFrame, 'expected a subscribed frame');
+  assert.strictEqual(subFrame.level, 'write', 'plain editor starts write-level on a manual channel');
+  assert.strictEqual(subFrame.canSend, 'everyone', 'subscribed must expose the open default to the editor');
+  const update = frames.find((f) => f.type === 'channel_update');
+  assert.ok(update, 'expected a channel_update frame');
+  assert.deepStrictEqual(update.channel, { id, canSend: 'admins' });
+
+  // The OTHER editor is now actually locked out of writing.
+  const blocked = await runAsOther('POST', `${chatBase}/messages`, { channelId: id, text: 'locked out' });
+  assert.strictEqual(blocked.status, 403, JSON.stringify(blocked.json));
+  assert.match(String(blocked.json.error), /Only admins can send/i);
+
+  // Detail reflects the lock for the non-creator editor.
+  const detail = await runAsOther('GET', `${chatBase}/channels/${id}`);
+  assert.strictEqual(detail.status, 200);
+  assert.strictEqual(detail.json.channel.canSend, 'admins');
+  assert.strictEqual(detail.json.channel.maySend, false);
+
+  // The creator (channel admin) keeps the composer while locked.
+  const creatorSend = await runAsCreator('POST', `${chatBase}/messages`, { channelId: id, text: 'creator still speaks' });
+  assert.strictEqual(creatorSend.status, 201, JSON.stringify(creatorSend.json));
+
+  // Revert to 'everyone' — the other editor writes again.
+  const revert = await runAsCreator('PUT', `${chatBase}/channels/${id}/settings`, { canSend: 'everyone' });
+  assert.strictEqual(revert.status, 200, JSON.stringify(revert.json));
+  const ok = await runAsOther('POST', `${chatBase}/messages`, { channelId: id, text: 'unlocked editor' });
+  assert.strictEqual(ok.status, 201, JSON.stringify(ok.json));
 });

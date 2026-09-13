@@ -24,6 +24,7 @@ import {
   Check,
   CheckCheck,
   Mic,
+  Settings,
 } from 'lucide-preact';
 import {
   listChatChannels,
@@ -39,6 +40,7 @@ import {
   chatAttachmentObjectUrl,
   revokeChatAttachmentObjectUrl,
   searchChatMessages,
+  updateChatChannelSettings,
   listUsers,
   avatarUrl,
   type ChatChannel,
@@ -148,6 +150,9 @@ export function Chat() {
   const [presence, setPresence] = useState<Map<string, ChatPresenceUser>>(new Map());
   const [composer, setComposer] = useState<ComposerState>({ text: '', attachments: [] });
   const [viewerOnly, setViewerOnly] = useState(false);
+  const [activeCanSend, setActiveCanSend] = useState<'everyone' | 'admins'>('everyone');
+  const [canWrite, setCanWrite] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchQ, setSearchQ] = useState('');
   const [searchResults, setSearchResults] = useState<TeamChatMessage[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -175,6 +180,10 @@ export function Chat() {
 
   const fileInput = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const settingsWrapRef = useRef<HTMLDivElement | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
+  const firstOptionRef = useRef<HTMLButtonElement | null>(null);
+  const settingsOpenByKeyRef = useRef(false);
   const skipScroll = useRef(false);
   const activeIdRef = useRef<string | null>(null);
   const channelsRef = useRef<ChatChannel[]>([]);
@@ -190,7 +199,20 @@ export function Chat() {
         skipScroll.current = true;
         setMessages(ev.messages || []);
         setViewerOnly(ev.level === 'read');
+        setActiveCanSend(ev.canSend === 'admins' ? 'admins' : 'everyone');
+        setCanWrite(ev.level === 'write');
         requestAnimationFrame(() => requestAnimationFrame(() => { skipScroll.current = false; }));
+      }
+      return;
+    }
+    if (ev.type === 'channel_update') {
+      if (ev.channel.id === activeIdRef.current) {
+        setActiveCanSend(ev.channel.canSend);
+        setCanWrite(!viewerOnly && (ev.channel.canSend !== 'admins' || canManageChannel()));
+        setChannels((prev) =>
+          prev.map((c) => (c.id === ev.channel.id ? { ...c, canSend: ev.channel.canSend } : c))
+        );
+        setSettingsOpen(false);
       }
       return;
     }
@@ -284,6 +306,9 @@ export function Chat() {
     setActive(known || null);
     setTyping([]);
     setViewerOnly(false);
+    setActiveCanSend(known?.canSend === 'admins' ? 'admins' : 'everyone');
+    setCanWrite(true);
+    setSettingsOpen(false);
     setSearchResults(null);
     setSearchQ('');
     setMessages([]);
@@ -294,6 +319,8 @@ export function Chat() {
         if (cancelled) return;
         const ch = res.channel;
         setActive(ch);
+        setActiveCanSend(ch.canSend === 'admins' ? 'admins' : 'everyone');
+        setCanWrite(ch.maySend ?? localCanWrite());
         setChannels((prev) =>
           prev.map((c) => (c.id === ch.id ? { ...(ch as ChatChannel), unread: c.unread } : c))
         );
@@ -421,7 +448,35 @@ export function Chat() {
     dialogRestoreRef.current = null;
   }, [createOpen, directOpen]);
 
-  const userCanWrite = () => !viewerOnly;
+  // Channel-settings popover: close on outside click, or Escape while the
+  // focus is inside the wrap (A1/A5: restore focus to the trigger button).
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!settingsWrapRef.current?.contains(e.target as Node)) setSettingsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && settingsWrapRef.current?.contains(document.activeElement)) {
+        setSettingsOpen(false);
+        settingsBtnRef.current?.focus();
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [settingsOpen]);
+
+  // Focus the first menu option when the popover was opened via the keyboard
+  // (APG Menu Button pattern — A2). Mouse-opened popovers keep focus on the
+  // trigger button.
+  useEffect(() => {
+    if (!settingsOpen || !settingsOpenByKeyRef.current) return;
+    settingsOpenByKeyRef.current = false;
+    firstOptionRef.current?.focus();
+  }, [settingsOpen]);
 
   const doSend = async () => {
     if (!activeId || sending) return;
@@ -630,6 +685,71 @@ export function Chat() {
     return user?.role === 'admin' || c.createdBy === meId;
   };
 
+  const canManageChannel = () => {
+    if (!active || active.kind !== 'channel') return false;
+    return user?.role === 'admin' || active.createdBy === meId || active.members?.some((m) => m.userId === meId && m.role === 'admin');
+  };
+
+  // Server-resolved write permission (`maySend`) is authoritative once the
+  // channel detail/subscribe lands; `localCanWrite` is only a fallback and
+  // for instant re-derivation on `channel_update`.
+  const localCanWrite = () => !viewerOnly && (activeCanSend !== 'admins' || canManageChannel());
+  const userCanWrite = () => canWrite;
+
+  // Roving-tabindex keyboard navigation for the send-permissions menu (A2).
+  const handleSettingsMenuKeyDown = (e: KeyboardEvent) => {
+    const opts = Array.from(
+      (e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')
+    );
+    if (!opts.length) return;
+    const idx = opts.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      opts[idx === -1 ? 0 : (idx + 1) % opts.length].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      opts[idx === -1 ? opts.length - 1 : (idx - 1 + opts.length) % opts.length].focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      opts[0].focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      opts[opts.length - 1].focus();
+    } else if (e.key === 'Tab') {
+      // Close the menu and let the browser continue moving focus naturally (A4).
+      setSettingsOpen(false);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      setSettingsOpen(false);
+      settingsBtnRef.current?.focus();
+    }
+  };
+
+  const toggleCanSend = async (target?: 'everyone' | 'admins') => {
+    if (!activeId || !active) return;
+    const newMode = target ?? (activeCanSend === 'admins' ? 'everyone' : 'admins');
+    // Picking the already-active option is a no-op: close and return focus.
+    if (newMode === activeCanSend) {
+      setSettingsOpen(false);
+      settingsBtnRef.current?.focus();
+      return;
+    }
+    setError('');
+    try {
+      await updateChatChannelSettings(activeId, newMode);
+      setActiveCanSend(newMode);
+      setCanWrite(!viewerOnly && (newMode !== 'admins' || canManageChannel()));
+      setChannels((prev) =>
+        prev.map((c) => (c.id === activeId ? { ...c, canSend: newMode } : c))
+      );
+      setSettingsOpen(false);
+      settingsBtnRef.current?.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update channel settings');
+    }
+  };
+
   const renderedMessages = useMemo(() => {
     return messages.map((m, i) => {
       const isMine = m.userId === meId;
@@ -701,7 +821,7 @@ export function Chat() {
         </div>
       );
     });
-  }, [messages, meId, active, viewerOnly]);
+  }, [messages, meId, active, viewerOnly, activeCanSend, canWrite]);
 
   const pinned = useMemo(() => messages.filter((m) => m.pinned), [messages]);
 
@@ -842,6 +962,67 @@ export function Chat() {
                 <button class="btn btn-sm" onClick={() => setSearchResults((prev) => (prev === null ? [] : null))} aria-pressed={searchResults !== null} title="Search">
                   <Search width={14} height={14} /> Search
                 </button>
+                {active.kind === 'channel' && canManageChannel() && (
+                  <div class="tchat-settings-wrap" ref={settingsWrapRef}>
+                    <button
+                      ref={settingsBtnRef}
+                      class="btn btn-icon tchat-settings-btn"
+                      onClick={() => setSettingsOpen((o) => !o)}
+                      onKeyDown={(e: KeyboardEvent) => {
+                        if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          if (!settingsOpen) {
+                            settingsOpenByKeyRef.current = true;
+                            setSettingsOpen(true);
+                          }
+                        }
+                      }}
+                      aria-haspopup="menu"
+                      aria-expanded={settingsOpen}
+                      aria-controls="tchat-settings-menu"
+                      title="Channel settings"
+                      aria-label="Channel settings"
+                    >
+                      <Settings width={14} height={14} />
+                    </button>
+                    {settingsOpen && (
+                      <div
+                        id="tchat-settings-menu"
+                        class="tchat-settings-popover"
+                        role="menu"
+                        aria-label="Channel send permissions"
+                        onKeyDown={handleSettingsMenuKeyDown}
+                      >
+                        <div class="tchat-settings-title">Who can send</div>
+                        <button
+                          ref={firstOptionRef}
+                          class={`tchat-settings-option${activeCanSend === 'everyone' ? ' active' : ''}`}
+                          role="menuitemradio"
+                          aria-checked={activeCanSend === 'everyone'}
+                          onClick={() => void toggleCanSend('everyone')}
+                        >
+                          <Check width={13} height={13} style={activeCanSend === 'everyone' ? '' : 'visibility:hidden'} />
+                          <span>
+                            <span class="tchat-settings-option-name">Everyone can send</span>
+                            <span class="tchat-settings-option-sub">All channel members may post</span>
+                          </span>
+                        </button>
+                        <button
+                          class={`tchat-settings-option${activeCanSend === 'admins' ? ' active' : ''}`}
+                          role="menuitemradio"
+                          aria-checked={activeCanSend === 'admins'}
+                          onClick={() => void toggleCanSend('admins')}
+                        >
+                          <Check width={13} height={13} style={activeCanSend === 'admins' ? '' : 'visibility:hidden'} />
+                          <span>
+                            <span class="tchat-settings-option-name">Only admins can send</span>
+                            <span class="tchat-settings-option-sub">Editors and viewers read only</span>
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -982,8 +1163,10 @@ export function Chat() {
                     </div>
 
               </div>
-            ) : (
+            ) : viewerOnly ? (
               <div class="tchat-readonly" role="status">Viewer — you can read this channel but not reply.</div>
+            ) : (
+              <div class="tchat-readonly" role="status">Only admins can send in this channel.</div>
             )}
           </>
         ) : (

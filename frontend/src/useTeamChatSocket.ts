@@ -16,7 +16,8 @@ export type ChatSocketEvent =
   | { type: 'read'; channelId: string; userId: string; msgId: string }
   | { type: 'pin'; channelId: string; msgId: string; pinned: boolean }
   | { type: 'presence'; users: { id: string; username: string; role: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' }[] }
-  | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write' }
+  | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write'; canSend?: string }
+  | { type: 'channel_update'; channel: { id: string; canSend: 'everyone' | 'admins' } }
   | { type: 'status_update'; messageId: string; newStatus: TeamChatMessage['status'] };
 
 export interface TeamChatSocket {
@@ -86,7 +87,7 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
         }
         switch (msg.type) {
           case 'subscribed':
-            onEventRef.current({ type: 'subscribed', channelId: msg.channelId, messages: msg.messages ?? [], level: msg.level });
+            onEventRef.current({ type: 'subscribed', channelId: msg.channelId, messages: msg.messages ?? [], level: msg.level, canSend: msg.canSend });
             break;
           case 'message':
             onEventRef.current({ type: 'message', channel: msg.channel, message: msg.message });
@@ -105,6 +106,9 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
             break;
           case 'presence':
             onEventRef.current({ type: 'presence', users: msg.users ?? [] });
+            break;
+          case 'channel_update':
+            onEventRef.current({ type: 'channel_update', channel: msg.channel });
             break;
           case 'status_update':
             for (const u of (msg.updates ?? [])) {
