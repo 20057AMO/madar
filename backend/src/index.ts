@@ -40,6 +40,7 @@ import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
 import { loadMeta, saveMeta, listMetaSlugs } from './services/projects-meta';
+import { recordActivity, listActivity } from './services/project-activity';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
 import { exportProjectZip } from './services/project-zip';
@@ -1353,6 +1354,7 @@ app.get('/api/projects/:slug/export', requireProjectAccess('editor'), (req: any,
   });
   snapshot.stream.pipe(res);
   recordAudit('snapshot-export', true, req.ip);
+  recordActivity(req.params.slug, 'exported', { userId: req.user?.id });
 });
 
 // Download the project's workspace as a ZIP archive (editor+ — data leaves
@@ -1392,6 +1394,7 @@ app.post('/api/projects/import', requireRole('editor'), upload.single('file'), a
     invalidateStorageCache();
     invalidateProjectsCache();
     recordAudit('snapshot-import', true, req.ip);
+    recordActivity(project.slug, 'imported', { userId: req.user?.id });
     res.status(201).json({ project });
   } catch (err: any) {
     recordAudit('snapshot-import', false, req.ip);
@@ -1418,6 +1421,22 @@ app.get('/api/projects/:slug', requireProjectAccess('viewer'), async (req, res) 
   }
 });
 
+// Project activity feed ("من قام بماذا ومتى") — viewer+, paginated, newest-first.
+app.get('/api/projects/:slug/activity', requireProjectAccess('viewer'), async (req: any, res) => {
+  try {
+    if (!loadMeta(req.params.slug)) return res.status(404).json({ error: 'Project not found' });
+    const rawLimit = req.query.limit;
+    const rawOffset = req.query.offset;
+    // Absent / empty / junk params fall to the defaults (Number('') is 0, and
+    // a 0 limit would otherwise clamp to 1 row via listActivity's floor).
+    const limit = Number(rawLimit) || 50;
+    const offset = Number(rawOffset) || 0;
+    res.json(listActivity(req.params.slug, { limit, offset }));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Project notes (ideas / bugs / goals) — read + full-document save
 app.get('/api/projects/:slug/notes', requireProjectAccess('viewer'), (req, res) => {
   try {
@@ -1426,15 +1445,18 @@ app.get('/api/projects/:slug/notes', requireProjectAccess('viewer'), (req, res) 
     res.status(400).json({ error: err.message });
   }
 });
-app.put('/api/projects/:slug/notes', requireProjectAccess('editor'), (req, res) => {
+app.put('/api/projects/:slug/notes', requireProjectAccess('editor'), (req: any, res) => {
   try {
-    res.json(notes.saveNotes(req.params.slug, req.body));
+    const doc = notes.saveNotes(req.params.slug, req.body);
+    const count = Array.isArray(doc?.items) ? doc.items.length : 0;
+    recordActivity(req.params.slug, 'notes_saved', { userId: req.user?.id, details: { count } });
+    res.json(doc);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.put('/api/projects/:slug/tags', requireProjectAccess('editor'), (req, res) => {
+app.put('/api/projects/:slug/tags', requireProjectAccess('editor'), (req: any, res) => {
   try {
     const { tags } = req.body || {};
     if (!Array.isArray(tags)) throw new HttpError(400, 'Tags must be an array of strings');
@@ -1445,10 +1467,11 @@ app.put('/api/projects/:slug/tags', requireProjectAccess('editor'), (req, res) =
       .filter((t) => t.length > 0 && t.length <= 30)
       .filter((t, i, a) => a.indexOf(t) === i);
 
-    const meta = loadMeta(req.params.slug) || { activity: [] };
+    const meta = loadMeta(req.params.slug) || {};
     meta.tags = sanitized;
     saveMeta(req.params.slug, meta);
     recordAudit('project-tags', true, req.ip);
+    recordActivity(req.params.slug, 'tags_updated', { userId: req.user?.id, details: { tags: sanitized } });
     res.json({ tags: sanitized });
   } catch (err: any) {
     res.status(err.statusCode || 400).json({ error: err.message });
@@ -1463,10 +1486,17 @@ app.get('/api/projects/:slug/canvas', requireProjectAccess('viewer'), (req, res)
     res.status(400).json({ error: err.message });
   }
 });
-app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req, res) => {
+app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req: any, res) => {
   try {
     const doc = canvas.saveCanvas(req.params.slug, req.body);
     recordAudit('canvas-save', true, req.ip);
+    recordActivity(req.params.slug, 'canvas_saved', {
+      userId: req.user?.id,
+      details: {
+        nodes: Array.isArray(doc?.nodes) ? doc.nodes.length : 0,
+        edges: Array.isArray(doc?.edges) ? doc.edges.length : 0,
+      },
+    });
     res.json(doc);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -1497,10 +1527,17 @@ app.get('/api/projects/:slug/snapshots/config', requireProjectAccess('viewer'), 
 });
 
 // Update a project's schedule (partial merge: enabled / intervalMin / keep).
-app.put('/api/projects/:slug/snapshots/config', requireProjectAccess('editor'), (req, res) => {
+app.put('/api/projects/:slug/snapshots/config', requireProjectAccess('editor'), (req: any, res) => {
   try {
     const cfg = snapAuto.setSnapshotConfig(req.params.slug, (req.body as any) || {});
     recordAudit('snapshot-config-change', true, req.ip);
+    recordActivity(req.params.slug, 'snapshot_config', {
+      userId: req.user?.id,
+      details: {
+        intervalMin: cfg.intervalMin,
+        keep: cfg.keep,
+      },
+    });
     if (cfg.enabled) snapAuto.scheduleSnapshotSweep();
     res.json(cfg);
   } catch (err: any) {
@@ -1510,9 +1547,9 @@ app.put('/api/projects/:slug/snapshots/config', requireProjectAccess('editor'), 
 });
 
 // Capture a stored snapshot now.
-app.post('/api/projects/:slug/snapshots', requireProjectAccess('editor'), userWriteLimiter, async (req, res) => {
+app.post('/api/projects/:slug/snapshots', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
   try {
-    const snapshot = await snapAuto.captureSnapshot(req.params.slug);
+    const snapshot = await snapAuto.captureSnapshot(req.params.slug, req.user?.id);
     recordAudit('snapshot-save', true, req.ip);
     res.status(201).json({ snapshot });
   } catch (err: any) {
@@ -1540,10 +1577,11 @@ app.get('/api/projects/:slug/snapshots/:file', requireProjectAccess('editor'), (
 });
 
 // Delete a stored snapshot archive.
-app.delete('/api/projects/:slug/snapshots/:file', requireProjectAccess('editor'), (req, res) => {
+app.delete('/api/projects/:slug/snapshots/:file', requireProjectAccess('editor'), (req: any, res) => {
   try {
     snapAuto.deleteSnapshot(req.params.slug, req.params.file);
     recordAudit('snapshot-delete', true, req.ip);
+    recordActivity(req.params.slug, 'snapshot_deleted', { userId: req.user?.id, details: { file: req.params.file } });
     res.json({ ok: true });
   } catch (err: any) {
     recordAudit('snapshot-delete', false, req.ip);
@@ -1565,6 +1603,7 @@ app.post('/api/projects/:slug/snapshots/:file/restore', requireProjectAccess('ed
     invalidateStorageCache();
     invalidateProjectsCache();
     recordAudit('snapshot-restore', true, req.ip);
+    recordActivity(project.slug, 'restored', { userId: req.user?.id });
     res.status(201).json({ project });
   } catch (err: any) {
     recordAudit('snapshot-restore', false, req.ip);
@@ -1632,6 +1671,10 @@ app.post('/api/projects/:slug/members', async (req: any, res) => {
     } catch { /* channel sync is cosmetic, never blocks */ }
     invalidateProjectsCache();
     recordAudit(action, true, req.ip, userId);
+    recordActivity(req.params.slug, action === 'member-role-changed' ? 'member_role_changed' : 'member_added', {
+      userId: callerId,
+      details: { targetUserId: userId, username: targetUser.username, role: memberRole },
+    });
     res.json({ member: { userId, role: memberRole } });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1671,6 +1714,11 @@ app.delete('/api/projects/:slug/members/:userId', async (req: any, res) => {
     } catch { /* channel sync is cosmetic, never blocks */ }
     invalidateProjectsCache();
     recordAudit('member-removed', true, req.ip, targetUserId);
+    const targetUser = getUserInfo(targetUserId);
+    recordActivity(req.params.slug, 'member_removed', {
+      userId: callerId,
+      details: { targetUserId, username: targetUser?.username || targetUserId },
+    });
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1732,13 +1780,13 @@ app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, as
 
     const previousOwner = meta.ownerId;
     meta.ownerId = userId;
-    meta.activity = [
-      ...(meta.activity || []),
-      { action: 'ownership-transferred', at: now, userId: callerId },
-    ].slice(-200);
     saveMeta(req.params.slug, meta);
     invalidateProjectsCache();
     recordAudit('ownership-transferred', true, req.ip, userId);
+    recordActivity(req.params.slug, 'ownership_transferred', {
+      userId: callerId,
+      details: { targetUserId: userId, username: targetUser.username, previousOwnerId: previousOwner },
+    });
 
     // Best-effort project-channel sync: the new owner gains an admin
     // membership in the auto-channel and the old owner's listed role becomes
@@ -1763,12 +1811,12 @@ app.get('/api/projects/:slug/presence', requireProjectAccess('viewer'), (req, re
 
 // Manually dismiss the crash badge (editor+) — clears meta.crash so the red
 // chip/banner goes away without restarting the container.
-app.post('/api/projects/:slug/crash-clear', requireProjectAccess('editor'), userWriteLimiter, async (req, res) => {
+app.post('/api/projects/:slug/crash-clear', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
   try {
     if (!loadMeta(req.params.slug)) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    await manualClearCrash(req.params.slug);
+    await manualClearCrash(req.params.slug, req.user?.id);
     invalidateProjectsCache();
     res.json({ ok: true });
   } catch (err: any) {
@@ -1797,9 +1845,9 @@ app.post('/api/projects/:slug/stop', requireProjectAccess('editor'), async (req:
 });
 
 // Remove project — container, meta store AND workspace files from disk.
-app.delete('/api/projects/:slug', requireProjectAccess('admin'), rateLimit('strict', RATE_WINDOW, RATE_STRICT_MAX), async (req, res) => {
+app.delete('/api/projects/:slug', requireProjectAccess('admin'), rateLimit('strict', RATE_WINDOW, RATE_STRICT_MAX), async (req: any, res) => {
   try {
-    await removeProject(req.params.slug);
+    await removeProject(req.params.slug, req.user?.id);
     invalidateStorageCache();
     invalidateProjectsCache();
     recordAudit('project-files-deleted', true, req.ip);
@@ -2074,14 +2122,11 @@ app.patch('/api/projects/:slug', requireProjectAccess('editor'), async (req: any
     const project = await getProject(req.params.slug);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const { name, description } = req.body || {};
-    const meta = loadMeta(project.slug) || { activity: [] };
+    const meta = loadMeta(project.slug) || {};
     if (typeof name === 'string' && name.trim()) meta.name = name.trim().slice(0, 100);
     if (typeof description === 'string') meta.description = description.trim().slice(0, 2000);
-    meta.activity = [
-      ...(meta.activity || []),
-      { action: 'updated', at: new Date().toISOString(), ...(req.user?.id ? { userId: req.user?.id } : {}) },
-    ].slice(-200);
     saveMeta(project.slug, meta);
+    recordActivity(project.slug, 'updated', { userId: req.user?.id });
     res.json({ project: await getProject(project.slug) });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -2101,7 +2146,7 @@ app.post('/api/projects/:slug/recreate', requireProjectAccess('editor'), async (
 });
 
 // Set project environment variables (applied on recreate)
-app.put('/api/projects/:slug/env', requireProjectAccess('editor'), async (req, res) => {
+app.put('/api/projects/:slug/env', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const project = await getProject(req.params.slug);
     if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -2113,13 +2158,10 @@ app.put('/api/projects/:slug/env', requireProjectAccess('editor'), async (req, r
         if (typeof v === 'string' && v.length <= 4000) clean[k] = v;
       }
     }
-    const meta = loadMeta(project.slug) || { activity: [] };
+    const meta = loadMeta(project.slug) || {};
     meta.env = clean;
-    meta.activity = [
-      ...(meta.activity || []),
-      { action: 'env_updated', at: new Date().toISOString() },
-    ].slice(-200);
     saveMeta(project.slug, meta);
+    recordActivity(project.slug, 'env_updated', { userId: req.user?.id, details: { count: Object.keys(clean).length } });
     res.json({ env: clean, needsRecreate: project.status === 'running' });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -2127,13 +2169,13 @@ app.put('/api/projects/:slug/env', requireProjectAccess('editor'), async (req, r
 });
 
 // Set project published ports (validated + conflict-checked, applied on recreate)
-app.put('/api/projects/:slug/ports', requireProjectAccess('editor'), async (req, res) => {
+app.put('/api/projects/:slug/ports', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     if (!Array.isArray((req.body || {}).ports)) {
       throw new HttpError(400, 'ports must be an array of integers');
     }
     const clean = validatePortSet(req.body.ports, { max: 50 });
-    const result = await updateProjectPorts(req.params.slug, clean);
+    const result = await updateProjectPorts(req.params.slug, clean, req.user?.id);
     recordAudit('project-ports', true, req.ip);
     res.json({ ports: result.project.ports, needsRecreate: result.needsRecreate });
   } catch (err: any) {
@@ -2145,13 +2187,13 @@ app.put('/api/projects/:slug/ports', requireProjectAccess('editor'), async (req,
 // Set project resource limits (CPU / memory — applied on recreate).
 // Partial-update contract: only keys present in the body change; `null`
 // clears; omitted keys survive untouched.
-app.put('/api/projects/:slug/limits', requireProjectAccess('editor'), async (req, res) => {
+app.put('/api/projects/:slug/limits', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const raw = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     const patch: Partial<ProjectLimits> = {};
     if ('cpu' in raw) patch.cpu = raw.cpu;
     if ('memory' in raw) patch.memory = raw.memory;
-    const result = await updateProjectLimits(req.params.slug, patch);
+    const result = await updateProjectLimits(req.params.slug, patch, req.user?.id);
     recordAudit('project-limits', true, req.ip);
     res.json({ limits: result.limits, needsRecreate: result.needsRecreate });
   } catch (err: any) {
@@ -2181,7 +2223,7 @@ app.post('/api/projects/:slug/serve', requireProjectAccess('editor'), userWriteL
     if (!meta) return res.status(404).json({ error: 'Project not found' });
     const { port } = (req.body as any) || {};
     const cfg = sanitizeServeConfig({ enabled: true, port }, meta.serve, meta.ports || []);
-    const serve = await startServeProcess(req.params.slug, cfg.port!, String(cfg.port));
+    const serve = await startServeProcess(req.params.slug, cfg.port!, String(cfg.port), req.user?.id);
     recordAudit('serve-start', true, req.ip);
     res.json({ serve });
   } catch (err: any) {
@@ -2191,9 +2233,9 @@ app.post('/api/projects/:slug/serve', requireProjectAccess('editor'), userWriteL
 });
 
 // Stop serving (keeps config for UX memory, enabled=false).
-app.post('/api/projects/:slug/serve/stop', requireProjectAccess('editor'), userWriteLimiter, async (req, res) => {
+app.post('/api/projects/:slug/serve/stop', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
   try {
-    const serve = await stopServeProcess(req.params.slug);
+    const serve = await stopServeProcess(req.params.slug, req.user?.id);
     recordAudit('serve-stop', true, req.ip);
     res.json({ serve });
   } catch (err: any) {

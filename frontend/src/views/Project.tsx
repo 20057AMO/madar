@@ -1634,17 +1634,17 @@ function OverviewPanel({
         <div class="panel" id="ov-activity">
           <h2 class="panel-title">Activity</h2>
           {project?.activity && project.activity.length > 0 ? (
-            <div class="activity-list">
+            <ul class="activity-list">
               {project.activity.slice().reverse().slice(0, 15).map((a, i) => (
-                <div class="activity-row" key={i}>
+                <li class="activity-row" key={i}>
                   <span class="activity-dot-wrap">
                     <span class={`activity-dot ${a.action}`} />
                     <span class="activity-act">{fmtAction(a.action)}</span>
                   </span>
-                  <span class="activity-at">{relTime(a.at)} ago</span>
-                </div>
+                  <time class="activity-at" datetime={a.at} aria-label={new Date(a.at).toLocaleString()}>{relTime(a.at)} ago</time>
+                </li>
               ))}
-            </div>
+            </ul>
           ) : (
             <div class="empty-state" style="padding: 24px">No activity yet.</div>
           )}

@@ -15,13 +15,13 @@ import {
   loadMeta,
   saveMeta,
   deleteMeta,
-  touchActivity,
   listMetaSlugs,
   markRequestedStop,
   clearCrashState,
   type CrashInfo,
   type ProjectMeta,
 } from './projects-meta';
+import { recordActivity, loadActivity, type ActivityEntry } from './project-activity';
 import { loadNotes, saveNotes } from './project-notes';
 import { loadCanvas, saveCanvas } from './project-canvas';
 import { purgeOpencodeProjectRows } from './opencode-store';
@@ -62,6 +62,16 @@ export interface ProjectSpec {
   env?: Record<string, string>;
 }
 
+/**
+ * Minimal activity tail carried on the UNAUTHENTICATED project list — the
+ * newest event's `{action, at}` ONLY (no id / userId / actorName / details).
+ * Keeps `lastTouched` consumers working without disclosing who did what.
+ */
+export interface ActivityTailEntry {
+  action: string;
+  at: string;
+}
+
 export interface ProjectInfo {
   limits?: ProjectLimits;
   liveLimits?: ProjectLimits;
@@ -77,7 +87,10 @@ export interface ProjectInfo {
   image?: string;
   ports?: number[];
   env?: Record<string, string>;
-  activity?: { action: string; at: string; userId?: string }[];
+  /** Full feed on project detail (viewer+); tail-only {action,at} on the
+   *  unauthenticated LIST payload so actor identities/details never leak to
+   *  non-members who can read the list but are 403'd on /activity. */
+  activity?: (ActivityEntry | ActivityTailEntry)[];
   ownerId?: string;
   members?: { userId: string; role: 'admin' | 'editor' | 'viewer'; addedAt: string }[];
   /** User-defined labels for organizing/filtering projects. */
@@ -479,15 +492,21 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
     limits: effectiveLimits,
     createdAt: info.createdAt,
     env: clean.env,
-    activity: [
-      ...(prev?.activity || []),
-      { action: 'created', at: new Date().toISOString(), ...(userId ? { userId } : {}) },
-    ].slice(-200),
   };
+  // Activity history is owned by project-activity (activity.json) — never
+  // carried through meta, even on a recreate where prev may hold legacy rows.
+  // Force the store's lazy backfill HERE, while meta.json on disk still holds
+  // the legacy `activity` array: deleteActivity below then wipes meta.activity,
+  // and a deferred migration would read the already-cleaned meta → [] (the
+  // pre-migration history would be lost on the first recreate).
+  loadActivity(slug);
+  delete savedMeta.activity;
   delete savedMeta.crash;
   delete savedMeta.requestedStop;
   delete savedMeta.crashWatch;
   saveMeta(slug, savedMeta);
+  // The `created` event lands in the activity store (append oldest→newest).
+  recordActivity(slug, 'created', { userId });
 
   // A project gets its own auto channel (project:<slug>) tied to its lifecycle —
   // created here (create covers fresh + recreate + duplicate) so the team can
@@ -561,7 +580,10 @@ export async function listProjects(): Promise<ProjectInfo[]> {
       project.ports = meta.ports;
       project.limits = meta.limits;
       project.env = meta.env;
-      project.activity = meta.activity;
+      // Tail-only on the list: the newest event as {action,at} — full actor
+      // identities/details stay on the viewer-gated detail/activity routes,
+      // because /api/projects is readable by ANY authenticated user.
+      project.activity = loadActivity(slug).slice(-1).map(({ action, at }) => ({ action, at }));
       project.ownerId = meta.ownerId;
       project.members = meta.members;
       project.tags = meta.tags;
@@ -615,7 +637,7 @@ export async function getProject(slug: string): Promise<ProjectInfo | null> {
       project.ports = meta.ports;
       project.limits = meta.limits;
       project.env = meta.env;
-      project.activity = meta.activity;
+      project.activity = loadActivity(projectSlug);
       project.ownerId = meta.ownerId;
       project.members = meta.members;
       project.tags = meta.tags;
@@ -670,7 +692,7 @@ export async function startProject(slug: string, userId?: string): Promise<Proje
   // An explicit start clears any prior crash and the requestedStop marker the
   // detector uses to tell intentional stops apart from crashes.
   clearCrashState(projectSlug);
-  touchActivity(projectSlug, 'started', userId);
+  recordActivity(projectSlug, 'started', { userId });
   // Re-run the static-site serve process now that the container is back up.
   // Never throws — a failed serve must not break the start.
   await ensureServeRunning(projectSlug).catch((e) =>
@@ -703,7 +725,7 @@ export async function stopProject(slug: string, userId?: string): Promise<Projec
   markRequestedStop(projectSlug);
   const container = docker.getContainer(`wsd-${projectSlug}`);
   await container.stop();
-  touchActivity(projectSlug, 'stopped', userId);
+  recordActivity(projectSlug, 'stopped', { userId });
   const info = await getProject(projectSlug);
   if (!info) throw new HttpError(500, 'Project not found after stop');
   info.status = 'stopped';
@@ -722,12 +744,15 @@ export async function stopProject(slug: string, userId?: string): Promise<Projec
  * Remove a project entirely: container, meta store AND its workspace files
  * from disk. opencode session cleanup is best-effort (non-fatal).
  */
-export async function removeProject(slug: string): Promise<void> {
+export async function removeProject(slug: string, userId?: string): Promise<void> {
   const projectSlug = validateProjectSlug(slug);
   await requireContainer(projectSlug);
   const removedMeta = loadMeta(projectSlug);
   const container = docker.getContainer(`wsd-${projectSlug}`);
   await container.remove({ force: true });
+  // Record `deleted` BEFORE the meta store (and activity.json) are wiped —
+  // the entry must exist while the project still does.
+  recordActivity(projectSlug, 'deleted', { userId });
   deleteMeta(projectSlug);
   removeWorkspaceDir(projectSlug);
   unregisterOpencodeProject(projectSlug);
@@ -893,8 +918,10 @@ export async function recreateProject(slug: string, userId?: string): Promise<Pr
     limits: meta.limits,
   }, userId);
 
-  // createProject already fired 'created'; the recreate gets its own event on
-  // top (a genuine teardown + rebuild worth distinguishing in receivers).
+  // createProject already recorded 'created' + fired the 'created' webhook;
+  // the recreate gets its OWN activity entry + webhook on top (a genuine
+  // teardown + rebuild worth distinguishing from a fresh create).
+  recordActivity(projectSlug, 'recreated', { userId });
   dispatchWebhook('recreated', {
     event: 'recreated',
     slug: projectSlug,
@@ -920,7 +947,7 @@ export interface UpdatePortsResult {
  * or stopped container, so `needsRecreate` reports honestly whether the
  * current binding already matches the requested set.
  */
-export async function updateProjectPorts(slug: string, requested: number[]): Promise<UpdatePortsResult> {
+export async function updateProjectPorts(slug: string, requested: number[], userId?: string): Promise<UpdatePortsResult> {
   const projectSlug = validateProjectSlug(slug);
   const proj = await requireContainer(projectSlug);
 
@@ -936,11 +963,8 @@ export async function updateProjectPorts(slug: string, requested: number[]): Pro
 
   const meta: ProjectMeta = loadMeta(projectSlug) || { activity: [] };
   meta.ports = requested;
-  meta.activity = [
-    ...(meta.activity || []),
-    { action: 'ports_updated', at: new Date().toISOString() },
-  ].slice(-200);
   saveMeta(projectSlug, meta);
+  recordActivity(projectSlug, 'ports_updated', { userId, details: { ports: requested.map(String) } });
 
   const live = Object.values(proj.hostPorts ?? {})
     .map(Number)
@@ -964,7 +988,7 @@ export interface UpdateLimitsResult {
  * `needsRecreate` reports honestly whether the current container already
  * applies the requested set.
  */
-export async function updateProjectLimits(slug: string, patch: Partial<ProjectLimits>): Promise<UpdateLimitsResult> {
+export async function updateProjectLimits(slug: string, patch: Partial<ProjectLimits>, userId?: string): Promise<UpdateLimitsResult> {
   const projectSlug = validateProjectSlug(slug);
   const proj = await requireContainer(projectSlug);
 
@@ -978,11 +1002,8 @@ export async function updateProjectLimits(slug: string, patch: Partial<ProjectLi
   }
 
   meta.limits = isEmptyLimits(merged) ? undefined : merged;
-  meta.activity = [
-    ...(meta.activity || []),
-    { action: 'limits_updated', at: new Date().toISOString() },
-  ].slice(-200);
   saveMeta(projectSlug, meta);
+  recordActivity(projectSlug, 'limits_updated', { userId, details: meta.limits ?? undefined });
 
   // requireContainer already inspected the container — reuse its liveLimits
   // instead of paying for a second Docker inspect per edit.
@@ -1098,7 +1119,7 @@ export async function cloneIntoWorkspace(
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) {
-        touchActivity(projectSlug, 'cloned', userId);
+        recordActivity(projectSlug, 'cloned', { userId });
         resolve({ target: path.relative(base, target).split(path.sep).join('/'), output });
       } else {
         reject(new Error(`git clone failed (exit ${code}): ${output.slice(-2000)}`));
@@ -1217,7 +1238,7 @@ export async function duplicateProject(
     }
   }
 
-  touchActivity(created.slug, 'duplicated', userId);
+  recordActivity(created.slug, 'duplicated', { userId });
   // Workspace files + canvas landed after createProject's own invalidation —
   // refresh once more so the copy's canvasEditedAt is immediately accurate.
   invalidateProjectsCache();

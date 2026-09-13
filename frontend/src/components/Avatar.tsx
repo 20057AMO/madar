@@ -23,13 +23,15 @@ interface Props {
   avatar?: string | null;
   size?: number;
   title?: string;
+  /** Render as pure decoration hidden from assistive tech — use when the real name sits as adjacent text. */
+  decorative?: boolean;
 }
 
 /**
  * Deterministic user avatar: renders the uploaded image when present, and
  * falls back (also on image error) to a colored initials disc.
  */
-export function Avatar({ name, avatar, size = 28, title }: Props) {
+export function Avatar({ name, avatar, size = 28, title, decorative }: Props) {
   const [failed, setFailed] = useState(false);
   const color = PALETTE[hashName(name) % PALETTE.length];
   const label = title ?? name;
@@ -54,8 +56,8 @@ export function Avatar({ name, avatar, size = 28, title }: Props) {
       <img
         class="user-avatar"
         src={avatar}
-        alt={label}
-        title={label}
+        alt={decorative ? '' : label}
+        aria-hidden={decorative || undefined}
         loading="lazy"
         onError={() => setFailed(true)}
         style={{ ...base, background: 'var(--bg)', textIndent: '-9999px' }}
@@ -63,7 +65,14 @@ export function Avatar({ name, avatar, size = 28, title }: Props) {
     );
   }
   return (
-    <div class="user-avatar" role="img" aria-label={label} title={label} style={base}>
+    <div
+      class="user-avatar"
+      role={decorative ? undefined : 'img'}
+      aria-label={decorative ? undefined : label}
+      aria-hidden={decorative || undefined}
+      title={decorative ? undefined : label}
+      style={base}
+    >
       {initials(name)}
     </div>
   );

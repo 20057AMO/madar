@@ -29,6 +29,7 @@ import type { CrashInfo } from './projects-meta';
 import { loadMeta, listMetaSlugs, saveMeta, setCrashState, setCrashWatch } from './projects-meta';
 import { recordAudit } from './audit-store';
 import { dispatchWebhook } from './webhook-sender';
+import { recordActivity } from './project-activity';
 import { classifyCrash, type InspectStateExcerpt } from './alerts-core';
 
 export type {
@@ -97,6 +98,11 @@ async function inspectAndClassify(slug: string): Promise<string | null> {
   });
   if (res.crash && res.fire) {
     setCrashState(slug, res.crash);
+    // System event (no actor) — the crash lurks on the project's activity feed.
+    recordActivity(slug, 'crashed', {
+      at: res.crash.at,
+      details: { reason: res.crash.reason, ...(res.crash.exitCode !== undefined ? { exitCode: res.crash.exitCode } : {}) },
+    });
     recordAudit('container-crash', true);
     dispatchWebhook('crash', {
       event: 'crash',
@@ -175,7 +181,7 @@ export async function resetCrashState(slug: string): Promise<void> {
  * caught. The next explicit start/recreate re-seeds everything via
  * resetCrashState.
  */
-export async function manualClearCrash(slug: string): Promise<void> {
+export async function manualClearCrash(slug: string, userId?: string): Promise<void> {
   const meta = loadMeta(slug);
   if (!meta) return;
   const state = await getContainerState(slug);
@@ -185,6 +191,7 @@ export async function manualClearCrash(slug: string): Promise<void> {
   if (state) meta.crashWatch = { restartCount: state.restartCount, startedAt: state.startedAt };
   else { delete meta.crashWatch; delete meta.requestedStop; }
   saveMeta(slug, meta);
+  recordActivity(slug, 'crash_cleared', { userId });
 }
 
 // ── Automation loop (mirrors project-snapshots-auto's boot pattern) ─────

@@ -15,6 +15,7 @@
  */
 import Docker from 'dockerode';
 import { loadMeta, saveMeta } from './projects-meta';
+import { recordActivity } from './project-activity';
 import {
   HttpError,
   buildServeCmd,
@@ -124,7 +125,8 @@ async function execInContainer(
 export async function startServeProcess(
   slug: string,
   port: number,
-  hostPort: string | number
+  hostPort: string | number,
+  userId?: string
 ): Promise<ServeState> {
   // Idempotent double-POST guard: if the toggle is already on AND the live
   // probe says we're actually serving, return the existing state rather than
@@ -204,6 +206,7 @@ export async function startServeProcess(
   const meta = loadMeta(slug) || { activity: [] };
   meta.serve = { enabled: true, port, pid };
   saveMeta(slug, meta);
+  recordActivity(slug, 'serve_started', { userId, details: { port } });
   return deriveServeState(meta.serve, meta.ports, { active: true, httpCode: null, status: 'open' });
 }
 
@@ -213,7 +216,7 @@ export async function startServeProcess(
  * back to a literal pkill pattern for robustness. Persists enabled:false while
  * keeping the port for UX memory.
  */
-export async function stopServeProcess(slug: string): Promise<ServeState> {
+export async function stopServeProcess(slug: string, userId?: string): Promise<ServeState> {
   const meta = loadMeta(slug);
   if (!meta) throw new HttpError(404, `Project '${slug}' not found`);
 
@@ -247,6 +250,7 @@ export async function stopServeProcess(slug: string): Promise<ServeState> {
   const next: ServeConfig = { enabled: false, port };
   meta.serve = next;
   saveMeta(slug, meta);
+  recordActivity(slug, 'serve_stopped', { userId, details: port !== undefined ? { port } : undefined });
   return deriveServeState(next, meta.ports, null);
 }
 

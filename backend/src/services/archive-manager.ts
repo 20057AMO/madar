@@ -39,7 +39,8 @@ import {
   HttpError,
   type ProjectInfo,
 } from './docker-manager';
-import { loadMeta, saveMeta, touchActivity } from './projects-meta';
+import { loadMeta, saveMeta } from './projects-meta';
+import { recordActivity } from './project-activity';
 import { invalidateProjectsCache } from './projects-cache';
 import { invalidateStorageCache } from './storage-metrics';
 
@@ -222,7 +223,7 @@ export async function restoreArchive(
     /* leftover source handled by the janitor's next sweep — restore already done */
   }
 
-  touchActivity(created.slug, 'restored', userId);
+  recordActivity(created.slug, 'restored', { userId });
   invalidateArchiveCache();
   invalidateStorageCache();
   invalidateProjectsCache();

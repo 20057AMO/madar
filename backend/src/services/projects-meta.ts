@@ -69,7 +69,7 @@ export interface ProjectMeta {
   createdAt?: string;
   env?: Record<string, string>;
   limits?: ProjectLimits;
-  activity: ActivityEntry[];
+  activity?: ActivityEntry[];
   ownerId?: string;
   members?: ProjectMember[];
   snapshot?: SnapshotSchedule;
@@ -138,18 +138,11 @@ export function listMetaSlugs(): string[] {
   }
 }
 
-export function touchActivity(slug: string, action: string, userId?: string): ProjectMeta | null {
-  const clean = String(slug ?? '');
-  return withFileLock(`meta:${clean}`, () => {
-    const meta = loadMeta(clean) || { activity: [] };
-    meta.activity = [
-      ...(meta.activity || []),
-      { action, at: new Date().toISOString(), ...(userId ? { userId } : {}) },
-    ].slice(-200);
-    saveMetaRaw(clean, meta);
-    return meta;
-  });
-}
+// Activity history now lives in per-project activity.json via
+// services/project-activity.ts (recordActivity/loadActivity/listActivity) —
+// meta.activity is retained on the ProjectMeta type ONLY for legacy reads and
+// the lazy backfill done by that store. touchActivity was removed in the
+// migration; every write point records through project-activity instead.
 
 // ── Crash-detection state (requestedStop / crash / crashWatch) ──────────
 
@@ -176,13 +169,14 @@ export function setCrashWatch(slug: string, watch: CrashWatch | undefined): void
   });
 }
 
-/** Persist a detected crash (single-fire by design — see project-alerts). */
+/** Persist a detected crash (single-fire by design — see project-alerts).
+ *  The `crashed` activity entry is recorded through project-activity's
+ *  recordActivity by the detector, not here. */
 export function setCrashState(slug: string, crash: CrashInfo): void {
   withFileLock(`meta:${slug}`, () => {
     const meta = loadMeta(slug);
     if (!meta) return;
     meta.crash = crash;
-    meta.activity = [...(meta.activity || []), { action: 'crashed', at: new Date().toISOString() }].slice(-200);
     saveMetaRaw(slug, meta);
   });
 }

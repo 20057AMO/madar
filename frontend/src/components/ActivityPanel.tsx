@@ -20,7 +20,7 @@ function ActivityRow({ e }: { e: ProjectActivityEntry }) {
   const abs = new Date(e.at).toLocaleString();
   const detail = e.details ? meta.fmtDetail(e.details) : '';
   return (
-    <div class="activity-row">
+    <li class="activity-row">
       <span class={`activity-ico ${meta.dotClass}`} aria-hidden="true">
         <Ic width={15} height={15} />
       </span>
@@ -33,6 +33,7 @@ function ActivityRow({ e }: { e: ProjectActivityEntry }) {
                 name={actor}
                 avatar={e.userId && e.actorAvatarExt ? avatarUrl(e.userId, e.actorAvatarExt) : null}
                 size={18}
+                decorative
               />
               <span class="activity-actor-name">{actor}</span>
             </span>
@@ -42,11 +43,11 @@ function ActivityRow({ e }: { e: ProjectActivityEntry }) {
               <span>System</span>
             </span>
           )}
-          <span class="activity-at" title={`${abs}${actor ? ` — ${actor}` : ''}`}>{relTime(e.at)}</span>
+          <time class="activity-at" datetime={e.at} title={abs} aria-label={abs}>{relTime(e.at)}</time>
         </div>
         {detail && <div class="activity-detail mono">{detail}</div>}
       </div>
-    </div>
+    </li>
   );
 }
 
@@ -87,7 +88,10 @@ export function ActivityPanel({ slug, readOnly }: { slug: string; readOnly?: boo
     fetchPage(0, true);
   }, [fetchPage]);
 
-  const refresh = () => fetchPage(0, true);
+  const refresh = () => {
+    if (loading) return;
+    fetchPage(0, true);
+  };
   const loadMore = () => {
     if (loadingMore || offset >= total) return;
     fetchPage(offset, false);
@@ -99,10 +103,10 @@ export function ActivityPanel({ slug, readOnly }: { slug: string; readOnly?: boo
         <h2 class="panel-title" style="display:flex;align-items:center;gap:6px;margin:0">
           <History width={13} height={13} class="icon" /> Activity
           <span style="flex:1" />
-          {total > 0 && !loading && (
+          {total > 0 && !loading && !loadingMore && (
             <span class="activity-count" role="status">{total} {total === 1 ? 'event' : 'events'}</span>
           )}
-          <button class="btn-ghost sm" onClick={refresh} disabled={loading} title="Refresh activity" aria-label="Refresh activity">
+          <button class="btn-ghost sm" onClick={refresh} aria-disabled={loading} title="Refresh activity" aria-label="Refresh activity">
             <RefreshCw width={13} height={13} class={`icon${loading ? ' spin' : ''}`} /> Refresh
           </button>
         </h2>
@@ -116,17 +120,17 @@ export function ActivityPanel({ slug, readOnly }: { slug: string; readOnly?: boo
       )}
 
       {loading ? (
-        <div class="activity-load" role="status" aria-busy="true" aria-label="Loading activity">
+        <ul class="activity-list activity-load" role="status" aria-busy="true" aria-label="Loading activity">
           {Array.from({ length: 6 }).map((_, i) => (
-            <div class="activity-row" key={i}>
+            <li class="activity-row" key={i}>
               <span class="activity-ico-skel" />
               <span style="flex:1;min-width:0">
                 <div class="skel-line w60" style="margin-bottom:6px" />
                 <div class="skel-line w40" style="margin-bottom:0" />
               </span>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : entries.length === 0 ? (
         <div class="empty-state" style="text-align:center;padding:28px 0" role="status">
           <div class="big-icon"><Inbox width={30} height={30} class="icon" /></div>
@@ -135,13 +139,13 @@ export function ActivityPanel({ slug, readOnly }: { slug: string; readOnly?: boo
           </p>
         </div>
       ) : (
-        <div class="activity-list">
+        <ul class="activity-list" aria-busy={loadingMore}>
           {entries.map((e) => (
             <ActivityRow key={e.id} e={e} />
           ))}
           {entries.length < total && (
-            <div style="text-align:center;padding:10px 0 2px">
-              <button class="btn-ghost sm" onClick={loadMore} disabled={loadingMore} title="Load older activity">
+            <li style="text-align:center;padding:10px 0 2px;list-style:none">
+              <button class="btn-ghost sm" onClick={loadMore} aria-disabled={loadingMore} title="Load older activity">
                 {loadingMore ? (
                   <>
                     <Loader2 width={13} height={13} class="icon spin" /> Loading…
@@ -150,9 +154,9 @@ export function ActivityPanel({ slug, readOnly }: { slug: string; readOnly?: boo
                   `Load more (${entries.length}/${total})`
                 )}
               </button>
-            </div>
+            </li>
           )}
-        </div>
+        </ul>
       )}
     </div>
   );

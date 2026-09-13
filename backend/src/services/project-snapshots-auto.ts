@@ -19,6 +19,7 @@ import { HttpError } from './docker-manager';
 import { loadMeta, saveMeta, listMetaSlugs, type SnapshotSchedule } from './projects-meta';
 import { exportProjectSnapshot, importProjectSnapshot } from './project-snapshots';
 import { dispatchWebhook } from './webhook-sender';
+import { recordActivity } from './project-activity';
 import {
   DEFAULT_SCHEDULE,
   MAX_KEEP,
@@ -141,7 +142,7 @@ export function restoreStoredSnapshot(slug: string, file: string, userId?: strin
  * Capture a server-side snapshot NOW. Writes the same tar.gz a browser
  * export produces, records lastSnapshotAt and prunes to the configured keep.
  */
-export async function captureSnapshot(slug: string): Promise<SnapshotEntry> {
+export async function captureSnapshot(slug: string, userId?: string): Promise<SnapshotEntry> {
   const meta = loadMeta(slug);
   if (!meta) throw new HttpError(404, `Project '${slug}' not found`);
   const schedule = { ...DEFAULT_SCHEDULE, ...(meta.snapshot || {}) };
@@ -190,6 +191,8 @@ export async function captureSnapshot(slug: string): Promise<SnapshotEntry> {
     size,
     at: meta.lastSnapshotAt,
   });
+
+  recordActivity(slug, 'snapshot_captured', { userId, details: { file, size } });
 
   return { file, size, at: meta.lastSnapshotAt };
 }
