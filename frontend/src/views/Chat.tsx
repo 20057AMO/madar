@@ -25,6 +25,8 @@ import {
   CheckCheck,
   Mic,
   Settings,
+  Pencil,
+  Trash2,
 } from 'lucide-preact';
 import {
   listChatChannels,
@@ -41,6 +43,8 @@ import {
   revokeChatAttachmentObjectUrl,
   searchChatMessages,
   updateChatChannelSettings,
+  editChatMessage,
+  deleteChatMessage,
   listUsers,
   avatarUrl,
   type ChatChannel,
@@ -163,6 +167,9 @@ export function Chat() {
   const [directOpen, setDirectOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ChatChannel | null>(null);
   const [allUsers, setAllUsers] = useState<Awaited<ReturnType<typeof listUsers>>>([]);
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [deleteMsgTarget, setDeleteMsgTarget] = useState<TeamChatMessage | null>(null);
   
   // ── Voice Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -268,6 +275,22 @@ export function Chat() {
       }
       return;
     }
+    if (ev.type === 'message_updated') {
+      if (ev.channelId === activeIdRef.current) {
+        setMessages((prev) => prev.map((m) => (m.id === ev.message.id ? ev.message : m)));
+      }
+      return;
+    }
+    if (ev.type === 'message_deleted') {
+      if (ev.channelId === activeIdRef.current) {
+        setMessages((prev) => prev.filter((m) => m.id !== ev.msgId));
+        if (editingMsgId === ev.msgId) {
+          setEditingMsgId(null);
+          setEditText('');
+        }
+      }
+      return;
+    }
   };
   const sock = useTeamChatSocket(onEvent);
 
@@ -313,6 +336,9 @@ export function Chat() {
     setSearchQ('');
     setMessages([]);
     setComposer({ text: '', attachments: [] });
+    setEditingMsgId(null);
+    setEditText('');
+    setDeleteMsgTarget(null);
     let cancelled = false;
     void getChatChannel(activeId)
       .then((res) => {
@@ -426,6 +452,19 @@ export function Chat() {
       first.focus();
     }
   };
+
+  // Escape cancels edit mode
+  useEffect(() => {
+    if (!editingMsgId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [editingMsgId]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -581,6 +620,41 @@ export function Chat() {
       setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, pinned: !m.pinned } : x)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to toggle pin');
+    }
+  };
+
+  const startEdit = (m: TeamChatMessage) => {
+    setEditingMsgId(m.id);
+    setEditText(m.text);
+  };
+
+  const cancelEdit = () => {
+    setEditingMsgId(null);
+    setEditText('');
+  };
+
+  const doEdit = async () => {
+    if (!activeId || !editingMsgId) return;
+    const trimmed = editText.trim();
+    if (!trimmed) return;
+    setError('');
+    try {
+      await editChatMessage(activeId, editingMsgId, trimmed);
+      setEditingMsgId(null);
+      setEditText('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to edit message');
+    }
+  };
+
+  const doDeleteMessage = async () => {
+    if (!activeId || !deleteMsgTarget) return;
+    setError('');
+    try {
+      await deleteChatMessage(activeId, deleteMsgTarget.id);
+      setDeleteMsgTarget(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete message');
     }
   };
 
@@ -757,6 +831,8 @@ export function Chat() {
       const isGrouped = prev && prev.userId === m.userId;
       const reply = m.replyTo ? messages.find((x) => x.id === m.replyTo) : undefined;
       const author = active?.members.find((x) => x.userId === m.userId);
+      const canDeleteMsg = isMine || user?.role === 'admin' || canManageChannel();
+      const isEditing = editingMsgId === m.id;
 
       return (
         <div key={m.id} id={`msg-${m.id}`} class={`tchat-msg ${isMine ? 'mine' : ''}`}>
@@ -771,21 +847,49 @@ export function Chat() {
                 {m.username}
               </div>
             )}
-            {reply && (
+            {reply ? (
               <div class="tchat-msg-reply">
                 <span class="tchat-msg-reply-from">{reply.username}</span> {(reply.text || '').slice(0, 60) || '📎'}
               </div>
-            )}
-            {m.text && (
-              <div
-                class="tchat-msg-text"
-                dangerouslySetInnerHTML={{
-                  __html: m.text
-                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                    .replace(/(^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]{1,49})/gu, '$1<span class="tchat-mention">@$2</span>')
-                    .replace(/\n/g, '<br />'),
-                }}
-              />
+            ) : m.replyTo ? (
+              <div class="tchat-msg-reply tchat-msg-reply-deleted">
+                <span class="tchat-msg-reply-from">Reply</span> Original message deleted
+              </div>
+            ) : null}
+            {isEditing ? (
+              <div class="tchat-edit-box">
+                <textarea
+                  class="tchat-edit-textarea"
+                  aria-label="Edit message"
+                  value={editText}
+                  onInput={(e: Event) => setEditText((e.target as HTMLTextAreaElement).value)}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void doEdit();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      cancelEdit();
+                    }
+                  }}
+                />
+                <div class="tchat-edit-actions">
+                  <button class="btn-ghost sm" onClick={cancelEdit}>Cancel</button>
+                  <button class="btn-primary sm" onClick={() => void doEdit()} disabled={!editText.trim()}>Save</button>
+                </div>
+              </div>
+            ) : (
+              m.text && (
+                <div
+                  class="tchat-msg-text"
+                  dangerouslySetInnerHTML={{
+                    __html: m.text
+                      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                      .replace(/(^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]{1,49})/gu, '$1<span class="tchat-mention">@$2</span>')
+                      .replace(/\n/g, '<br />'),
+                  }}
+                />
+              )
             )}
             {m.attachments?.map((a) => (
               <div key={a.id} class="tchat-attachment">
@@ -803,25 +907,53 @@ export function Chat() {
             ))}
             <div class="tchat-msg-time">
               {fmtTime(m.createdAt)}
+              {m.editedAt && <span class="tchat-msg-edited" title={`Edited ${new Date(m.editedAt).toLocaleString()}`}>edited</span>}
               {isMine && <MessageStatus status={m.status} />}
             </div>
           </div>
-          {userCanWrite() && (
-            <div class="tchat-msg-side">
-              <button class="tchat-msg-action" onClick={() => {
-                setComposer((c) => ({ ...c, replyTo: m }));
-              }} title="Reply">
-                <div style="display:flex;align-items:center;gap:4px;font-size:0.65rem"><Send width={10} height={10} /> Reply</div>
-              </button>
-              <button class="tchat-msg-action" onClick={() => void togglePin(m)} aria-pressed={!!m.pinned} aria-label={m.pinned ? 'Unpin message' : 'Pin message'} title={m.pinned ? 'Unpin' : 'Pin'}>
-                <Pin width={10} height={10} style={m.pinned ? 'color:var(--accent)' : ''} />
-              </button>
-            </div>
-          )}
+          <div class="tchat-msg-side">
+            {(isMine || canDeleteMsg) && (
+              <>
+                {isMine && (
+                  <button
+                    class="tchat-msg-action"
+                    onClick={() => startEdit(m)}
+                    title="Edit message"
+                    aria-label="Edit message"
+                    disabled={isEditing}
+                  >
+                    <Pencil width={10} height={10} />
+                  </button>
+                )}
+                {canDeleteMsg && (
+                  <button
+                    class="tchat-msg-action tchat-msg-action-danger"
+                    onClick={() => setDeleteMsgTarget(m)}
+                    title="Delete message"
+                    aria-label="Delete message"
+                  >
+                    <Trash2 width={10} height={10} />
+                  </button>
+                )}
+              </>
+            )}
+            {userCanWrite() && (
+              <>
+                <button class="tchat-msg-action" onClick={() => {
+                  setComposer((c) => ({ ...c, replyTo: m }));
+                }} title="Reply">
+                  <div style="display:flex;align-items:center;gap:4px;font-size:0.65rem"><Send width={10} height={10} /> Reply</div>
+                </button>
+                <button class="tchat-msg-action" onClick={() => void togglePin(m)} aria-pressed={!!m.pinned} aria-label={m.pinned ? 'Unpin message' : 'Pin message'} title={m.pinned ? 'Unpin' : 'Pin'}>
+                  <Pin width={10} height={10} style={m.pinned ? 'color:var(--accent)' : ''} />
+                </button>
+              </>
+            )}
+          </div>
         </div>
       );
     });
-  }, [messages, meId, active, viewerOnly, activeCanSend, canWrite]);
+  }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText]);
 
   const pinned = useMemo(() => messages.filter((m) => m.pinned), [messages]);
 
@@ -1265,6 +1397,17 @@ export function Chat() {
         onConfirm={() => void runDelete()}
         onCancel={() => setDeleteTarget(null)}
         message="This deletes the channel and all its messages. This cannot be undone."
+      />
+
+      {/* message delete confirm */}
+      <ConfirmModal
+        open={!!deleteMsgTarget}
+        danger
+        title="Delete message?"
+        confirmLabel="Delete"
+        onConfirm={() => void doDeleteMessage()}
+        onCancel={() => setDeleteMsgTarget(null)}
+        message="This message will be permanently deleted. This cannot be undone."
       />
     </div>
   );

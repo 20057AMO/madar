@@ -1354,6 +1354,7 @@ export interface TeamChatMessage {
   attachments?: ChatAttachment[];
   pinned?: boolean;
   createdAt: string;
+  editedAt?: string;
   status?: 'sent' | 'delivered' | 'read';
 }
 
@@ -1437,6 +1438,18 @@ export const pinChatMessage = (channelId: string, msgId: string, pinned: boolean
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pinned }),
     }
+  );
+
+export const editChatMessage = (channelId: string, msgId: string, text: string) =>
+  api<{ message: TeamChatMessage }>(
+    `/api/chat-team/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(msgId)}`,
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }
+  );
+
+export const deleteChatMessage = (channelId: string, msgId: string) =>
+  api<{ ok: boolean }>(
+    `/api/chat-team/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(msgId)}`,
+    { method: 'DELETE' }
   );
 
 export const markChatRead = (channelId: string, msgId: string) =>

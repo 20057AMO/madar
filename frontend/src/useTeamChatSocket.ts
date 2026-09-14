@@ -18,7 +18,9 @@ export type ChatSocketEvent =
   | { type: 'presence'; users: { id: string; username: string; role: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' }[] }
   | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write'; canSend?: string }
   | { type: 'channel_update'; channel: { id: string; canSend: 'everyone' | 'admins' } }
-  | { type: 'status_update'; messageId: string; newStatus: TeamChatMessage['status'] };
+  | { type: 'status_update'; messageId: string; newStatus: TeamChatMessage['status'] }
+  | { type: 'message_updated'; channelId: string; message: TeamChatMessage }
+  | { type: 'message_deleted'; channelId: string; msgId: string };
 
 export interface TeamChatSocket {
   /** Subscribe a channel (fetch its recent history through the socket). */
@@ -114,6 +116,12 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
             for (const u of (msg.updates ?? [])) {
               onEventRef.current({ type: 'status_update', messageId: u.id, newStatus: u.status });
             }
+            break;
+          case 'message_updated':
+            onEventRef.current({ type: 'message_updated', channelId: msg.channelId, message: msg.message });
+            break;
+          case 'message_deleted':
+            onEventRef.current({ type: 'message_deleted', channelId: msg.channelId, msgId: msg.msgId });
             break;
           default:
             break;

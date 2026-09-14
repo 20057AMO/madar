@@ -354,6 +354,42 @@
   gap: 4px;
 }
 
+/* Message edit / delete */
+.tchat-msg-edited {
+  font-size: 0.6rem;
+  color: var(--text-3);
+  font-style: italic;
+}
+.tchat-edit-box { width: 100%; }
+.tchat-edit-textarea {
+  width: 100%;
+  min-height: 60px;
+  resize: vertical;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.tchat-edit-textarea:focus { border-color: var(--text-3); }
+.tchat-edit-textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.tchat-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  justify-content: flex-end;
+}
+.tchat-msg-action-danger:hover { color: var(--red); background: rgba(248,81,73,0.12); }
+.tchat-msg-reply-deleted {
+  font-size: 0.68rem;
+  color: var(--text-3);
+  font-style: italic;
+}
+.tchat-msg-reply-deleted .tchat-msg-reply-from { font-style: italic; }
+
 .tchat-msg-status {
   display: inline-flex;
   align-items: center;
