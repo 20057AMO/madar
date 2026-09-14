@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -46,6 +46,7 @@ import type {
   ChatContext,
 } from '../api';
 import { NotesPanel } from '../components/NotesPanel';
+import { ReviewsPanel } from '../components/ReviewsPanel';
 import { fmtCpu, fmtMem, limitsPending } from '../lib/limits';
 import { fmtAction } from '../lib/activity-meta';
 import { ProjectChat } from '../components/ProjectChat';
@@ -61,14 +62,15 @@ import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
 import { VSCodeIcon, OpencodeIcon } from '../components/brand-icons';
 
-type Tab = 'overview' | 'chat' | 'files' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'activity' | 'snapshots' | 'canvas';
+type Tab = 'overview' | 'chat' | 'files' | 'reviews' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'activity' | 'snapshots' | 'canvas';
 
-const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'logs', 'terminal', 'notes', 'scripts', 'team', 'activity', 'snapshots', 'canvas'];
+const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'reviews', 'logs', 'terminal', 'notes', 'scripts', 'team', 'activity', 'snapshots', 'canvas'];
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'Overview',
   chat: 'Bot',
   files: 'Files',
+  reviews: 'Reviews',
   logs: 'Logs',
   terminal: 'Terminal',
   notes: 'Notes',
@@ -83,6 +85,7 @@ const TAB_ICON: Record<Tab, any> = {
   overview: Home,
   chat: Bot,
   files: FolderOpen,
+  reviews: MessageSquare,
   logs: ScrollText,
   terminal: SquareTerminal,
   notes: StickyNote,
@@ -143,14 +146,39 @@ export function Project({ params }: { params: { slug: string } }) {
   visibleRef.current = visible;
 
   // Deep-linkable tabs via `?tab=<name>`. wouter's hash router relocates the
-  // query into the real window.location.search, so match that first.
+  // query into the real window.location.search, so match that first. A `path=`
+  // query pre-fills the Reviews composer (from the Files tab "Review" button).
+  const [reviewInitialPath, setReviewInitialPath] = useState('');
   useEffect(() => {
-    const m = (window.location.search || location).match(/[?&]tab=([a-z]+)/);
+    const src = window.location.search || location || '';
+    const m = src.match(/[?&]tab=([a-z]+)/);
     if (m && (VALID_TABS as readonly string[]).includes(m[1])) setTab(m[1] as Tab);
+    const pm = src.match(/[?&]path=([^&]*)/);
+    if (pm) {
+      try {
+        setReviewInitialPath(decodeURIComponent(pm[1]));
+      } catch {
+        setReviewInitialPath(pm[1]);
+      }
+    } else {
+      setReviewInitialPath('');
+    }
   }, [location]);
 
+  // After a deep-link from the file preview ("Review" button), the popup closes
+  // and focus would land on <body> — move it to the composer's file-path field
+  // (or the tabpanel for viewers, who have no composer) once the tab mounts.
+  const pathInputRef = useRef<HTMLInputElement | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (tab !== 'reviews' || !reviewInitialPath) return;
+    if (pathInputRef.current) pathInputRef.current.focus();
+    else paneRef.current?.focus();
+  }, [tab]);
+
   // Viewer members (and non-members) get a read-only board; owners/admins edit.
-  const readOnly = !!project && !!user && user.role !== 'admin' && project.ownerId !== user.id &&
+  // System editors are global writers — they pass even without membership.
+  const readOnly = !!project && !!user && user.role !== 'admin' && user.role !== 'editor' && project.ownerId !== user.id &&
     (project.members?.find((m) => m.userId === user.id)?.role ?? 'viewer') === 'viewer';
 
   // Transient notices fade out on their own.
@@ -524,7 +552,7 @@ export function Project({ params }: { params: { slug: string } }) {
               </button>
               <span class={`status-badge ${project?.status || 'missing'}`}>{project?.status || '…'}</span>
               {project?.crash && <CrashBadge crash={project.crash} />}
-              {wsConnected && <span class="ws-live-dot" title="Live updates active" aria-label="Live updates active" />}
+              {wsConnected && <span class="ws-live-dot" role="status" title="Live updates active" aria-label="Live updates active" />}
                {onlineUsers.length > 0 && (
                  <div class="presence-indicator" role="status">
                    <div class="presence-avatar-stack">
@@ -657,10 +685,20 @@ export function Project({ params }: { params: { slug: string } }) {
         })}
       </nav>
 
-      <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0}>
+      <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0} ref={paneRef}>
         {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
         {tab === 'chat' && <ProjectChat slug={slug} readOnly={readOnly}  />}
-        {tab === 'files' && <FilesPanel slug={slug} />}
+        {tab === 'files' && <FilesPanel slug={slug} readOnly={readOnly} />}
+        {tab === 'reviews' && (
+          <ReviewsPanel
+            key={`${slug}:${reviewInitialPath}`}
+            slug={slug}
+            readOnly={readOnly}
+            initialPath={reviewInitialPath}
+            project={project}
+            pathInputRef={pathInputRef}
+          />
+        )}
         {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
         {tab === 'terminal' && <ProjectTerminal slug={slug} />}
         {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
@@ -1710,7 +1748,7 @@ function fileTypeMeta(name: string, type: 'file' | 'dir'): { Icon: any; color: s
   return { Icon: FileText, color: 'var(--text-3)' };
 }
 
-function FilesPanel({ slug }: { slug: string }) {
+function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   const [cwd, setCwd] = useState('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [meta, setMeta] = useState<{ fileCount: number; totalBytes: number; truncated?: boolean } | null>(null);
@@ -2072,6 +2110,18 @@ function FilesPanel({ slug }: { slug: string }) {
                   {savingFile ? 'Saving…' : 'Save'}
                 </button>
               )}
+              <button
+                class="btn-ghost sm"
+                onClick={() => {
+                  closePreview();
+                  window.location.hash = `/project/${slug}?tab=reviews&path=${encodeURIComponent(previewName)}`;
+                }}
+                disabled={readOnly}
+                title={readOnly ? 'Viewer — reviews require editor access' : 'Open a review thread on this file'}
+                aria-label="Review this file"
+              >
+                <MessageSquare width={12} height={12} class="icon" /> Review
+              </button>
               <button class="btn-ghost sm" onClick={() => downloadFile(previewName)} title="Download file" aria-label="Download file">
                 <Download width={12} height={12} class="icon" /> Download
               </button>

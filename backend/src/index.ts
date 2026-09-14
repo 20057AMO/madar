@@ -62,6 +62,7 @@ import { detectProvider, checkProvider } from './services/providers-detect';
 import { getProjectContext, listProjectsBrief, capText } from './services/project-context';
 import * as notes from './services/project-notes';
 import * as canvas from './services/project-canvas';
+import * as reviews from './services/project-reviews';
 import { getIndexStats, retrieveProject, formatRetrievedChunks } from './services/project-index';
 import {
   listWebhooks,
@@ -1500,6 +1501,80 @@ app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req: any,
     res.json(doc);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// ── File reviews (comment threads pinned to workspace paths) ────────────
+// Like notes/canvas: authored content stored under data/projects/<slug>/,
+// viewer+ reads write through the userWriteLimiter for editor+ mutations.
+app.get('/api/projects/:slug/reviews', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    if (!loadMeta(req.params.slug)) return res.status(404).json({ error: 'Project not found' });
+    res.json(reviews.listReviews(req.params.slug));
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/reviews', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    if (!loadMeta(req.params.slug)) return res.status(404).json({ error: 'Project not found' });
+    const thread = reviews.createThread(req.params.slug, req.body || {}, req.user);
+    res.status(201).json({ thread });
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/reviews/:threadId/comments', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    if (!loadMeta(req.params.slug)) return res.status(404).json({ error: 'Project not found' });
+    const thread = reviews.addComment(req.params.slug, req.params.threadId, req.body || {}, req.user);
+    res.json({ thread });
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.patch('/api/projects/:slug/reviews/:threadId/status', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    if (!loadMeta(req.params.slug)) return res.status(404).json({ error: 'Project not found' });
+    const thread = reviews.setThreadStatus(req.params.slug, req.params.threadId, req.body?.status, req.user);
+    res.json({ thread });
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:slug/reviews/:threadId', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    if (!loadMeta(req.params.slug)) return res.status(404).json({ error: 'Project not found' });
+    const thread = reviews.getThread(req.params.slug, req.params.threadId);
+    if (!thread) return res.status(404).json({ error: 'Review thread not found' });
+    if (!reviews.canDeleteReview(req.user, thread.createdBy, req.params.slug)) {
+      return res.status(403).json({ error: 'Only the thread author or a project admin can delete this thread' });
+    }
+    reviews.deleteThread(req.params.slug, req.params.threadId, req.user);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:slug/reviews/:threadId/comments/:commentId', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    if (!loadMeta(req.params.slug)) return res.status(404).json({ error: 'Project not found' });
+    const thread = reviews.getThread(req.params.slug, req.params.threadId);
+    if (!thread) return res.status(404).json({ error: 'Review thread not found' });
+    const comment = thread.comments.find((c: any) => c.id === req.params.commentId);
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    if (!reviews.canDeleteReview(req.user, comment.userId, req.params.slug)) {
+      return res.status(403).json({ error: 'Only the comment author or a project admin can delete this comment' });
+    }
+    const next = reviews.deleteComment(req.params.slug, req.params.threadId, req.params.commentId, req.user);
+    res.json({ thread: next });
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
   }
 });
 

@@ -15,6 +15,7 @@ import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL 
 const createdSlugs: string[] = [];
 const SNAP_PORT = 8774;
 let snapshotGzip: Buffer;
+let threadId = '';
 
 function viewerAuth() {
   const token = jwt.sign({ id: 'snap-viewer-user', username: 'snap-viewer', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
@@ -94,6 +95,13 @@ describe('Project snapshots (export / restore)', () => {
       updatedAt: null,
     });
     assert.strictEqual(canvas.status, 200, `canvas write: ${canvas.status}`);
+    // A review thread pinned to the goals file so reviews travel with snapshots too.
+    const review = await reqAuth('POST', `/projects/${srcSlug}/reviews`, {
+      path: 'app/main.py',
+      text: 'Review: keep this file lean',
+    });
+    assert.strictEqual(review.status, 201, `reviews write: ${review.status}`);
+    threadId = (await review.json()).thread.id;
   });
 
   after(async () => {
@@ -156,6 +164,15 @@ describe('Project snapshots (export / restore)', () => {
     assert.strictEqual(card.color, 'green');
     assert.strictEqual(card.done, true, 'done flag restored');
     assert.strictEqual(canvas.edges[0].id, 'se', 'edge ids preserved through the roundtrip');
+
+    const reviewsRes = await reqAuth('GET', `/projects/${project.slug}/reviews`);
+    const reviewsBody = await reviewsRes.json();
+    assert.strictEqual(reviewsBody.counts.total, 1, 'review thread restored');
+    const restoredThread = reviewsBody.threads.find((t: any) => t.id === threadId);
+    assert.ok(restoredThread, 'thread id survived the roundtrip');
+    assert.strictEqual(restoredThread.path, 'app/main.py');
+    assert.strictEqual(restoredThread.comments[0].text, 'Review: keep this file lean');
+    assert.strictEqual(restoredThread.fileExists, true, 'restored file exists in the new workspace');
   });
 
   test('restore after the source is gone reuses the manifest ports', async () => {

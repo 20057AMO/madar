@@ -106,6 +106,7 @@ select.modern-input { appearance: none; cursor: pointer; }
 }
 .btn-ghost:hover { border-color: var(--text-3); color: var(--text); }
 .btn-ghost.sm { padding: 6px 12px; font-size: 0.75rem; }
+.btn-ghost.active { background: var(--panel-2); color: var(--text); border-color: var(--text-3); }
 .btn-ghost.danger-icon { color: var(--red); border-color: rgba(248,81,73,0.35); }
 .btn-ghost.danger-icon:hover { background: rgba(248,81,73,0.1); color: var(--red); }
 .btn-danger {
@@ -1355,6 +1356,12 @@ textarea.agent-prompt-input {
 .btn-ghost.sm.icon-only { padding: 6px 7px; flex-shrink: 0; min-width: 28px; min-height: 28px; }
 .btn-ghost.sm.icon-only .icon { margin: 0; }
 
+/* Touch: icon-only buttons meet the 44px minimum target (WCAG 2.5.8) —
+   must come after the base .icon-only rule so it wins the cascade. */
+@media (max-width: 700px) {
+  .btn-ghost.sm.icon-only { min-width: 44px; min-height: 44px; }
+}
+
 /* Static-site serve */
 .serve-dot {
   display: inline-block; width: 9px; height: 9px; border-radius: 50%;
@@ -1489,6 +1496,11 @@ textarea.agent-prompt-input {
 .activity-dot.serve_stopped { background: var(--text-2); } .activity-ico.serve_stopped { color: var(--text-2); background: color-mix(in srgb, var(--text-2) 12%, transparent); }
 .activity-dot.crashed { background: var(--red); } .activity-ico.crashed { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .activity-dot.crash_cleared { background: var(--green); } .activity-ico.crash_cleared { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.activity-dot.review_opened { background: var(--blue); } .activity-ico.review_opened { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.activity-dot.review_commented { background: var(--accent); } .activity-ico.review_commented { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.activity-dot.review_resolved { background: var(--green); } .activity-ico.review_resolved { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.activity-dot.review_reopened { background: var(--yellow); } .activity-ico.review_reopened { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.activity-dot.review_deleted { background: var(--red); } .activity-ico.review_deleted { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .activity-dot.unknown { background: var(--text-3); } .activity-ico.unknown { color: var(--text-3); background: color-mix(in srgb, var(--text-3) 12%, transparent); }
 /* Icon tints for the five legacy dot classes (their dots are styled above) */
 .activity-ico.created { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }

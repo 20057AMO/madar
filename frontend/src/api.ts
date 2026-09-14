@@ -563,6 +563,73 @@ export const getProjectActivity = (slug: string, limit = 50, offset = 0) =>
     `/api/projects/${encodeURIComponent(slug)}/activity?limit=${limit}&offset=${offset}`
   );
 
+// ── File reviews (code-review threads) ──────────────────────────────────
+export type ReviewStatus = 'open' | 'resolved';
+export interface ReviewComment {
+  id: string;
+  text: string;
+  userId: string;
+  username: string;
+  createdAt: string;
+  actorDisplayName?: string;
+  actorAvatarExt?: 'png' | 'jpg' | 'webp';
+}
+export interface ReviewThread {
+  id: string;
+  path: string;
+  status: ReviewStatus;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  resolvedByName?: string;
+  comments: ReviewComment[];
+  fileExists: boolean;
+  actorDisplayName?: string;
+  actorAvatarExt?: 'png' | 'jpg' | 'webp';
+  summary?: { commentCount: number; lastActivityAt: string };
+}
+export interface ReviewsPage {
+  threads: ReviewThread[];
+  counts: { open: number; resolved: number; total: number };
+}
+export const getProjectReviews = (slug: string) =>
+  api<ReviewsPage>(`/api/projects/${encodeURIComponent(slug)}/reviews`);
+export const createReviewThread = (slug: string, body: { path: string; text: string }) =>
+  api<{ thread: ReviewThread }>(`/api/projects/${encodeURIComponent(slug)}/reviews`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+export const addReviewComment = (slug: string, threadId: string, text: string) =>
+  api<{ thread: ReviewThread }>(
+    `/api/projects/${encodeURIComponent(slug)}/reviews/${encodeURIComponent(threadId)}/comments`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    },
+  );
+export const setReviewStatus = (slug: string, threadId: string, status: ReviewStatus) =>
+  api<{ thread: ReviewThread }>(
+    `/api/projects/${encodeURIComponent(slug)}/reviews/${encodeURIComponent(threadId)}/status`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    },
+  );
+export const deleteReviewThread = (slug: string, threadId: string) =>
+  api<{ ok: boolean }>(`/api/projects/${encodeURIComponent(slug)}/reviews/${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+  });
+export const deleteReviewComment = (slug: string, threadId: string, commentId: string) =>
+  api<{ thread: ReviewThread }>(
+    `/api/projects/${encodeURIComponent(slug)}/reviews/${encodeURIComponent(threadId)}/comments/${encodeURIComponent(commentId)}`,
+    { method: 'DELETE' },
+  );
+
 // ── Project canvas (visual planning) ────────────────────────────────────
 export type CanvasNodeType = 'note' | 'card';
 export type CanvasColor = 'yellow' | 'blue' | 'red' | 'green';

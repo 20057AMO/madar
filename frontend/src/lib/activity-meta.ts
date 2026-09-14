@@ -32,6 +32,10 @@ import {
   TriangleAlert,
   Check,
   Activity,
+  MessageSquare,
+  MessageCircle,
+  CircleCheck,
+  RotateCcw,
 } from 'lucide-preact';
 import type { ActivityDetails } from '../api';
 
@@ -63,7 +67,7 @@ function fmtPairs(details: ActivityDetails): string[] {
 
 const fmtGeneric = (details: ActivityDetails): string => fmtPairs(details).join(' · ');
 
-/** All 28 server actions. */
+/** All 33 server actions. */
 const META: Record<string, ActivityMeta> = {
   // ── Lifecycle ──
   created: { Icon: FolderPlus, label: 'Created', dotClass: 'created', fmtDetail: fmtGeneric },
@@ -128,6 +132,37 @@ const META: Record<string, ActivityMeta> = {
     Icon: Check,
     label: 'Crash cleared',
     dotClass: 'crash_cleared',
+    fmtDetail: fmtGeneric,
+  },
+  // ── File reviews ──
+  review_opened: {
+    Icon: MessageSquare,
+    label: 'Review opened',
+    dotClass: 'review_opened',
+    fmtDetail: fmtGeneric,
+  },
+  review_commented: {
+    Icon: MessageCircle,
+    label: 'Review commented',
+    dotClass: 'review_commented',
+    fmtDetail: fmtGeneric,
+  },
+  review_resolved: {
+    Icon: CircleCheck,
+    label: 'Review resolved',
+    dotClass: 'review_resolved',
+    fmtDetail: fmtGeneric,
+  },
+  review_reopened: {
+    Icon: RotateCcw,
+    label: 'Review reopened',
+    dotClass: 'review_reopened',
+    fmtDetail: fmtGeneric,
+  },
+  review_deleted: {
+    Icon: Trash2,
+    label: 'Review deleted',
+    dotClass: 'review_deleted',
     fmtDetail: fmtGeneric,
   },
 };

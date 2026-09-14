@@ -35,6 +35,7 @@ import {
 import { loadMeta } from './projects-meta';
 import { loadNotes, saveNotes } from './project-notes';
 import { loadCanvas, saveCanvas } from './project-canvas';
+import { loadReviews, saveReviews } from './project-reviews';
 
 const BLOCK = 512;
 const MAX_ENTRIES = 200_000;
@@ -236,6 +237,20 @@ export function exportProjectSnapshot(slug: string): ProjectSnapshot {
       /* canvas unavailable → skip (still a valid snapshot) */
     }
 
+    // File reviews (comment threads): authored content like notes/canvas, so it
+    // ships in the backup too — only when the project has any.
+    try {
+      const reviewThreads = loadReviews(slug);
+      if (reviewThreads.length) {
+        const reviewsBytes = Buffer.from(JSON.stringify(reviewThreads, null, 2), 'utf8');
+        yield* entryHeaders('reviews.json', reviewsBytes.length, now, '0');
+        yield reviewsBytes;
+        if (reviewsBytes.length % BLOCK !== 0) yield Buffer.alloc(BLOCK - (reviewsBytes.length % BLOCK));
+      }
+    } catch {
+      /* reviews unavailable → skip (still a valid snapshot) */
+    }
+
     yield withChecksum(tarHeader({ name: 'workspace/', size: 0, mtime: now, type: '5' }));
     for await (const entry of walkTree(workspaceDir)) {
       const name = `workspace/${entry.name}`;
@@ -424,6 +439,19 @@ export async function importProjectSnapshot(uploadPath: string, userId?: string)
           saveCanvas(created.slug, parsed);
         } catch {
           /* invalid canvas doc — keep fresh empty board */
+        }
+      }
+    }
+
+    // Restore file-reviews threads (best-effort; malformed docs dropped).
+    const reviewsPath = path.join(staging, 'reviews.json');
+    if (fs.existsSync(reviewsPath)) {
+      const parsed = tryJson<unknown>(readIfPresent(reviewsPath));
+      if (parsed) {
+        try {
+          saveReviews(created.slug, parsed);
+        } catch {
+          /* invalid reviews doc — keep fresh empty reviews */
         }
       }
     }
