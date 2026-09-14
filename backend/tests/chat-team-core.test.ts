@@ -24,6 +24,9 @@ import {
   isChannelAdmin,
   parseMentions,
   normalizeMessage,
+  normalizeEditMessage,
+  canEditMessage,
+  canDeleteMessage,
   formatMessage,
   searchMessages,
   pruneToCap,
@@ -103,6 +106,61 @@ describe('normalizeMessage', () => {
   });
 });
 
+describe('normalizeEditMessage', () => {
+  test('accepts valid text → { text, mentions }', () => {
+    const out = normalizeEditMessage({ text: 'edited @alice hi' });
+    assert.ok(out);
+    assert.strictEqual(out!.text, 'edited @alice hi');
+    assert.deepStrictEqual(out!.mentions, ['alice']);
+  });
+  test('trims + strips control chars like sending', () => {
+    const out = normalizeEditMessage({ text: '  clean\u0000text\n ' });
+    assert.ok(out);
+    assert.strictEqual(out!.text, 'cleantext');
+  });
+  test('rejects junk bodies', () => {
+    assert.strictEqual(normalizeEditMessage(null), null);
+    assert.strictEqual(normalizeEditMessage('nope'), null);
+    assert.strictEqual(normalizeEditMessage({}), null);
+    assert.strictEqual(normalizeEditMessage({ text: '   ' }), null);
+    assert.strictEqual(normalizeEditMessage({ text: 'x'.repeat(MAX_TEXT_CHARS + 1) }), null);
+  });
+  test('never accepts replyTo (a reply target is immutable once sent)', () => {
+    const out = normalizeEditMessage({ text: 'x', replyTo: 'm-abc123' });
+    assert.ok(out);
+    assert.strictEqual((out as { replyTo?: unknown }).replyTo, undefined);
+  });
+});
+
+describe('canEditMessage', () => {
+  test('the author → true', () => {
+    assert.strictEqual(canEditMessage({ userId: 'u-1' }, 'u-1'), true);
+  });
+  test('anyone else → false (channel roles never widen edit)', () => {
+    assert.strictEqual(canEditMessage({ userId: 'u-1' }, 'u-2'), false);
+    assert.strictEqual(canEditMessage({ userId: 'u-1' }, 'u-admin'), false);
+  });
+});
+
+describe('canDeleteMessage', () => {
+  const msg = { userId: 'u-author' };
+  test('the author → true', () => {
+    assert.strictEqual(canDeleteMessage(msg, 'u-author', { isChannelAdmin: false, isSystemAdmin: false }), true);
+  });
+  test('a channel admin → true', () => {
+    assert.strictEqual(canDeleteMessage(msg, 'u-admin', { isChannelAdmin: true, isSystemAdmin: false }), true);
+  });
+  test('a system admin → true', () => {
+    assert.strictEqual(canDeleteMessage(msg, 'u-sys', { isChannelAdmin: false, isSystemAdmin: true }), true);
+  });
+  test('a plain member → false even when both admin flags exist for others', () => {
+    assert.strictEqual(canDeleteMessage(msg, 'u-other', { isChannelAdmin: false, isSystemAdmin: false }), false);
+  });
+  test('author wins regardless of admin flags', () => {
+    assert.strictEqual(canDeleteMessage(msg, 'u-author', { isChannelAdmin: false, isSystemAdmin: false }), true);
+  });
+});
+
 describe('formatMessage', () => {
   test('drops dangling replyTo without replyToExists', () => {
     const msg = formatMessage('m-1', 'u-1', 'alice', { text: 'hi', replyTo: 'm-9', mentions: [] }, { replyToExists: false });
@@ -118,6 +176,10 @@ describe('formatMessage', () => {
     assert.strictEqual(msg.attachments!.length, 5);
     assert.strictEqual(msg.pinned, true);
     assert.deepStrictEqual(msg.mentions, ['alice']);
+  });
+  test('never sets editedAt at creation (absent until an edit stamps it)', () => {
+    const msg = formatMessage('m-4', 'u-1', 'alice', { text: 'hi', mentions: [] });
+    assert.strictEqual(msg.editedAt, undefined);
   });
 });
 

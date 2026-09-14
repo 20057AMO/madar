@@ -170,6 +170,7 @@ export function Chat() {
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [deleteMsgTarget, setDeleteMsgTarget] = useState<TeamChatMessage | null>(null);
+  const [deletedNotice, setDeletedNotice] = useState('');
   
   // ── Voice Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -288,6 +289,11 @@ export function Chat() {
           setEditingMsgId(null);
           setEditText('');
         }
+        setDeletedNotice('Message deleted');
+        setTimeout(() => setDeletedNotice(''), 3000);
+        requestAnimationFrame(() => {
+          document.querySelector<HTMLTextAreaElement>('.tchat-textarea')?.focus();
+        });
       }
       return;
     }
@@ -626,6 +632,10 @@ export function Chat() {
   const startEdit = (m: TeamChatMessage) => {
     setEditingMsgId(m.id);
     setEditText(m.text);
+    requestAnimationFrame(() => {
+      const ta = document.querySelector<HTMLTextAreaElement>('.tchat-edit-textarea');
+      if (ta) { ta.focus(); ta.select(); }
+    });
   };
 
   const cancelEdit = () => {
@@ -637,6 +647,8 @@ export function Chat() {
     if (!activeId || !editingMsgId) return;
     const trimmed = editText.trim();
     if (!trimmed) return;
+    const orig = messages.find((m) => m.id === editingMsgId);
+    if (orig && trimmed === orig.text) { cancelEdit(); return; }
     setError('');
     try {
       await editChatMessage(activeId, editingMsgId, trimmed);
@@ -653,6 +665,7 @@ export function Chat() {
     try {
       await deleteChatMessage(activeId, deleteMsgTarget.id);
       setDeleteMsgTarget(null);
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.tchat-textarea')?.focus());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete message');
     }
@@ -831,7 +844,8 @@ export function Chat() {
       const isGrouped = prev && prev.userId === m.userId;
       const reply = m.replyTo ? messages.find((x) => x.id === m.replyTo) : undefined;
       const author = active?.members.find((x) => x.userId === m.userId);
-      const canDeleteMsg = isMine || user?.role === 'admin' || canManageChannel();
+      const canDeleteMsg = isMine || user?.role === 'admin' || canManageChannel() ||
+        (active && (active.createdBy === meId || active.members?.some(m => m.userId === meId && m.role === 'admin')));
       const isEditing = editingMsgId === m.id;
 
       return (
@@ -875,7 +889,7 @@ export function Chat() {
                 />
                 <div class="tchat-edit-actions">
                   <button class="btn-ghost sm" onClick={cancelEdit}>Cancel</button>
-                  <button class="btn-primary sm" onClick={() => void doEdit()} disabled={!editText.trim()}>Save</button>
+                  <button class="btn-primary sm" onClick={() => void doEdit()} disabled={!editText.trim() || editText.trim() === m.text}>Save</button>
                 </div>
               </div>
             ) : (
@@ -922,7 +936,7 @@ export function Chat() {
                     aria-label="Edit message"
                     disabled={isEditing}
                   >
-                    <Pencil width={10} height={10} />
+                    <Pencil width={12} height={12} />
                   </button>
                 )}
                 {canDeleteMsg && (
@@ -932,7 +946,7 @@ export function Chat() {
                     title="Delete message"
                     aria-label="Delete message"
                   >
-                    <Trash2 width={10} height={10} />
+                    <Trash2 width={12} height={12} />
                   </button>
                 )}
               </>
@@ -1198,6 +1212,7 @@ export function Chat() {
                 <div class="tchat-empty-msg">No messages yet. Say hello 👋</div>
               )}
             </div>
+            {deletedNotice && <div role="status" aria-live="polite" class="sr-only">{deletedNotice}</div>}
 
             {/* typing row */}
             {typing.length > 0 && (

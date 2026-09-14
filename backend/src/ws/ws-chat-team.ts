@@ -16,6 +16,8 @@
  * Protocol (server → client, JSON):
  *   { type: "subscribed", channelId, messages }   → replay (latest ≤100) on join
  *   { type: "message", channel, message }         → live broadcast
+ *   { type: "message_updated", channelId, message } → edit broadcast (REST PUT)
+ *   { type: "message_deleted", channelId, msgId }   → delete broadcast (REST DELETE)
  *   { type: "typing", channelId, user }           → typing indicator
  *   { type: "read", channelId, userId, msgId }
  *   { type: "pin", channelId, msgId, pinned }
@@ -73,6 +75,16 @@ function broadcastToChannel(channelId: string, payload: unknown): void {
 /** Push a new chat message to every socket subscribed to the channel. */
 export function broadcastChatMessage(channel: TeamChannel, message: unknown): void {
   broadcastToChannel(channel.id, { type: 'message', channel, message });
+}
+
+/** Push a message text edit to every socket subscribed to the channel. */
+export function broadcastMessageUpdated(channelId: string, message: unknown): void {
+  broadcastToChannel(channelId, { type: 'message_updated', channelId, message });
+}
+
+/** Push a message deletion to every socket subscribed to the channel. */
+export function broadcastMessageDeleted(channelId: string, msgId: string): void {
+  broadcastToChannel(channelId, { type: 'message_deleted', channelId, msgId });
 }
 
 /** Push a pin/unpin change to the channel. */

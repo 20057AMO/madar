@@ -338,6 +338,73 @@ export async function pinUnpinMessage(channelId: string, msgId: string, pinned: 
   return updated;
 }
 
+/**
+ * Rewrite a message's text + mentions and stamp `editedAt` (ISO now).
+ * Returns the updated row, or null when the message is unknown.
+ */
+export async function editMessage(
+  channelId: string,
+  msgId: string,
+  newText: string,
+  newMentions: string[]
+): Promise<TeamMessage | null> {
+  let updated: TeamMessage | null = null;
+  await withFileLockAsync(`msgs:${channelId}`, async () => {
+    const messages = readMessagesRaw(channelId);
+    const idx = messages.findIndex((m) => m.id === msgId);
+    if (idx === -1) return;
+    const edited: TeamMessage = {
+      ...messages[idx],
+      text: newText,
+      editedAt: new Date().toISOString(),
+    };
+    // mentions follow the same shape rule as formatMessage: present only when
+    // non-empty (an all-mentions-stripped edit removes the field).
+    if (newMentions.length > 0) edited.mentions = newMentions;
+    else delete edited.mentions;
+    messages[idx] = edited;
+    writeMessagesRaw(channelId, messages);
+    updated = messages[idx];
+  });
+  return updated;
+}
+
+/**
+ * Remove a message from the channel. Garbage-collects the message's uploaded
+ * attachment bytes INSIDE the msgs lock (never after release — a concurrent
+ * request could otherwise bind the same attachment id to a new message and
+ * then have the file deleted under it, leaving a dangling reference).
+ * Also resolves the channel's primary `pinnedMessageId` when it pointed at the
+ * deleted row (a pin must never dangle at a message that no longer exists).
+ * Returns { deleted, attachmentIds }, or null when the message is unknown.
+ */
+export async function deleteMessage(
+  channelId: string,
+  msgId: string
+): Promise<{ deleted: boolean; attachmentIds: string[] } | null> {
+  let result: { deleted: boolean; attachmentIds: string[] } | null = null;
+  await withFileLockAsync(`msgs:${channelId}`, async () => {
+    const messages = readMessagesRaw(channelId);
+    const idx = messages.findIndex((m) => m.id === msgId);
+    if (idx === -1) return;
+    const target = messages[idx];
+    const attachmentIds = target.attachments?.map((a) => a.id) ?? [];
+    writeMessagesRaw(channelId, messages.filter((_, i) => i !== idx));
+    // Resolve the primary pin — same raw channel write appendMessage uses
+    // under its msgs lock (no nested lock, no re-entrant deadlock).
+    const channels = readChannelsRaw().channels;
+    const ch = channels.find((c) => c.id === channelId);
+    if (ch && ch.pinnedMessageId === msgId) {
+      ch.pinnedMessageId = null;
+      writeChannelsRaw({ channels });
+    }
+    // F3: delete the bytes while the msgs lock is still held.
+    if (attachmentIds.length > 0) deleteAttachments(attachmentIds);
+    result = { deleted: true, attachmentIds };
+  });
+  return result;
+}
+
 /** Mark a specific message as delivered. */
 export async function markMessageAsDelivered(channelId: string, msgId: string): Promise<TeamMessage | null> {
   let updated: TeamMessage | null = null;
@@ -384,6 +451,10 @@ export async function markMessagesAsRead(
     let modified = false;
     for (let i = 0; i <= upTo; i++) {
       const m = messages[i];
+      // Legacy rows written before readBy/status existed lack the field —
+      // coerce on read so a WS read frame on an old channel can never crash
+      // the whole process (normalize-silently, same as notes/appMessage).
+      if (!Array.isArray(m.readBy)) m.readBy = [];
       if (!m.readBy.includes(userId)) {
         m.readBy.push(userId);
         modified = true;

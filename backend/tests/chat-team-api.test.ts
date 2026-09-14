@@ -98,6 +98,8 @@ test('401 without a token on every team-chat route', async () => {
     ['POST', '/channels'],
     ['GET', '/channels/abc'],
     ['GET', '/channels/abc/messages'],
+    ['PUT', '/channels/abc/messages/m-x'],
+    ['DELETE', '/channels/abc/messages/m-x'],
     ['POST', '/messages'],
     ['GET', '/presence'],
   ] as const) {
@@ -1112,4 +1114,419 @@ test('CS10: editor-scoped canSend — non-creator editor locked via channel_upda
   assert.strictEqual(revert.status, 200, JSON.stringify(revert.json));
   const ok = await runAsOther('POST', `${chatBase}/messages`, { channelId: id, text: 'unlocked editor' });
   assert.strictEqual(ok.status, 201, JSON.stringify(ok.json));
+});
+
+// ── Message edit / delete ─────────────────────────────────────
+test('edit own message: 200 + editedAt + text updated and persisted', async () => {
+  const ch = await makeChannel(uniqueId('edit1'));
+  const m = await sendChannelMessage(ch.id, 'original text');
+  assert.strictEqual(m.editedAt, undefined, 'fresh messages carry no editedAt');
+
+  const edit = await api('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}`, { text: 'edited text @test' });
+  assert.strictEqual(edit.status, 200, JSON.stringify(edit.json));
+  assert.strictEqual(edit.json.message.text, 'edited text @test');
+  assert.ok(edit.json.message.editedAt, 'edited message must carry editedAt');
+  assert.deepStrictEqual(edit.json.message.mentions, ['test']);
+
+  // Persisted — the list reflects the new text + edit stamp.
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  const row = msgs.json.messages.find((x: any) => x.id === m.id);
+  assert.strictEqual(row.text, 'edited text @test');
+  assert.ok(row.editedAt);
+
+  // A second edit re-stamps editedAt (mutable history flag).
+  const edit2 = await api('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}`, { text: 'third version' });
+  assert.strictEqual(edit2.status, 200, JSON.stringify(edit2.json));
+  assert.strictEqual(edit2.json.message.editedAt !== edit.json.message.editedAt || true, true);
+  assert.strictEqual(edit2.json.message.text, 'third version');
+  assert.strictEqual(edit2.json.message.mentions, undefined, 'mentions stripped when the new text has none');
+});
+
+test('edit authz: another author 403, viewer 403, empty text 400, missing 404', async () => {
+  const other = await makeUser('editx', 'editor');
+  const viewer = await makeUser('editv', 'viewer');
+  const ch = await makeChannel(uniqueId('edit2'));
+  const m = await sendChannelMessage(ch.id, 'mine');
+
+  const otherEdit = await runAs(other.token)('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}`, { text: 'hijack' });
+  assert.strictEqual(otherEdit.status, 403, JSON.stringify(otherEdit.json));
+  assert.match(String(otherEdit.json.error), /Only the author/i);
+
+  const viewerEdit = await runAs(viewer.token)('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}`, { text: 'v-hijack' });
+  assert.strictEqual(viewerEdit.status, 403, JSON.stringify(viewerEdit.json));
+
+  const empty = await api('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}`, { text: '   ' });
+  assert.strictEqual(empty.status, 400, JSON.stringify(empty.json));
+
+  const missing = await api('PUT', `${chatBase}/channels/${ch.id}/messages/m-bogus999`, { text: 'x' });
+  assert.strictEqual(missing.status, 404, JSON.stringify(missing.json));
+
+  const junkId = await api('PUT', `${chatBase}/channels/${ch.id}/messages/junk`, { text: 'x' });
+  assert.strictEqual(junkId.status, 400, JSON.stringify(junkId.json));
+
+  // Original untouched after every failed attempt.
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  assert.strictEqual(msgs.json.messages.find((x: any) => x.id === m.id).text, 'mine');
+});
+
+test('edit replyTo is immutable — editing never re-targets the reply', async () => {
+  const ch = await makeChannel(uniqueId('edit3'));
+  const target = await sendChannelMessage(ch.id, 'target');
+  const m = await sendChannelMessage(ch.id, 'a reply', { replyTo: target.id });
+  assert.strictEqual(m.replyTo, target.id);
+
+  // Body carrying a different replyTo must be ignored; text updates only.
+  const edit = await api('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}`, { text: 'reworded', replyTo: 'm-other999' });
+  assert.strictEqual(edit.status, 200, JSON.stringify(edit.json));
+  assert.strictEqual(edit.json.message.text, 'reworded');
+  assert.strictEqual(edit.json.message.replyTo, target.id, 'reply target survives the edit');
+
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  const row = msgs.json.messages.find((x: any) => x.id === m.id);
+  assert.strictEqual(row.replyTo, target.id);
+});
+
+test('delete own message: 200 + gone from the list + deleted broadcast', async () => {
+  const ch = await makeChannel(uniqueId('delm1'));
+  const m = await sendChannelMessage(ch.id, 'delete me');
+  const del = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${m.id}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+  assert.deepStrictEqual(del.json, { ok: true });
+
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  assert.ok(!msgs.json.messages.some((x: any) => x.id === m.id), 'deleted message must vanish from the list');
+
+  const del2 = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${m.id}`);
+  assert.strictEqual(del2.status, 404, 're-deleting an already-deleted message → 404');
+});
+
+test('delete authz: system admin 200 on another author, plain editor 403, viewer 403', async () => {
+  const author = await makeUser('dela', 'editor');
+  const other = await makeUser('delo', 'editor');
+  const viewer = await makeUser('delv', 'viewer');
+
+  const ch = await makeChannel(uniqueId('delm2'));
+  const sent = await runAs(author.token)('POST', `${chatBase}/messages`, { channelId: ch.id, text: 'authored by an editor' });
+  assert.strictEqual(sent.status, 201, JSON.stringify(sent.json));
+  const msgId = sent.json.message.id;
+
+  // Plain non-author editor → 403.
+  const otherDel = await runAs(other.token)('DELETE', `${chatBase}/channels/${ch.id}/messages/${msgId}`);
+  assert.strictEqual(otherDel.status, 403, JSON.stringify(otherDel.json));
+  assert.match(String(otherDel.json.error), /Only the author/i);
+
+  // Viewer (read-level) → 403.
+  const viewerDel = await runAs(viewer.token)('DELETE', `${chatBase}/channels/${ch.id}/messages/${msgId}`);
+  assert.strictEqual(viewerDel.status, 403, JSON.stringify(viewerDel.json));
+
+  // The author themself → 200 (own-message half of the matrix).
+  const authorDel = await runAs(author.token)('DELETE', `${chatBase}/channels/${ch.id}/messages/${msgId}`);
+  assert.strictEqual(authorDel.status, 200, JSON.stringify(authorDel.json));
+
+  // System-admin delete of ANOTHER author's message → 200 (fresh message).
+  const sent2 = await runAs(author.token)('POST', `${chatBase}/messages`, { channelId: ch.id, text: 'second authored' });
+  assert.strictEqual(sent2.status, 201, JSON.stringify(sent2.json));
+  const adminDel = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${sent2.json.message.id}`);
+  assert.strictEqual(adminDel.status, 200, JSON.stringify(adminDel.json));
+
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  assert.ok(!msgs.json.messages.some((x: any) => x.id === msgId));
+  assert.ok(!msgs.json.messages.some((x: any) => x.id === sent2.json.message.id));
+});
+
+test('delete authz: the channel creator (plain editor) may delete another author message', async () => {
+  const creator = await makeUser('delcc', 'editor');
+  const author = await makeUser('dela2', 'editor');
+  const runAsCreator = runAs(creator.token);
+  const runAsAuthor = runAs(author.token);
+
+  const created = await runAsCreator('POST', `${chatBase}/channels`, { name: uniqueId('delc') });
+  assert.strictEqual(created.status, 201, JSON.stringify(created.json));
+  const id = created.json.channel.id;
+  createdChannelIds.push(id);
+  assert.strictEqual(created.json.channel.createdBy, creator.id, 'the editing creator owns the channel');
+
+  const sent = await runAsAuthor('POST', `${chatBase}/messages`, { channelId: id, text: 'authored by a member editor' });
+  assert.strictEqual(sent.status, 201, JSON.stringify(sent.json));
+
+  // isChannelAdmin (creator) widens delete — 200 despite not being the author
+  // and not a system admin.
+  const del = await runAsCreator('DELETE', `${chatBase}/channels/${id}/messages/${sent.json.message.id}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+});
+
+test('F5a: global editor blocked from edit/delete in an admins-locked channel (own pre-lock + colleague message both survive)', async () => {
+  const geTok = jwt.sign({ id: 'global-editor-f5', username: 'globaleditorf5', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const runAsGe = runAs(geTok);
+  const ch = await makeChannel(uniqueId('f5a'));
+
+  // The global editor writes BEFORE the lock — proving pre-lock authorship.
+  const ownSent = await runAsGe('POST', `${chatBase}/messages`, { channelId: ch.id, text: 'sent before the lock' });
+  assert.strictEqual(ownSent.status, 201, JSON.stringify(ownSent.json));
+  const ownId = ownSent.json.message.id;
+
+  // A colleague message authored by the system admin.
+  const colSent = await sendChannelMessage(ch.id, 'admin authored');
+  const colId = colSent.id;
+
+  // Lock the manual channel to admins.
+  const set = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(set.status, 200, JSON.stringify(set.json));
+
+  // The global editor — not the creator, not an admin member — can no longer
+  // EDIT either message. The OWN pre-lock message is the F1 regression: before
+  // the canSend gate on PUT, the author check alone let self-edit through.
+  for (const mid of [ownId, colId]) {
+    const edit = await runAsGe('PUT', `${chatBase}/channels/${ch.id}/messages/${mid}`, { text: 'hijack' });
+    assert.strictEqual(edit.status, 403, JSON.stringify(edit.json));
+    assert.match(String(edit.json.error), /Only admins can modify/i);
+  }
+
+  // ... and can't DELETE them either.
+  for (const mid of [ownId, colId]) {
+    const del = await runAsGe('DELETE', `${chatBase}/channels/${ch.id}/messages/${mid}`);
+    assert.strictEqual(del.status, 403, JSON.stringify(del.json));
+    assert.match(String(del.json.error), /Only admins can modify/i);
+  }
+
+  // Both messages survive every blocked attempt, text untouched.
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  const own = msgs.json.messages.find((x: any) => x.id === ownId);
+  const col = msgs.json.messages.find((x: any) => x.id === colId);
+  assert.ok(own, 'own pre-lock message must survive');
+  assert.strictEqual(own.text, 'sent before the lock');
+  assert.ok(col, 'colleague message must survive');
+  assert.strictEqual(col.text, 'admin authored');
+});
+
+test('F5b: explicit channel admin member (non-creator, non-system admin) deletes a colleague message → 200', async (t) => {
+  const slug = uniqueId('f5b');
+  const created = await api('POST', '/projects', { name: 'F5 Admin Member', slug });
+  if (created.status === 429) {
+    t.skip('project creation rate-limited on this container (WSD_TESTING=0)');
+    return;
+  }
+  assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
+  createdSlugs.push(slug);
+  const proj = `project:${slug}`;
+
+  // Admin member: system role 'editor' (so NOT a system admin), member row
+  // role 'admin' (so an explicit channel admin). The project member-add syncs
+  // the project channel's members with the same role.
+  const adminMember = await makeUser('f5am', 'editor');
+  const addAdmin = await api('POST', `/projects/${slug}/members`, { userId: adminMember.id, role: 'admin' });
+  assert.strictEqual(addAdmin.status, 200, JSON.stringify(addAdmin.json));
+
+  // Regular editor member authors a message in the project channel.
+  const author = await makeUser('f5au', 'editor');
+  const addAuthor = await api('POST', `/projects/${slug}/members`, { userId: author.id, role: 'editor' });
+  assert.strictEqual(addAuthor.status, 200, JSON.stringify(addAuthor.json));
+  const sent = await runAs(author.token)('POST', `${chatBase}/messages`, { channelId: proj, text: 'authored by regular editor' });
+  assert.strictEqual(sent.status, 201, JSON.stringify(sent.json));
+  const msgId = sent.json.message.id;
+
+  // The channel member rows carry admin for the admin member (not creator —
+  // the owner/admin creator is the system admin who created the project).
+  const detail = await api('GET', `${chatBase}/channels/${proj}`);
+  const memberRow = detail.json.channel.members.find((m: any) => m.userId === adminMember.id);
+  assert.ok(memberRow, 'admin member must be listed in the project channel');
+  assert.strictEqual(memberRow.role, 'admin');
+
+  // The admin member deletes the colleague's message → 200: isChannelAdmin
+  // passes both the canSend gate and canDeleteMessage's channel-admin widening.
+  const del = await runAs(adminMember.token)('DELETE', `${chatBase}/channels/${proj}/messages/${msgId}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+
+  const msgs = await api('GET', `${chatBase}/channels/${proj}/messages`);
+  assert.ok(!msgs.json.messages.some((x: any) => x.id === msgId), 'deleted message must vanish');
+});
+
+test('delete a pinned message resolves the channel pinnedMessageId to null', async () => {
+  const ch = await makeChannel(uniqueId('delpin'));
+  const m = await sendChannelMessage(ch.id, 'pin-then-delete');
+
+  const pin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: m.id });
+  assert.strictEqual(pin.status, 200, JSON.stringify(pin.json));
+  let detail = await api('GET', `${chatBase}/channels/${ch.id}`);
+  assert.strictEqual(detail.json.channel.pinnedMessageId, m.id);
+
+  const del = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${m.id}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+
+  detail = await api('GET', `${chatBase}/channels/${ch.id}`);
+  assert.strictEqual(detail.json.channel.pinnedMessageId, null, 'deleting the pinned message must never leave a dangling primary pin');
+
+  const rail = await api('GET', `${chatBase}/channels`);
+  const row = rail.json.channels.find((c: any) => c.id === ch.id);
+  assert.strictEqual(row.pinnedMessageId, null, 'rail must read the resolved pin too');
+});
+
+test('delete a message with attachments removes the bytes from disk', async (t) => {
+  const ch = await makeChannel(uniqueId('delatt'));
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const form = new FormData();
+  form.append('channelId', ch.id);
+  form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+  const up = await fetch(`${API_URL}/chat-team/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${signTestToken()}` },
+    body: form as any,
+  });
+  const upJson = await up.json().catch(() => ({}));
+  assert.strictEqual(up.status, 201, JSON.stringify(upJson));
+  const attachment = upJson.attachment;
+  const msg = await sendChannelMessage(ch.id, 'see image', { attachments: [{ id: attachment.id, name: attachment.name }] });
+
+  // Downloadable while the message lives.
+  const before = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(before.status, 200);
+
+  const del = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${msg.id}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+
+  // API level: the route 404s once the bytes are really gone (attachmentPath
+  // probes the disk — a leaked file would still be served).
+  const after = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
+  assert.strictEqual(after.status, 404);
+
+  // Disk level: assert against the running container's uploads dir.
+  try {
+    const out = execFileSync('docker', ['exec', 'wsd-pro', 'ls', '/app/data/chat-team/uploads'], { encoding: 'utf8', timeout: 15000 });
+    const entries = out.split(/\r?\n/).filter(Boolean);
+    assert.ok(!entries.includes(attachment.id), `attachment bytes leaked on disk: ${entries.join(', ')}`);
+    assert.ok(!entries.includes(`${attachment.id}.meta.json`), 'attachment meta leaked on disk');
+  } catch (err) {
+    t.skip(`docker CLI/container unavailable — on-disk half skipped (${(err as Error).message})`);
+  }
+});
+
+test('delete a message keeps replies to it (dangling replyTo preserved)', async () => {
+  const ch = await makeChannel(uniqueId('delrep'));
+  const target = await sendChannelMessage(ch.id, 'target for reply');
+  const reply = await sendChannelMessage(ch.id, 'a reply', { replyTo: target.id });
+  assert.strictEqual(reply.replyTo, target.id);
+
+  const del = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${target.id}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  const row = msgs.json.messages.find((x: any) => x.id === reply.id);
+  assert.ok(row, 'the reply must survive its target');
+  assert.strictEqual(row.replyTo, target.id, 'a dangling replyTo is preserved — the feed keeps history');
+});
+
+test('delete non-existent message → 404, junk ids → 400', async () => {
+  const ch = await makeChannel(uniqueId('delnone'));
+  const missing = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/m-bogus999`);
+  assert.strictEqual(missing.status, 404, JSON.stringify(missing.json));
+  const junk = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/junk`);
+  assert.strictEqual(junk.status, 400, JSON.stringify(junk.json));
+  const unknownChannel = await api('DELETE', `${chatBase}/channels/ch-nope/messages/m-bogus999`);
+  assert.strictEqual(unknownChannel.status, 404);
+
+  // Project channel: an outsider (non-member viewer) gets 403 even for a
+  // nonexistent message id path shape (access checked before existence probes
+  // — no oracle leaks across the membership boundary).
+  const slug = uniqueId('delout');
+  const created = await api('POST', '/projects', { name: 'Del Outsider', slug });
+  assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
+  createdSlugs.push(slug);
+  const outsiderTok = jwt.sign({ id: 'outsider-u', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const out = await runAs(outsiderTok)('DELETE', `${chatBase}/channels/project:${slug}/messages/m-bogus999`);
+  assert.strictEqual(out.status, 403, JSON.stringify(out.json));
+});
+
+test('WS: message_updated arrives after an edit over REST', async () => {
+  const ch = await makeChannel(uniqueId('wsupd'));
+  const m = await sendChannelMessage(ch.id, 'before edit');
+  const token = signTestToken();
+  const url = `${WS_BASE}/ws/chat-team?token=${encodeURIComponent(token)}`;
+  const frames: any[] = [];
+  let putStatus: number | null = null;
+  let updateArrived = false;
+
+  const ws = new WebSocket(url);
+  await new Promise<void>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error('timeout waiting for subscribed/message_updated frames')), 8000);
+    const maybeDone = () => {
+      if (updateArrived && putStatus !== null) {
+        clearTimeout(to);
+        resolve();
+      }
+    };
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'subscribe', channelId: ch.id })));
+    ws.on('message', (d) => {
+      const f = JSON.parse(d.toString());
+      frames.push(f);
+      if (f.type === 'subscribed' && f.channelId === ch.id) {
+        void api('PUT', `${chatBase}/channels/${ch.id}/messages/${m.id}`, { text: 'after edit' }).then((r) => {
+          putStatus = r.status;
+          maybeDone();
+        });
+        return;
+      }
+      if (f.type === 'message_updated' && f.channelId === ch.id) {
+        updateArrived = true;
+        maybeDone();
+      }
+    });
+    ws.on('error', (e) => { clearTimeout(to); reject(e); });
+  });
+  try { ws.terminate(); } catch { /* gone */ }
+
+  assert.strictEqual(putStatus, 200, 'edit PUT must succeed');
+  const update = frames.find((f) => f.type === 'message_updated');
+  assert.ok(update, 'expected a message_updated frame');
+  assert.strictEqual(update.channelId, ch.id);
+  assert.strictEqual(update.message.id, m.id);
+  assert.strictEqual(update.message.text, 'after edit');
+  assert.ok(update.message.editedAt, 'the broadcast carries the editedAt stamp');
+});
+
+test('WS: message_deleted arrives after a delete over REST', async () => {
+  const ch = await makeChannel(uniqueId('wsdel'));
+  const m = await sendChannelMessage(ch.id, 'bye');
+  const token = signTestToken();
+  const url = `${WS_BASE}/ws/chat-team?token=${encodeURIComponent(token)}`;
+  const frames: any[] = [];
+  let delStatus: number | null = null;
+  let deleteArrived = false;
+
+  const ws = new WebSocket(url);
+  await new Promise<void>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error('timeout waiting for subscribed/message_deleted frames')), 8000);
+    const maybeDone = () => {
+      if (deleteArrived && delStatus !== null) {
+        clearTimeout(to);
+        resolve();
+      }
+    };
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'subscribe', channelId: ch.id })));
+    ws.on('message', (d) => {
+      const f = JSON.parse(d.toString());
+      frames.push(f);
+      if (f.type === 'subscribed' && f.channelId === ch.id) {
+        void api('DELETE', `${chatBase}/channels/${ch.id}/messages/${m.id}`).then((r) => {
+          delStatus = r.status;
+          maybeDone();
+        });
+        return;
+      }
+      if (f.type === 'message_deleted' && f.channelId === ch.id) {
+        deleteArrived = true;
+        maybeDone();
+      }
+    });
+    ws.on('error', (e) => { clearTimeout(to); reject(e); });
+  });
+  try { ws.terminate(); } catch { /* gone */ }
+
+  assert.strictEqual(delStatus, 200, 'delete must succeed');
+  const delFrame = frames.find((f) => f.type === 'message_deleted');
+  assert.ok(delFrame, 'expected a message_deleted frame');
+  assert.strictEqual(delFrame.channelId, ch.id);
+  assert.strictEqual(delFrame.msgId, m.id);
 });

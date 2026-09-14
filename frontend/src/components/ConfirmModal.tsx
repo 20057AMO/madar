@@ -71,7 +71,7 @@ export function ConfirmModal({
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
-      trigger?.focus();
+      if (trigger?.isConnected) trigger.focus();
     };
   }, [open]);
 

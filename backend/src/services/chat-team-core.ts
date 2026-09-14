@@ -31,6 +31,8 @@ export interface TeamMessage {
   attachments?: ChatAttachment[];
   pinned?: boolean;
   createdAt: string;
+  /** ISO timestamp set when the text is edited after sending (absent otherwise). */
+  editedAt?: string;
   /** Lifecycle status. */
   status: 'sent' | 'delivered' | 'read';
   /** Users who have read this message. */
@@ -127,6 +129,38 @@ export function normalizeMessage(raw: unknown): { text: string; replyTo?: string
     replyTo = body.replyTo;
   }
   return { text, ...(replyTo ? { replyTo } : {}), mentions: parseMentions(text) };
+}
+
+/**
+ * Normalize an inbound message EDIT. Same text ceiling as sending
+ * (sanitizePlain with MAX_TEXT_CHARS) — empty/over-long/junk return null so
+ * the caller can 400. `replyTo` is NEVER accepted here: a reply's target is
+ * immutable once sent, and re-targeting an edited message would corrupt the
+ * conversation history.
+ */
+export function normalizeEditMessage(raw: unknown): { text: string; mentions: string[] } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const body = raw as Record<string, unknown>;
+  const text = sanitizePlain(body.text, MAX_TEXT_CHARS);
+  if (!text) return null;
+  return { text, mentions: parseMentions(text) };
+}
+
+/** Edit permission — message authors only (channel roles never widen this). */
+export function canEditMessage(msg: { userId: string }, requestingUserId: string): boolean {
+  return msg.userId === requestingUserId;
+}
+
+/** Delete permission — the author, the channel admin, or a system admin. */
+export function canDeleteMessage(
+  msg: { userId: string },
+  requestingUserId: string,
+  opts: { isChannelAdmin: boolean; isSystemAdmin: boolean }
+): boolean {
+  if (msg.userId === requestingUserId) return true;
+  if (opts.isChannelAdmin) return true;
+  if (opts.isSystemAdmin) return true;
+  return false;
 }
 
 /**

@@ -21,6 +21,9 @@ import {
   isMessageId,
   sanitizeCanSend,
   normalizeMessage,
+  normalizeEditMessage,
+  canEditMessage,
+  canDeleteMessage,
   formatMessage,
   searchMessages,
   channelSortKey,
@@ -57,11 +60,15 @@ import {
   getLastMessage,
   setPinnedMessage,
   setChannelCanSend,
+  editMessage,
+  deleteMessage,
 } from './chat-team-store';
 import { canAccessChannel, canSendInChannel, type ChatUser } from './chat-team-access';
 import { detectImageExt } from './avatar-store';
 import {
   broadcastChatMessage,
+  broadcastMessageUpdated,
+  broadcastMessageDeleted,
   broadcastPinChange,
   broadcastPinnedUpdate,
   broadcastChannelUpdate,
@@ -455,6 +462,70 @@ export function registerChatTeamRoutes(app: any): void {
     if (!updated) return res.status(404).json({ error: 'Message not found' });
     broadcastPinChange(cid, msgId, pinned);
     res.json({ message: updated });
+  });
+
+  // Edit a message — the AUTHOR only (text + mentions rewritten; attachments
+  // and replyTo are immutable once sent). Same write budget as sending.
+  r.put('/channels/:channelId/messages/:msgId', chatWriteLimiter, async (req: any, res) => {
+    const cid = req.params.channelId;
+    const msgId = req.params.msgId;
+    if (!isChannelId(cid) || !isMessageId(msgId)) return res.status(400).json({ error: 'Invalid ids' });
+    const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
+    const channel = getChannel(cid);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    const level = canAccessChannel(user, channel);
+    if (level !== 'write') {
+      if (level === 'read') return res.status(403).json({ error: 'Read-only channel' });
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    // canSend gate: in an admins-locked channel, only admins may edit messages
+    // (even their own pre-lock messages) — mirrors the pin/send enforcement.
+    if (!canSendInChannel(user, channel, level)) {
+      return res.status(403).json({ error: 'Only admins can modify messages in this channel' });
+    }
+    const existing = getAllMessages(cid).find((m) => m.id === msgId);
+    if (!existing) return res.status(404).json({ error: 'Message not found' });
+    // Edit is author-only — a channel admin's write level never widens it.
+    if (!canEditMessage(existing, user.id)) {
+      return res.status(403).json({ error: 'Only the author can edit this message' });
+    }
+    const normalized = normalizeEditMessage(req.body);
+    if (!normalized) return res.status(400).json({ error: 'Message is required (max 5000 chars)' });
+    const updated = await editMessage(cid, msgId, normalized.text, normalized.mentions);
+    if (!updated) return res.status(404).json({ error: 'Message not found' });
+    broadcastMessageUpdated(cid, updated);
+    res.json({ message: updated });
+  });
+
+  // Delete a message — the author, a channel admin (creator/explicit admin
+  // member), or a system admin. Attachments are gc'd inside the store lock.
+  r.delete('/channels/:channelId/messages/:msgId', chatWriteLimiter, async (req: any, res) => {
+    const cid = req.params.channelId;
+    const msgId = req.params.msgId;
+    if (!isChannelId(cid) || !isMessageId(msgId)) return res.status(400).json({ error: 'Invalid ids' });
+    const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
+    const channel = getChannel(cid);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    const level = canAccessChannel(user, channel);
+    if (level === 'none') return res.status(403).json({ error: 'Access denied' });
+    // canSend gate: in an admins-locked channel, only admins may delete
+    // messages — mirrors the pin/send enforcement.
+    if (!canSendInChannel(user, channel, level)) {
+      return res.status(403).json({ error: 'Only admins can modify messages in this channel' });
+    }
+    const existing = getAllMessages(cid).find((m) => m.id === msgId);
+    if (!existing) return res.status(404).json({ error: 'Message not found' });
+    const allowed = canDeleteMessage(existing, user.id, {
+      isChannelAdmin: isChannelAdmin(channel, user.id),
+      isSystemAdmin: user.role === 'admin',
+    });
+    if (!allowed) {
+      return res.status(403).json({ error: 'Only the author, a channel admin, or a system admin can delete this message' });
+    }
+    const result = await deleteMessage(cid, msgId);
+    if (!result) return res.status(404).json({ error: 'Message not found' });
+    broadcastMessageDeleted(cid, msgId);
+    res.json({ ok: true });
   });
 
   // Mark read (any access level that can see the channel).

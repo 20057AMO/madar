@@ -331,15 +331,25 @@
 }
 .tchat-msg-reply-from { color: var(--accent); font-weight: 600; margin-right: 5px; }
 .tchat-msg-side { display: flex; flex-direction: column; gap: 2px; opacity: 0; align-self: center; }
-.tchat-msg:hover .tchat-msg-side,
+@media (hover: hover) {
+  .tchat-msg:hover .tchat-msg-side { opacity: 1; }
+}
 .tchat-msg:focus-within .tchat-msg-side { opacity: 1; }
+@media (hover: none) and (pointer: coarse) {
+  .tchat-msg-side { opacity: 0.7; }
+}
 .tchat-msg-action {
   background: transparent;
   border: none;
   color: var(--text-3);
   cursor: pointer;
-  padding: 2px;
+  padding: 6px;
   border-radius: 4px;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .tchat-msg-action:hover { color: var(--text); background: var(--panel-2); }
 .tchat-msg-time {
@@ -357,7 +367,7 @@
 /* Message edit / delete */
 .tchat-msg-edited {
   font-size: 0.6rem;
-  color: var(--text-3);
+  color: var(--text-2);
   font-style: italic;
 }
 .tchat-edit-box { width: 100%; }
@@ -385,7 +395,7 @@
 .tchat-msg-action-danger:hover { color: var(--red); background: rgba(248,81,73,0.12); }
 .tchat-msg-reply-deleted {
   font-size: 0.68rem;
-  color: var(--text-3);
+  color: var(--text-2);
   font-style: italic;
 }
 .tchat-msg-reply-deleted .tchat-msg-reply-from { font-style: italic; }
