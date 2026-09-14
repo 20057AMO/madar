@@ -52,6 +52,12 @@ describe('sanitizePlain', () => {
     assert.strictEqual(sanitizePlain('   ', 20), null);
     assert.strictEqual(sanitizePlain('x'.repeat(21), 20), null);
   });
+  test('preserves newlines in mid-text', () => {
+    assert.strictEqual(sanitizePlain('hello\nworld', 100), 'hello\nworld');
+  });
+  test('normalises CRLF and bare CR to LF', () => {
+    assert.strictEqual(sanitizePlain('line1\r\nline2\rline3', 100), 'line1\nline2\nline3');
+  });
 });
 
 describe('parseMentions', () => {

@@ -91,10 +91,13 @@ export function buildDirectChannelId(a: string, b: string): string {
 /** Strip control chars + trim, then cap — returns null when empty/over-long. */
 export function sanitizePlain(raw: unknown, max: number): string | null {
   if (typeof raw !== 'string') return null;
-  const cleaned = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim();
-  if (!cleaned) return null;
-  if (cleaned.length > max) return null;
-  return cleaned;
+  const sanitized = raw
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+  if (!sanitized) return null;
+  if (sanitized.length > max) return null;
+  return sanitized;
 }
 
 /** Extract unique @username targets from message text. */
