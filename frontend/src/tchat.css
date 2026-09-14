@@ -317,8 +317,22 @@
   border-radius: 12px 12px 2px 12px;
   padding: 8px 12px 22px 12px;
 }
-.tchat-msg-text { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; }
+.tchat-msg-text { word-break: break-word; overflow-wrap: break-word; }
+/* Team-chat-only markdown overrides (scoped under .tchat-msg-text.md so the
+   global .md rules in index.css — Agent/Project Chat — stay untouched) */
+.tchat-msg-text.md pre { background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; }
+.tchat-msg-text.md pre code { font-size: 0.74em; background: none; padding: 0; border: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tchat-msg-text.md pre,
+.tchat-msg-text.md pre code { direction: ltr; text-align: left; unicode-bidi: isolate; }
+.tchat-msg-text.md code:not(pre code) { background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 4px; padding: 1px 4px; font-size: 0.85em; }
 .tchat-mention { color: var(--accent); font-weight: 600; }
+.tchat-msg-text.md .tchat-md-h { font-weight: 600; margin: 4px 0 2px; }
+.tchat-msg-text.md .tchat-md-h.h1 { font-size: 1.15em; }
+.tchat-msg-text.md .tchat-md-h.h2 { font-size: 1.08em; }
+.tchat-msg-text.md .tchat-md-h.h3 { font-size: 1.02em; }
+.tchat-msg-text.md .tchat-md-h.h4,
+.tchat-msg-text.md .tchat-md-h.h5,
+.tchat-msg-text.md .tchat-md-h.h6 { font-size: 0.98em; }
 .tchat-msg-reply {
   font-size: 0.68rem;
   color: var(--text-2);

@@ -54,6 +54,7 @@ import { Avatar } from '../components/Avatar';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { VoiceNotePlayer } from '../components/VoiceNotePlayer';
 import { useTeamChatSocket, type ChatSocketEvent } from '../useTeamChatSocket';
+import { renderTeamMarkdown } from '../lib/markdown';
 import '../tchat.css';
 
 interface ChatPresenceUser {
@@ -198,6 +199,9 @@ export function Chat() {
   channelsRef.current = channels;
   activeIdRef.current = activeId;
   const lastSeen = useRef<Map<string, string>>(new Map());
+  // Per-message markdown cache: key = id + text + editedAt, cleared per channel,
+  // so flips of local state (sending, editing) never re-parse 500 messages.
+  const mdCache = useRef(new Map<string, string>());
 
 
   // ── socket — one connection per session
@@ -341,6 +345,7 @@ export function Chat() {
     setSearchResults(null);
     setSearchQ('');
     setMessages([]);
+    mdCache.current.clear();
     setComposer({ text: '', attachments: [] });
     setEditingMsgId(null);
     setEditText('');
@@ -837,6 +842,15 @@ export function Chat() {
     }
   };
 
+  const renderMsgHtml = (m: TeamChatMessage): string => {
+    const key = `${m.id}:${m.text}:${m.editedAt ?? ''}`;
+    const cached = mdCache.current.get(key);
+    if (cached !== undefined) return cached;
+    const html = renderTeamMarkdown(m.text);
+    mdCache.current.set(key, html);
+    return html;
+  };
+
   const renderedMessages = useMemo(() => {
     return messages.map((m, i) => {
       const isMine = m.userId === meId;
@@ -844,9 +858,9 @@ export function Chat() {
       const isGrouped = prev && prev.userId === m.userId;
       const reply = m.replyTo ? messages.find((x) => x.id === m.replyTo) : undefined;
       const author = active?.members.find((x) => x.userId === m.userId);
-      const canDeleteMsg = isMine || user?.role === 'admin' || canManageChannel() ||
-        (active && (active.createdBy === meId || active.members?.some(m => m.userId === meId && m.role === 'admin')));
+      const canDeleteMsg = isMine || user?.role === 'admin' || canManageChannel();
       const isEditing = editingMsgId === m.id;
+      const bodyHtml = m.text ? renderMsgHtml(m) : '';
 
       return (
         <div key={m.id} id={`msg-${m.id}`} class={`tchat-msg ${isMine ? 'mine' : ''}`}>
@@ -895,13 +909,8 @@ export function Chat() {
             ) : (
               m.text && (
                 <div
-                  class="tchat-msg-text"
-                  dangerouslySetInnerHTML={{
-                    __html: m.text
-                      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                      .replace(/(^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]{1,49})/gu, '$1<span class="tchat-mention">@$2</span>')
-                      .replace(/\n/g, '<br />'),
-                  }}
+                  class="tchat-msg-text md"
+                  dangerouslySetInnerHTML={{ __html: bodyHtml }}
                 />
               )
             )}
