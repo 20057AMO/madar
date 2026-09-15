@@ -101,6 +101,7 @@ test('401 without a token on every team-chat route', async () => {
     ['PUT', '/channels/abc/messages/m-x'],
     ['DELETE', '/channels/abc/messages/m-x'],
     ['POST', '/messages'],
+    ['GET', '/search'],
     ['GET', '/presence'],
   ] as const) {
     const res = await req(m, `${chatBase}${p}`, m === 'GET' || m === 'HEAD' ? undefined : { name: 'x' });
@@ -204,6 +205,149 @@ test('search is case-insensitive and scoped to channel', async () => {
 
   const empty = await api('GET', `${chatBase}/channels/${ch.id}/search?q=zzz`);
   assert.strictEqual(empty.json.messages.length, 0);
+});
+
+test('global search: two channels grouped, newest first, full message shape', async () => {
+  const chA = await makeChannel(uniqueId('gsA'));
+  const chB = await makeChannel(uniqueId('gsB'));
+  const needle = uniqueId('needle');
+
+  const m1 = await sendChannelMessage(chA.id, `${needle} first in A`);
+  await new Promise((r) => setTimeout(r, 30)); // distinct createdAt for cross-group ordering
+  const m2 = await sendChannelMessage(chB.id, `${needle} only in B`);
+  await new Promise((r) => setTimeout(r, 30));
+  const m3 = await sendChannelMessage(chA.id, `${needle} newest in A`);
+
+  const r = await api('GET', `${chatBase}/search?q=${needle}`);
+  assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+  assert.strictEqual(r.json.query, needle);
+  const groups = r.json.results;
+  assert.strictEqual(groups.length, 2, 'both channels must appear as groups');
+
+  const groupA = groups.find((g: any) => g.channelId === chA.id);
+  const groupB = groups.find((g: any) => g.channelId === chB.id);
+  assert.ok(groupA, 'channel A group present');
+  assert.ok(groupB, 'channel B group present');
+
+  // Group metadata: kind + human label (manual name for a manual channel).
+  assert.strictEqual(groupA.channelKind, 'channel');
+  assert.strictEqual(groupA.channelName, chA.name);
+  assert.strictEqual(groupB.channelName, chB.name);
+
+  // Messages inside each group are newest-first.
+  assert.strictEqual(groupA.messages.length, 2);
+  assert.strictEqual(groupA.messages[0].id, m3.id, 'newest hit in A comes first');
+  assert.strictEqual(groupA.messages[1].id, m1.id);
+  assert.strictEqual(groupB.messages.length, 1);
+  assert.strictEqual(groupB.messages[0].id, m2.id);
+
+  // Cross-group: the newest hit's channel ranks first (m3 created after m2).
+  assert.strictEqual(groups[0].channelId, chA.id, 'channel owning the globally-newest hit ranks first');
+
+  // Response shape: messages are FULL records carrying ids + authorship.
+  const all = groups.flatMap((g: any) => g.messages);
+  assert.strictEqual(all.length, 3);
+  for (const m of all) {
+    assert.match(m.id, /^m-[a-z0-9-]+$/, `message id shape: ${m.id}`);
+    assert.strictEqual(typeof m.userId, 'string');
+    assert.strictEqual(typeof m.username, 'string');
+    assert.strictEqual(typeof m.text, 'string');
+    assert.strictEqual(typeof m.createdAt, 'string');
+  }
+  assert.ok(all.some((m: any) => m.username === 'test'), 'sender username surfaced');
+});
+
+test('global search: query length validation — 1 char 400, 201 chars 400', async () => {
+  const one = await api('GET', `${chatBase}/search?q=a`);
+  assert.strictEqual(one.status, 400, JSON.stringify(one.json));
+
+  const long = await api('GET', `${chatBase}/search?q=${'x'.repeat(201)}`);
+  assert.strictEqual(long.status, 400, JSON.stringify(long.json));
+
+  const empty = await api('GET', `${chatBase}/search?q=`);
+  assert.strictEqual(empty.status, 400, JSON.stringify(empty.json));
+
+  // Boundary: exactly 2 and exactly 200 are valid.
+  const ok2 = await api('GET', `${chatBase}/search?q=${'x'.repeat(2)}`);
+  assert.strictEqual(ok2.status, 200, JSON.stringify(ok2.json));
+  const ok200 = await api('GET', `${chatBase}/search?q=${'x'.repeat(200)}`);
+  assert.strictEqual(ok200.status, 200, JSON.stringify(ok200.json));
+});
+
+test('global search: perChannel cap and total cap cut the results', async () => {
+  const ch = await makeChannel(uniqueId('gsl'));
+  const needle = uniqueId('capped');
+  const sent: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const m = await sendChannelMessage(ch.id, `${needle} message ${i}`);
+    sent.push(m.id);
+  }
+  const newestFive = sent.slice(-5).reverse(); // store is oldest→newest; newest five reversed = newest first
+
+  // perChannel=5 → only the 5 newest hits in the group.
+  const cut = await api('GET', `${chatBase}/search?q=${needle}&perChannel=5`);
+  assert.strictEqual(cut.status, 200, JSON.stringify(cut.json));
+  const group = cut.json.results.find((g: any) => g.channelId === ch.id);
+  assert.ok(group, 'group present');
+  assert.strictEqual(group.messages.length, 5);
+  assert.deepStrictEqual(group.messages.map((m: any) => m.id), newestFive);
+
+  // total=3 across two channels → 3 messages overall, the 3 globally-newest.
+  const ch2 = await makeChannel(uniqueId('gsl2'));
+  await sendChannelMessage(ch2.id, `${needle} ch2 hit`);
+  const total = await api('GET', `${chatBase}/search?q=${needle}&total=3`);
+  assert.strictEqual(total.status, 200, JSON.stringify(total.json));
+  const flat = total.json.results.flatMap((g: any) => g.messages);
+  assert.strictEqual(flat.length, 3, 'total=3 caps the global result set');
+  // Newest-first invariant across the whole ranked set.
+  const times = flat.map((m: any) => new Date(m.createdAt).getTime());
+  for (let i = 1; i < times.length; i++) {
+    assert.ok(times[i - 1] >= times[i], 'global hits must be newest-first');
+  }
+  // The ch2 message (single hit, most recent) must survive the cut.
+  const ch2Group = total.json.results.find((g: any) => g.channelId === ch2.id);
+  assert.ok(ch2Group && ch2Group.messages.length === 1, 'the newest hit survived total=3');
+});
+
+test('global search security: unauthorized project channel hidden, viewer member sees it', async () => {
+  const slug = uniqueId('gsec');
+  const created = await api('POST', '/projects', { name: 'Global Search Secret', slug });
+  assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
+  createdSlugs.push(slug);
+  const proj = `project:${slug}`;
+  const needle = uniqueId('secretmsg');
+
+  const sent = await sendChannelMessage(proj, `${needle} classified project thread`);
+  assert.ok(sent.id.startsWith('m-'));
+
+  // A non-member user (viewer role, no membership) searches the SAME query —
+  // the project channel must not appear anywhere in their results.
+  const outsiderTok = jwt.sign({ id: 'outsider-gs', username: 'outsidergs', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const outsider = await runAs(outsiderTok)('GET', `${chatBase}/search?q=${needle}`);
+  assert.strictEqual(outsider.status, 200, JSON.stringify(outsider.json));
+  assert.ok(
+    !outsider.json.results.some((g: any) => g.channelId === proj),
+    'unauthorized project channel must be invisible to the outsider'
+  );
+
+  // A viewer MEMBER of the project sees the channel + its hit.
+  const v = await reqAuth('POST', '/users', { username: uniqueId('gsv'), password: 'pass-123456', role: 'viewer' });
+  assert.strictEqual(v.status, 201);
+  const viewer = await v.json();
+  createdUserIds.push(viewer.id);
+  const addViewer = await api('POST', `/projects/${slug}/members`, { userId: viewer.id, role: 'viewer' });
+  assert.strictEqual(addViewer.status, 200, JSON.stringify(addViewer.json));
+
+  const viewerTok = jwt.sign({ id: viewer.id, username: viewer.username, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const member = await runAs(viewerTok)('GET', `${chatBase}/search?q=${needle}`);
+  assert.strictEqual(member.status, 200, JSON.stringify(member.json));
+  const group = member.json.results.find((g: any) => g.channelId === proj);
+  assert.ok(group, 'viewer member must see the project channel in global search');
+  assert.strictEqual(group.channelKind, 'project');
+  assert.strictEqual(group.channelName, `#${slug}`);
+  assert.strictEqual(group.messages.length, 1);
+  assert.strictEqual(group.messages[0].id, sent.id);
+  assert.strictEqual(group.messages[0].username, 'test');
 });
 
 test('pin/unpin roundtrip + broadcast shape', async () => {

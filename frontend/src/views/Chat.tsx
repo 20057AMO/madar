@@ -50,6 +50,7 @@ import {
   revokeChatAttachmentObjectUrl,
   chatAttachmentText,
   searchChatMessages,
+  searchAllChatMessages,
   updateChatChannelSettings,
   editChatMessage,
   deleteChatMessage,
@@ -58,6 +59,7 @@ import {
   type ChatChannel,
   type TeamChatMessage,
   type ChatAttachment,
+  type GlobalChatSearchResult,
 } from '../api';
 import { Avatar } from '../components/Avatar';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -110,6 +112,25 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function snippetHtml(text: string, q: string, max = 140): string {
+  if (!text) return '<span class="dim">📎 attachment</span>';
+  const escaped = escapeHtml(text);
+  if (!q) return escaped.length > max ? escaped.slice(0, max) + '…' : escaped;
+  const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'ig');
+  const match = re.exec(escaped);
+  if (!match) return escaped.length > max ? escaped.slice(0, max) + '…' : escaped;
+  const start = Math.max(0, match.index - 40);
+  const end = Math.min(escaped.length, match.index + match[0].length + 80);
+  let snippet = escaped.slice(start, end);
+  if (start > 0) snippet = '…' + snippet;
+  if (end < escaped.length) snippet = snippet + '…';
+  return snippet.replace(re, '<mark class="tchat-search-hit">$1</mark>');
 }
 
 function PinnedMessageHeader({ 
@@ -295,6 +316,16 @@ export function Chat() {
   const [deleteMsgTarget, setDeleteMsgTarget] = useState<TeamChatMessage | null>(null);
   const [deletedNotice, setDeletedNotice] = useState('');
   const [lightbox, setLightbox] = useState<{ images: { id: string; name: string }[]; index: number } | null>(null);
+
+  // ── Global search (across all channels)
+  const [globalOpen, setGlobalOpen] = useState(false);
+  const [globalQ, setGlobalQ] = useState('');
+  const [globalResults, setGlobalResults] = useState<GlobalChatSearchResult[] | null>(null);
+  const [globalLoading, setGlobalLoading] = useState(false);
+  const globalReq = useRef(0);
+  const globalDebounceRef = useRef<number | null>(null);
+  const [pendingJump, setPendingJump] = useState<{ channelId: string; msgId: string } | null>(null);
+  const searchBoxRef = useRef<HTMLInputElement | null>(null);
 
   // Channel switches close any open lightbox SYNCHRONOUSLY — a delayed effect
   // would retire the image URL after the messages already unmounted, leaving
@@ -564,6 +595,55 @@ export function Chat() {
     const t = setTimeout(() => setTyping([]), 4500);
     return () => clearTimeout(t);
   }, [typing]);
+
+  // ── pendingJump: scroll to a message after switching to its channel
+  useEffect(() => {
+    if (!pendingJump) return;
+    if (pendingJump.channelId !== activeId) return;
+    const el = document.getElementById(`msg-${pendingJump.msgId}`);
+    if (el) {
+      jumpToMessage(pendingJump.msgId);
+      setPendingJump(null);
+    }
+    // else: wait — messages may still be loading via WS replay or REST seed
+  }, [messages, pendingJump, activeId]);
+
+  // ── Global search: debounced handler
+  const doGlobalSearch = (q: string) => {
+    if (globalDebounceRef.current) clearTimeout(globalDebounceRef.current);
+    if (!q.trim()) {
+      setGlobalResults(null);
+      setGlobalLoading(false);
+      return;
+    }
+    setGlobalLoading(true);
+    globalDebounceRef.current = window.setTimeout(() => {
+      const reqId = ++globalReq.current;
+      void searchAllChatMessages(q.trim())
+        .then((res) => {
+          if (reqId !== globalReq.current) return;
+          setGlobalResults(res.results || []);
+        })
+        .catch(() => {
+          if (reqId !== globalReq.current) return;
+          setGlobalResults([]);
+        })
+        .finally(() => {
+          if (reqId === globalReq.current) setGlobalLoading(false);
+        });
+    }, 250);
+  };
+
+  const toggleGlobalSearch = () => {
+    if (globalOpen) {
+      setGlobalOpen(false);
+      setGlobalQ('');
+      setGlobalResults(null);
+    } else {
+      setGlobalOpen(true);
+      requestAnimationFrame(() => searchBoxRef.current?.focus());
+    }
+  };
 
   // Clean up any in-flight voice recording on unmount.
   useEffect(() => {
@@ -1124,6 +1204,15 @@ export function Chat() {
             Team Chat
           </span>
           <div style="display:flex;align-items:center;gap:8px">
+            <button
+              class="btn btn-icon btn-sm"
+              onClick={toggleGlobalSearch}
+              aria-pressed={globalOpen}
+              title="Search all channels"
+              aria-label="Search all channels"
+            >
+              <Search width={14} height={14} />
+            </button>
             <span class="tchat-online">{presence.size} online</span>
             {presence.size > 0 && (
               <span class="tchat-presence-avatars">
@@ -1142,6 +1231,80 @@ export function Chat() {
             )}
           </div>
         </div>
+        {globalOpen && (
+          <div class="tchat-global-search">
+            <input
+              ref={searchBoxRef}
+              class="input"
+              placeholder="Search all channels…"
+              aria-label="Search all channels"
+              value={globalQ}
+              onInput={(e: Event) => {
+                const v = (e.target as HTMLInputElement).value;
+                setGlobalQ(v);
+                doGlobalSearch(v);
+              }}
+              onKeyDown={(e: KeyboardEvent) => {
+                if (e.key === 'Escape') {
+                  setGlobalOpen(false);
+                  setGlobalQ('');
+                  setGlobalResults(null);
+                }
+              }}
+            />
+            {globalLoading && <div class="tchat-global-status"><Loader2 width={12} height={12} class="icon spin" /> Searching…</div>}
+            {globalResults !== null && !globalLoading && (
+              <div class="tchat-global-results">
+                {globalResults.length === 0 && <div class="tchat-global-empty">No matches.</div>}
+                {globalResults.map((gr) => {
+                  const kindIcon = gr.channelKind === 'project' ? <FolderOpen width={13} height={13} /> :
+                    gr.channelKind === 'direct' ? <UserIcon width={13} height={13} /> :
+                    <Hash width={13} height={13} />;
+                  return (
+                    <div key={gr.channelId} class="tchat-global-channel">
+                      <div class="tchat-global-channel-header">
+                        <span class="tchat-global-channel-icon">{kindIcon}</span>
+                        <span class="tchat-global-channel-name">{gr.channelName}</span>
+                        <span class="tchat-global-channel-count">{gr.messages.length}</span>
+                      </div>
+                      {gr.messages.map((m) => (
+                        <div
+                          key={m.id}
+                          class="tchat-global-hit"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            setPendingJump({ channelId: gr.channelId, msgId: m.id });
+                            setGlobalOpen(false);
+                            setGlobalQ('');
+                            setGlobalResults(null);
+                            switchChannel(gr.channelId);
+                          }}
+                          onKeyDown={(e: KeyboardEvent) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setPendingJump({ channelId: gr.channelId, msgId: m.id });
+                              setGlobalOpen(false);
+                              setGlobalQ('');
+                              setGlobalResults(null);
+                              switchChannel(gr.channelId);
+                            }
+                          }}
+                        >
+                          <span class="tchat-global-hit-author">{m.username}</span>
+                          <span
+                            class="tchat-global-hit-text"
+                            dangerouslySetInnerHTML={{ __html: snippetHtml(m.text, globalQ) }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
         {user?.role !== 'viewer' && (
           <div class="tchat-rail-actions">
             <button class="btn btn-sm" onClick={() => setCreateOpen(true)} title="New channel">

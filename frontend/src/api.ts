@@ -1423,6 +1423,21 @@ export const searchChatMessages = (channelId: string, query: string) =>
     `/api/chat-team/channels/${encodeURIComponent(channelId)}/search?q=${encodeURIComponent(query)}`
   );
 
+export interface GlobalChatSearchResult {
+  channelId: string;
+  channelKind: ChatChannelKind;
+  channelName: string;
+  messages: TeamChatMessage[];
+}
+export interface GlobalChatSearchResponse {
+  query: string;
+  results: GlobalChatSearchResult[];
+}
+export const searchAllChatMessages = (query: string, opts?: { perChannel?: number; total?: number }) =>
+  api<GlobalChatSearchResponse>(
+    `/api/chat-team/search?q=${encodeURIComponent(query)}&perChannel=${opts?.perChannel ?? 10}&total=${opts?.total ?? 50}`
+  );
+
 export const sendChatMessage = (channelId: string, body: { text: string; replyTo?: string; attachments?: { id: string; name: string }[] }) =>
   api<{ message: TeamChatMessage }>('/api/chat-team/messages', {
     method: 'POST',

@@ -85,6 +85,117 @@
 .tchat-channel-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .tchat-channel-row.active { background: var(--panel-2); border-color: var(--border-2); }
 .tchat-channel-row.unread .tchat-channel-name { font-weight: 700; }
+
+/* ── Global search panel (rail) ─────────────────────────────── */
+.tchat-global-search {
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+}
+.tchat-global-search .input {
+  background: var(--bg);
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.78rem;
+  padding: 8px 12px;
+}
+.tchat-global-search .input:focus { outline: none; border-bottom-color: var(--accent); }
+.tchat-global-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.68rem;
+  color: var(--text-2);
+}
+.tchat-global-results {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.tchat-global-empty {
+  padding: 10px 12px;
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+.tchat-global-channel {
+  display: flex;
+  flex-direction: column;
+}
+.tchat-global-channel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 0.68rem;
+  color: var(--text-2);
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.tchat-global-channel:first-child .tchat-global-channel-header { border-top: none; }
+.tchat-global-channel-icon {
+  display: inline-flex;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.tchat-global-channel-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tchat-global-channel-count {
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-size: 0.6rem;
+  font-weight: 700;
+  min-width: 16px;
+  text-align: center;
+  padding: 1px 4px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.tchat-global-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px 6px 28px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.tchat-global-hit:last-child { border-bottom: none; }
+.tchat-global-hit:hover { background: var(--panel-2); }
+.tchat-global-hit:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-global-hit-author {
+  color: var(--text-2);
+  font-size: 0.66rem;
+  font-weight: 500;
+}
+.tchat-global-hit-text {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+mark.tchat-search-hit {
+  background: color-mix(in srgb, var(--yellow) 30%, transparent);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ── Message highlight flash (jump-to / pinned scroll) ──────── */
+.tchat-msg-highlight {
+  animation: tchat-flash 1s ease-out;
+}
+@keyframes tchat-flash {
+  0% { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  100% { background: transparent; }
+}
 .tchat-channel-icon {
   width: 26px;
   height: 26px;

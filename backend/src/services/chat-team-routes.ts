@@ -26,7 +26,10 @@ import {
   canDeleteMessage,
   formatMessage,
   searchMessages,
+  searchMessagesRecent,
+  rankGlobalSearch,
   channelSortKey,
+  channelLabel,
   MAX_ATTACHMENTS,
   MAX_ATTACHMENT_BYTES,
   MAX_CHANNEL_ATTACHMENT_BYTES,
@@ -36,6 +39,7 @@ import {
   type CanSendMode,
   type ChannelMember,
   type ChatAttachment,
+  type SearchMatch,
   type TeamChannel,
   type TeamMessage,
 } from './chat-team-core';
@@ -359,6 +363,49 @@ export function registerChatTeamRoutes(app: any): void {
     const q = typeof req.query.q === 'string' ? req.query.q : '';
     if (!q) return res.json({ messages: [] });
     res.json({ messages: searchMessages(getAllMessages(cid), q).slice(-50) });
+  });
+
+  // ── Global search across all accessible channels ─────────────
+  r.get('/search', chatWriteLimiter, (req: any, res) => {
+    const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
+    const q = String(req.query.q ?? '').trim();
+    if (q.length < 2 || q.length > 200) return res.status(400).json({ error: 'Query must be 2-200 characters' });
+    const perChannel = Math.min(Math.max(Number(req.query.perChannel) || 10, 1), 20);
+    const total = Math.min(Math.max(Number(req.query.total) || 50, 1), 100);
+
+    const idx = userIndex();
+    const userNameOf = (id: string) => idx.get(id)?.username;
+    const accessible = listChannels().filter((c) => canAccessChannel(user, c) !== 'none');
+
+    let flat: SearchMatch[] = [];
+    for (const c of accessible) {
+      const hits = searchMessagesRecent(getAllMessages(c.id), q, perChannel);
+      for (const msg of hits) flat.push({ channelId: c.id, message: msg });
+    }
+
+    const ranked = rankGlobalSearch(flat, total);
+
+    // Group by channelId, preserving the order of first appearance.
+    const grouped = new Map<string, SearchMatch[]>();
+    for (const m of ranked) {
+      const arr = grouped.get(m.channelId);
+      if (arr) arr.push(m);
+      else grouped.set(m.channelId, [m]);
+    }
+
+    const results: { channelId: string; channelKind: string; channelName: string; messages: TeamMessage[] }[] = [];
+    for (const [channelId, matches] of grouped) {
+      const ch = getChannel(channelId);
+      if (!ch) continue;
+      results.push({
+        channelId,
+        channelKind: ch.kind,
+        channelName: channelLabel(ch, user.id, userNameOf),
+        messages: matches.map((m) => m.message),
+      });
+    }
+
+    res.json({ query: q, results });
   });
 
   // Send a message — the authoritative write path (rate-limited, validated).

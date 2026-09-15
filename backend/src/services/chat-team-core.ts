@@ -203,6 +203,41 @@ export function searchMessages(messages: TeamMessage[], query: string): TeamMess
   return messages.filter((m) => (m.text || '').toLowerCase().includes(q));
 }
 
+/** A single global-search hit: the channel it was found in + the matching message. */
+export interface SearchMatch {
+  channelId: string;
+  message: TeamMessage;
+}
+
+/**
+ * Search a single channel's messages from the END (newest) toward the start,
+ * stopping as soon as `limit` hits accumulate — the opposite direction of
+ * `searchMessages` (which is NOT touched). Case-insensitive.
+ */
+export function searchMessagesRecent(messages: TeamMessage[], query: string, limit: number): TeamMessage[] {
+  const q = String(query ?? '').trim().toLowerCase();
+  if (!q) return [];
+  const out: TeamMessage[] = [];
+  for (let i = messages.length - 1; i >= 0 && out.length < limit; i--) {
+    const m = messages[i];
+    if ((m.text || '').toLowerCase().includes(q)) {
+      out.push(m);
+    }
+  }
+  return out;
+}
+
+/**
+ * Merge + rank cross-channel hits: newest `createdAt` first, trimmed to `total`.
+ * Pure — does not group; the caller groups by channelId after this.
+ */
+export function rankGlobalSearch(matches: SearchMatch[], total: number): SearchMatch[] {
+  return matches
+    .slice()
+    .sort((a, b) => new Date(b.message.createdAt).getTime() - new Date(a.message.createdAt).getTime())
+    .slice(0, total);
+}
+
 /** Drop oldest messages beyond cap (pure — returns the kept window). */
 export function pruneToCap(messages: TeamMessage[], cap = DEFAULT_MSG_CAP): TeamMessage[] {
   if (messages.length <= cap) return messages;

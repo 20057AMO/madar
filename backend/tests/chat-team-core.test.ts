@@ -29,6 +29,8 @@ import {
   canDeleteMessage,
   formatMessage,
   searchMessages,
+  searchMessagesRecent,
+  rankGlobalSearch,
   pruneToCap,
   pinnedMessages,
   channelAttachmentBytes,
@@ -38,6 +40,7 @@ import {
   CHANNEL_ID_RE,
   channelSortKey,
   channelLabel,
+  type SearchMatch,
   type TeamChannel,
   type TeamMessage,
 } from '../src/services/chat-team-core.ts';
@@ -200,6 +203,110 @@ describe('searchMessages', () => {
   });
   test('empty query returns nothing', () => {
     assert.deepStrictEqual(searchMessages(msgs, '  '), []);
+  });
+});
+
+describe('searchMessagesRecent', () => {
+  const make = (texts: string[], createdAt: string[]): TeamMessage[] =>
+    texts.map((text, i) => ({ id: `m-${i}`, userId: 'u', username: 'a', text, createdAt: createdAt[i] ?? String(i) }));
+
+  test('searches from the END of the array — newest matches first', () => {
+    const msgs = make(
+      ['alpha one', 'nothing here', 'alpha two', 'alpha three'],
+      ['2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', '2026-01-03T00:00:00Z', '2026-01-04T00:00:00Z']
+    );
+    // Stored oldest→newest: alpha one(0), nothing(1), alpha two(2), alpha three(3).
+    // Newest-first hits: alpha three, alpha two, alpha one.
+    assert.deepStrictEqual(searchMessagesRecent(msgs, 'alpha', 10).map((m) => m.id), ['m-3', 'm-2', 'm-0']);
+  });
+
+  test('limit caps the number of returned matches', () => {
+    const msgs = make(['alpha 1', 'alpha 2', 'alpha 3', 'alpha 4'], []);
+    assert.strictEqual(searchMessagesRecent(msgs, 'alpha', 2).length, 2);
+    assert.deepStrictEqual(searchMessagesRecent(msgs, 'alpha', 1).map((m) => m.id), ['m-3']);
+  });
+
+  test('early exit — never scans past the limit (probed via non-matching tail)', () => {
+    // The first two (newest) entries match; the limit is reached so the older
+    // non-matching entries must never be visited — result identical whether
+    // they contain the query or not.
+    const withTail = make(['alpha new', 'alpha newer', 'zzz old1', 'zzz older2'], []);
+    const cleanTail = make(['alpha new', 'alpha newer', 'tail one', 'tail two'], []);
+    assert.deepStrictEqual(searchMessagesRecent(withTail, 'alpha', 2).map((m) => m.id), ['m-1', 'm-0']);
+    assert.deepStrictEqual(searchMessagesRecent(cleanTail, 'alpha', 2).map((m) => m.id), ['m-1', 'm-0']);
+  });
+
+  test('case-insensitive matching', () => {
+    const msgs = make(['Deploy to PRODUCTION now', 'nothing'], []);
+    assert.strictEqual(searchMessagesRecent(msgs, 'production', 10).length, 1);
+    assert.strictEqual(searchMessagesRecent(msgs, 'PROD', 10).length, 1);
+  });
+
+  test('empty query returns []', () => {
+    const msgs = make(['anything'], []);
+    assert.deepStrictEqual(searchMessagesRecent(msgs, '   ', 10), []);
+    assert.deepStrictEqual(searchMessagesRecent(msgs, '', 10), []);
+  });
+
+  test('no matches → []', () => {
+    const msgs = make(['one', 'two'], []);
+    assert.deepStrictEqual(searchMessagesRecent(msgs, 'zzz', 10), []);
+  });
+
+  test('limit larger than the match count returns everything found', () => {
+    const msgs = make(['alpha 1', 'alpha 2'], []);
+    assert.deepStrictEqual(searchMessagesRecent(msgs, 'alpha', 100).map((m) => m.id), ['m-1', 'm-0']);
+  });
+});
+
+describe('rankGlobalSearch', () => {
+  const hit = (channelId: string, id: string, createdAt: string): SearchMatch => ({
+    channelId,
+    message: { id, userId: 'u', username: 'a', text: id, createdAt, status: 'sent', readBy: [] },
+  });
+
+  test('sorts descending by message.createdAt', () => {
+    const matches = [
+      hit('ch-1', 'm-old', '2026-01-01T00:00:00Z'),
+      hit('ch-2', 'm-mid', '2026-02-01T00:00:00Z'),
+      hit('ch-3', 'm-new', '2026-03-01T00:00:00Z'),
+    ];
+    assert.deepStrictEqual(rankGlobalSearch(matches, 10).map((m) => m.message.id), ['m-new', 'm-mid', 'm-old']);
+  });
+
+  test('trims to total', () => {
+    const matches = [
+      hit('ch-1', 'm-1', '2026-01-01T00:00:00Z'),
+      hit('ch-2', 'm-2', '2026-02-01T00:00:00Z'),
+      hit('ch-3', 'm-3', '2026-03-01T00:00:00Z'),
+    ];
+    assert.strictEqual(rankGlobalSearch(matches, 2).length, 2);
+    assert.deepStrictEqual(rankGlobalSearch(matches, 2).map((m) => m.message.id), ['m-3', 'm-2']);
+    assert.strictEqual(rankGlobalSearch(matches, 0).length, 0);
+  });
+
+  test('stable order when timestamps are equal (source order preserved)', () => {
+    const matches = [
+      hit('ch-1', 'm-a', '2026-01-01T00:00:00Z'),
+      hit('ch-2', 'm-b', '2026-01-01T00:00:00Z'),
+      hit('ch-3', 'm-c', '2026-01-01T00:00:00Z'),
+    ];
+    assert.deepStrictEqual(rankGlobalSearch(matches, 10).map((m) => m.message.id), ['m-a', 'm-b', 'm-c']);
+  });
+
+  test('does not mutate the input array', () => {
+    const matches = [
+      hit('ch-1', 'm-1', '2026-01-01T00:00:00Z'),
+      hit('ch-2', 'm-2', '2026-02-01T00:00:00Z'),
+    ];
+    const before = matches.map((m) => m.message.id);
+    rankGlobalSearch(matches, 10);
+    assert.deepStrictEqual(matches.map((m) => m.message.id), before);
+  });
+
+  test('total larger than the array returns everything', () => {
+    const matches = [hit('ch-1', 'm-1', '2026-01-01T00:00:00Z')];
+    assert.strictEqual(rankGlobalSearch(matches, 100).length, 1);
   });
 });
 
