@@ -63,6 +63,23 @@ export interface TeamChannel {
   pinnedMessageId?: string | null;
 }
 
+/** Reserved identity of the @madar team-chat bot. */
+export const BOT_USER_ID = 'bot-madar';
+export const BOT_USERNAME = 'madar';
+/** Usernames human accounts may never claim (the @madar bot owns this one). */
+export const RESERVED_USERNAMES = ['madar'];
+
+/** Case-insensitive reserved-username check (immune to trim/padding tricks). */
+export function isReservedUsername(name: string): boolean {
+  const clean = String(name ?? '').trim().toLowerCase();
+  return RESERVED_USERNAMES.includes(clean);
+}
+
+/** True when a message was written by the @madar bot itself (loop guard). */
+export function isBotMessage(msg: { userId?: string }): boolean {
+  return !!msg && msg.userId === BOT_USER_ID;
+}
+
 export const MAX_TEXT_CHARS = 5000;
 export const MAX_ATTACHMENTS = 5;
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -256,12 +273,16 @@ export function canEditMessage(msg: { userId: string }, requestingUserId: string
   return msg.userId === requestingUserId;
 }
 
-/** Delete permission — the author, the channel admin, or a system admin. */
+/** Delete permission — the author, a write-level member on a bot message,
+ *  the channel admin, or a system admin. A bot message has no human author —
+ *  `writeLevel` (the user may send in this channel) is enough to clean up a
+ *  bad bot reply without narrowing that right. */
 export function canDeleteMessage(
   msg: { userId: string },
   requestingUserId: string,
-  opts: { isChannelAdmin: boolean; isSystemAdmin: boolean }
+  opts: { isChannelAdmin: boolean; isSystemAdmin: boolean; writeLevel?: boolean }
 ): boolean {
+  if (isBotMessage(msg) && opts.writeLevel) return true;
   if (msg.userId === requestingUserId) return true;
   if (opts.isChannelAdmin) return true;
   if (opts.isSystemAdmin) return true;

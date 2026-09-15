@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { generateTotpSecret, verifyTotp } from './totp';
+import { isReservedUsername } from './chat-team-core';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || '/app/data';
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -196,6 +197,7 @@ export async function setup(username: string, password: string): Promise<{ id: s
   const cleanUsername = username.trim();
   if (!cleanUsername || cleanUsername.length < 2) throw new Error('Username must be at least 2 characters.');
   if (cleanUsername.length > 50) throw new Error('Username must be at most 50 characters.');
+  if (isReservedUsername(cleanUsername)) throw new Error('Username is reserved.');
   if (!password || password.length < 6) throw new Error('Password must be at least 6 characters.');
 
   const now = new Date().toISOString();
@@ -346,6 +348,7 @@ export async function createUser(
   const cleanUsername = username.trim();
   if (!cleanUsername || cleanUsername.length < 2) throw new Error('Username must be at least 2 characters.');
   if (cleanUsername.length > 50) throw new Error('Username must be at most 50 characters.');
+  if (isReservedUsername(cleanUsername)) throw new Error('Username is reserved.');
   if (!password || password.length < 6) throw new Error('Password must be at least 6 characters.');
   if (!['admin', 'editor', 'viewer'].includes(role)) throw new Error('Invalid role.');
 

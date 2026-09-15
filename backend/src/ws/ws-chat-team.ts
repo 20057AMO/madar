@@ -37,7 +37,7 @@ import {
   markMessagesAsRead,
 } from '../services/chat-team-store';
 import { canAccessChannel, type ChatUser } from '../services/chat-team-access';
-import type { CanSendMode, TeamChannel } from '../services/chat-team-core';
+import { BOT_USER_ID, BOT_USERNAME, type CanSendMode, type TeamChannel } from '../services/chat-team-core';
 
 const PRESENCE_TYPING_MS = 3000;
 
@@ -100,6 +100,15 @@ export function broadcastPinnedUpdate(channelId: string, pinnedMessageId: string
 /** Push a send-mode change (canSend) to everyone subscribed to the channel. */
 export function broadcastChannelUpdate(channelId: string, canSend: CanSendMode): void {
   broadcastToChannel(channelId, { type: 'channel_update', channel: { id: channelId, canSend } });
+}
+
+/** Push the @madar bot's typing indicator to a channel's subscribers. */
+export function broadcastBotTyping(channelId: string, typing: boolean): void {
+  broadcastToChannel(channelId, {
+    type: typing ? 'typing_start' : 'typing_stop',
+    channelId,
+    user: { id: BOT_USER_ID, username: BOT_USERNAME },
+  });
 }
 
 function sendPresence(ws: WebSocket): void {

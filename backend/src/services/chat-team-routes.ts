@@ -80,6 +80,7 @@ import {
   broadcastChannelUpdate,
   getChatTeamPresence,
 } from '../ws/ws-chat-team';
+import { teamChatBot } from './chat-team-bot';
 
 const chatUpload = multer({
   storage: multer.memoryStorage(),
@@ -490,6 +491,10 @@ export function registerChatTeamRoutes(app: any): void {
     await appendMessage(channelId, message);
     const freshChannel = getChannel(channelId) || channel;
     broadcastChatMessage(freshChannel, message);
+    // Fire-and-forget @madar bot (dispatchWebhook pattern): a mention in a
+    // channel/project room schedules a background reply — the 201 is never
+    // slowed down by LLM latency, and a bot failure never breaks the send.
+    void teamChatBot.maybeInvokeBot(channelId, message, freshChannel);
     res.status(201).json({ message });
   });
 
@@ -588,6 +593,9 @@ export function registerChatTeamRoutes(app: any): void {
     const allowed = canDeleteMessage(existing, user.id, {
       isChannelAdmin: isChannelAdmin(channel, user.id),
       isSystemAdmin: user.role === 'admin',
+      // A bot message has no human author — any write-level user may clean it
+      // up (viewer members keep read-only).
+      writeLevel: level === 'write',
     });
     if (!allowed) {
       return res.status(403).json({ error: 'Only the author, a channel admin, or a system admin can delete this message' });
