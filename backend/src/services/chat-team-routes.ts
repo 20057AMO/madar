@@ -22,6 +22,7 @@ import {
   sanitizeCanSend,
   normalizeMessage,
   normalizeEditMessage,
+  normalizeReaction,
   canEditMessage,
   canDeleteMessage,
   formatMessage,
@@ -66,6 +67,7 @@ import {
   setChannelCanSend,
   editMessage,
   deleteMessage,
+  toggleMessageReaction,
 } from './chat-team-store';
 import { canAccessChannel, canSendInChannel, type ChatUser } from './chat-team-access';
 import { detectImageExt } from './avatar-store';
@@ -539,6 +541,27 @@ export function registerChatTeamRoutes(app: any): void {
     const normalized = normalizeEditMessage(req.body);
     if (!normalized) return res.status(400).json({ error: 'Message is required (max 5000 chars)' });
     const updated = await editMessage(cid, msgId, normalized.text, normalized.mentions);
+    if (!updated) return res.status(404).json({ error: 'Message not found' });
+    broadcastMessageUpdated(cid, updated);
+    res.json({ message: updated });
+  });
+
+  // Toggle a reaction on a message. ANY reader may react — a viewer passes
+  // with read access (access !== 'none'); canSend never gates reactions (in an
+  // admins-locked channel a non-admin reader still reacts). The emoji must be
+  // whitelisted, the message must exist, and the toggle is atomic under the
+  // msgs lock with a live broadcast to the room.
+  r.post('/channels/:channelId/messages/:msgId/reactions', chatWriteLimiter, async (req: any, res) => {
+    const cid = req.params.channelId;
+    const msgId = req.params.msgId;
+    if (!isChannelId(cid) || !isMessageId(msgId)) return res.status(400).json({ error: 'Invalid ids' });
+    const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
+    const channel = getChannel(cid);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    if (canAccessChannel(user, channel) === 'none') return res.status(403).json({ error: 'Access denied' });
+    const emoji = normalizeReaction(req.body?.emoji);
+    if (!emoji) return res.status(400).json({ error: 'Invalid emoji' });
+    const updated = await toggleMessageReaction(cid, msgId, emoji, user.id);
     if (!updated) return res.status(404).json({ error: 'Message not found' });
     broadcastMessageUpdated(cid, updated);
     res.json({ message: updated });

@@ -1353,6 +1353,7 @@ export interface TeamChatMessage {
   mentions?: string[];
   attachments?: ChatAttachment[];
   pinned?: boolean;
+  reactions?: Record<string, string[]>;
   createdAt: string;
   editedAt?: string;
   status?: 'sent' | 'delivered' | 'read';
@@ -1465,6 +1466,16 @@ export const deleteChatMessage = (channelId: string, msgId: string) =>
   api<{ ok: boolean }>(
     `/api/chat-team/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(msgId)}`,
     { method: 'DELETE' }
+  );
+
+export const toggleChatReaction = (channelId: string, msgId: string, emoji: string) =>
+  api<{ message: TeamChatMessage }>(
+    `/api/chat-team/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(msgId)}/reactions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emoji }),
+    }
   );
 
 export const markChatRead = (channelId: string, msgId: string) =>

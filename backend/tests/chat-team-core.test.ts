@@ -40,6 +40,11 @@ import {
   CHANNEL_ID_RE,
   channelSortKey,
   channelLabel,
+  ALLOWED_REACTIONS,
+  MAX_REACTION_TYPES,
+  normalizeReaction,
+  toggleReaction,
+  sortReactions,
   type SearchMatch,
   type TeamChannel,
   type TeamMessage,
@@ -505,4 +510,113 @@ describe('isChannelAdmin', () => {
   // which imports middleware/auth — NOT import-free, so it cannot load under
   // node --test here. It is covered in the real-API suite (G1 test in
   // chat-team-api.test.ts + maySend assertions in CS1/CS3/CS5/CS6v).
+});
+
+describe('normalizeReaction', () => {
+  test('accepts every whitelisted emoji as-is', () => {
+    for (const e of ALLOWED_REACTIONS) {
+      assert.strictEqual(normalizeReaction(e), e);
+    }
+  });
+  test('rejects non-whitelisted emoji', () => {
+    assert.strictEqual(normalizeReaction('🤖'), null);
+    assert.strictEqual(normalizeReaction('+1'), null);
+    assert.strictEqual(normalizeReaction('thumbs up'), null);
+  });
+  test('rejects non-strings / empty / null / undefined / objects', () => {
+    assert.strictEqual(normalizeReaction(42), null);
+    assert.strictEqual(normalizeReaction(''), null);
+    assert.strictEqual(normalizeReaction(null), null);
+    assert.strictEqual(normalizeReaction(undefined), null);
+    assert.strictEqual(normalizeReaction({}), null);
+  });
+});
+
+describe('toggleReaction', () => {
+  const em = (e: string) => e as unknown as (typeof ALLOWED_REACTIONS)[number];
+
+  test('adds a user to an empty/absent map', () => {
+    assert.deepStrictEqual(toggleReaction(undefined, '👍', 'u-1'), { '👍': ['u-1'] });
+    assert.deepStrictEqual(toggleReaction({}, '👍', 'u-1'), { '👍': ['u-1'] });
+  });
+  test('adds a second user to an existing emoji (first-appearance order kept)', () => {
+    const r = toggleReaction({ '👍': ['u-1'] }, '👍', 'u-2');
+    assert.deepStrictEqual(r, { '👍': ['u-1', 'u-2'] });
+  });
+  test('removes the user on toggle-off, keeping other users', () => {
+    const r = toggleReaction({ '👍': ['u-1', 'u-2'] }, '👍', 'u-1');
+    assert.deepStrictEqual(r, { '👍': ['u-2'] });
+  });
+  test('removes the empty key when its last user toggles off', () => {
+    const r = toggleReaction({ '👍': ['u-1'], '❤️': ['u-2'] }, '👍', 'u-1');
+    assert.deepStrictEqual(r, { '❤️': ['u-2'] });
+  });
+  test('last reaction toggled off → undefined (map fully empty)', () => {
+    assert.strictEqual(toggleReaction({ '👍': ['u-1'] }, '👍', 'u-1'), undefined);
+  });
+  test('a second DISTINCT type joins without disturbing the first', () => {
+    const r = toggleReaction({ '👍': ['u-1'] }, '❤️', 'u-1');
+    assert.deepStrictEqual(r, { '👍': ['u-1'], '❤️': ['u-1'] });
+  });
+  test('does not mutate the input map (pure)', () => {
+    const input = { '👍': ['u-1'] };
+    toggleReaction(input, '❤️', 'u-2');
+    assert.deepStrictEqual(input, { '👍': ['u-1'] });
+    toggleReaction(input, '👍', 'u-1');
+    assert.deepStrictEqual(input, { '👍': ['u-1'] });
+  });
+  test('cap: the 20th distinct type is accepted', () => {
+    const base: Record<string, string[]> = {};
+    for (let i = 1; i < MAX_REACTION_TYPES; i++) base[`e${i}`] = ['u-1'];
+    assert.strictEqual(Object.keys(base).length, MAX_REACTION_TYPES - 1);
+    const r = toggleReaction(base, em('e20'), 'u-2');
+    assert.strictEqual(Object.keys(r!).length, MAX_REACTION_TYPES, '20th type must land');
+    assert.deepStrictEqual(r!['e20'], ['u-2']);
+  });
+  test('cap: the 21st NEW type returns the SAME reference, unchanged, input intact', () => {
+    const base: Record<string, string[]> = {};
+    for (let i = 1; i <= MAX_REACTION_TYPES; i++) base[`e${i}`] = ['u-1'];
+    const before = Object.keys(base).length;
+    const refused = toggleReaction(base, em('e21'), 'u-9');
+    assert.strictEqual(refused, base, 'cap refusal must hand back the identical reference');
+    assert.strictEqual(Object.keys(base).length, before, 'no key added to the input');
+    assert.ok(!('e21' in base));
+  });
+  test('cap: at the ceiling, toggling OFF an existing emoji still works (removals never blocked)', () => {
+    const base: Record<string, string[]> = {};
+    for (let i = 1; i <= MAX_REACTION_TYPES; i++) base[`e${i}`] = ['u-1'];
+    base['e1'] = ['u-1', 'u-2'];
+    const r = toggleReaction(base, em('e1'), 'u-2');
+    assert.deepStrictEqual(r!['e1'], ['u-1']);
+    assert.strictEqual(Object.keys(r!).length, MAX_REACTION_TYPES);
+  });
+});
+
+describe('sortReactions', () => {
+  test('sorts descending by count with users + counts', () => {
+    const r = sortReactions({ '👍': ['u-1'], '❤️': ['u-1', 'u-2'], '🎉': ['u-1', 'u-2', 'u-3'] });
+    assert.deepStrictEqual(r, [
+      { emoji: '🎉', count: 3, users: ['u-1', 'u-2', 'u-3'] },
+      { emoji: '❤️', count: 2, users: ['u-1', 'u-2'] },
+      { emoji: '👍', count: 1, users: ['u-1'] },
+    ]);
+  });
+  test('ties keep insertion order (stable sort over Object.entries)', () => {
+    const r = sortReactions({ '👍': ['u-1', 'u-2'], '❤️': ['u-3', 'u-4'] });
+    assert.deepStrictEqual(r.map((x) => x.emoji), ['👍', '❤️']);
+  });
+  test('undefined / empty → []', () => {
+    assert.deepStrictEqual(sortReactions(undefined), []);
+    assert.deepStrictEqual(sortReactions({}), []);
+  });
+  test('copies the user arrays — mutating the result never touches the input', () => {
+    const input = { '👍': ['u-1', 'u-2'] };
+    const r = sortReactions(input);
+    r[0].users.push('hacked');
+    assert.deepStrictEqual(input['👍'], ['u-1', 'u-2']);
+  });
+  test('defensive: non-whitelisted keys and non-array user lists are skipped', () => {
+    const r = sortReactions({ '👍': ['u-1'], '🤖': ['u-9'], '❤️': 'not-an-array' } as any);
+    assert.deepStrictEqual(r, [{ emoji: '👍', count: 1, users: ['u-1'] }]);
+  });
 });

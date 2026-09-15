@@ -19,9 +19,11 @@ import {
   isChannelId,
   isMessageId,
   pruneToCap,
+  toggleReaction,
   type CanSendMode,
   type ChatAttachment,
   type ChannelMember,
+  type ReactionEmoji,
   type TeamChannel,
   type TeamMessage,
 } from './chat-team-core';
@@ -366,6 +368,50 @@ export async function editMessage(
     messages[idx] = edited;
     writeMessagesRaw(channelId, messages);
     updated = messages[idx];
+  });
+  return updated;
+}
+
+/**
+ * Toggle a reaction on a message, inside the same msgs lock as edit/delete.
+ * Returns the updated row, or null when the message is unknown. No-change
+ * outcomes are handled honestly:
+ *  - toggle-off that empties the map → the `reactions` field is STRIPPED and
+ *    the row is still written (an empty map must not linger on disk),
+ *  - cap refusal (MAX_REACTION_TYPES kinds + a NEW type) → the current row is
+ *    returned untouched — nothing was modified, nothing is persisted.
+ */
+export async function toggleMessageReaction(
+  channelId: string,
+  msgId: string,
+  emoji: ReactionEmoji,
+  userId: string
+): Promise<TeamMessage | null> {
+  let updated: TeamMessage | null = null;
+  await withFileLockAsync(`msgs:${channelId}`, async () => {
+    const messages = readMessagesRaw(channelId);
+    const idx = messages.findIndex((m) => m.id === msgId);
+    if (idx === -1) return;
+    const current = messages[idx];
+    const toggled = toggleReaction(current.reactions, emoji, userId);
+    if (toggled === undefined) {
+      // All reactions toggled off — drop the field entirely and persist.
+      const { reactions: _drop, ...rest } = current;
+      const next = rest as TeamMessage;
+      messages[idx] = next;
+      writeMessagesRaw(channelId, messages);
+      updated = next;
+      return;
+    }
+    if (toggled === current.reactions) {
+      // Cap refusal — the pure layer returned the SAME reference: no write.
+      updated = current;
+      return;
+    }
+    const next: TeamMessage = { ...current, reactions: toggled };
+    messages[idx] = next;
+    writeMessagesRaw(channelId, messages);
+    updated = next;
   });
   return updated;
 }

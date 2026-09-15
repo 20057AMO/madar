@@ -1674,3 +1674,113 @@ test('WS: message_deleted arrives after a delete over REST', async () => {
   assert.strictEqual(delFrame.channelId, ch.id);
   assert.strictEqual(delFrame.msgId, m.id);
 });
+
+// ── Reactions ─────────────────────────────────────────────────
+test('reactions: toggle on/off roundtrip, multi-user, persisted, junk emoji 400', async () => {
+  const ch = await makeChannel(uniqueId('reac1'));
+  const m = await sendChannelMessage(ch.id, 'reactionable');
+  assert.strictEqual(m.reactions, undefined, 'fresh messages carry no reactions');
+
+  // Toggle ON by the test (system admin) user → 200 with the exact map.
+  const on = await api('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: '👍' });
+  assert.strictEqual(on.status, 200, JSON.stringify(on.json));
+  assert.deepStrictEqual(on.json.message.reactions, { '👍': [testAdminId] });
+
+  // A second user adds their own 👍 on the same message.
+  const other = await makeUser('reac1o', 'editor');
+  const on2 = await runAs(other.token)('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: '👍' });
+  assert.strictEqual(on2.status, 200, JSON.stringify(on2.json));
+  assert.deepStrictEqual(
+    [...(on2.json.message.reactions['👍'] as string[])].sort(),
+    [testAdminId, other.id].sort()
+  );
+
+  // Persisted — the message list reflects the reactions.
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  const row = msgs.json.messages.find((x: any) => x.id === m.id);
+  assert.ok(row.reactions['👍'].includes(testAdminId), 'reactions must persist to the store');
+  assert.strictEqual(row.reactions['👍'].length, 2);
+
+  // Toggle OFF by the test user → their id removed, the other user stays.
+  const off = await api('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: '👍' });
+  assert.strictEqual(off.status, 200, JSON.stringify(off.json));
+  assert.deepStrictEqual(off.json.message.reactions['👍'], [other.id]);
+
+  // Toggle OFF by the last remaining user → field gone entirely (undefined).
+  const off2 = await runAs(other.token)('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: '👍' });
+  assert.strictEqual(off2.status, 200, JSON.stringify(off2.json));
+  assert.strictEqual(off2.json.message.reactions, undefined, 'empty reactions map must not linger on the row');
+
+  // A second distinct type on the same message still works.
+  const heart = await api('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: '❤️' });
+  assert.strictEqual(heart.status, 200, JSON.stringify(heart.json));
+  assert.deepStrictEqual(heart.json.message.reactions, { '❤️': [testAdminId] });
+
+  // Non-whitelisted / junk emoji → 400.
+  const bad = await api('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: '🤖' });
+  assert.strictEqual(bad.status, 400, JSON.stringify(bad.json));
+  const noBody = await api('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, {});
+  assert.strictEqual(noBody.status, 400, JSON.stringify(noBody.json));
+  const nonString = await api('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: 42 });
+  assert.strictEqual(nonString.status, 400, JSON.stringify(nonString.json));
+
+  // Junk ids → 400.
+  const junkIds = await api('POST', `${chatBase}/channels/${ch.id}/messages/junk/reactions`, { emoji: '👍' });
+  assert.strictEqual(junkIds.status, 400, JSON.stringify(junkIds.json));
+});
+
+test('reactions access matrix: viewer member reacts 200 but cannot send; outsider 403', async () => {
+  const slug = uniqueId('reacacc');
+  const created = await api('POST', '/projects', { name: 'Reaction Access', slug });
+  assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
+  createdSlugs.push(slug);
+  const proj = `project:${slug}`;
+  const sent = await sendChannelMessage(proj, 'readable message');
+
+  // Viewer MEMBER of the project: read-level, so reacting is allowed (200)…
+  const v = await reqAuth('POST', '/users', { username: uniqueId('reacv'), password: 'pass-123456', role: 'viewer' });
+  assert.strictEqual(v.status, 201);
+  const viewer = await v.json();
+  createdUserIds.push(viewer.id);
+  const addViewer = await api('POST', `/projects/${slug}/members`, { userId: viewer.id, role: 'viewer' });
+  assert.strictEqual(addViewer.status, 200, JSON.stringify(addViewer.json));
+  const viewerTok = jwt.sign({ id: viewer.id, username: viewer.username, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const react = await runAs(viewerTok)('POST', `${chatBase}/channels/${proj}/messages/${sent.id}/reactions`, { emoji: '❤️' });
+  assert.strictEqual(react.status, 200, JSON.stringify(react.json));
+  assert.deepStrictEqual(react.json.message.reactions, { '❤️': [viewer.id] });
+
+  // …but SENDING stays locked at 403 for the same viewer.
+  const send = await runAs(viewerTok)('POST', `${chatBase}/messages`, { channelId: proj, text: 'nope' });
+  assert.strictEqual(send.status, 403, JSON.stringify(send.json));
+
+  // Non-member outsider (viewer role, no membership) → 403 on reactions.
+  const outsiderTok = jwt.sign({ id: 'outsider-u', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const out = await runAs(outsiderTok)('POST', `${chatBase}/channels/${proj}/messages/${sent.id}/reactions`, { emoji: '👍' });
+  assert.strictEqual(out.status, 403, JSON.stringify(out.json));
+});
+
+test('reactions 404/400: deleted message 404, unknown channel 404, junk emoji still 400 on a real channel', async () => {
+  const ch = await makeChannel(uniqueId('reac404'));
+  const m = await sendChannelMessage(ch.id, 'to be deleted');
+
+  // Deleted message → 404.
+  const del = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${m.id}`);
+  assert.strictEqual(del.status, 200);
+  const gone = await api('POST', `${chatBase}/channels/${ch.id}/messages/${m.id}/reactions`, { emoji: '👍' });
+  assert.strictEqual(gone.status, 404, JSON.stringify(gone.json));
+
+  // Unknown channel → 404 (checked before anything else).
+  const unknownChannel = await api('POST', `${chatBase}/channels/ch-nope/messages/m-bogus999/reactions`, { emoji: '👍' });
+  assert.strictEqual(unknownChannel.status, 404, JSON.stringify(unknownChannel.json));
+
+  // Invalid emoji on a REAL channel → 400 (not 404 — message found first, no
+  // mutation happened on the rejected path).
+  const fresh = await sendChannelMessage(ch.id, 'reaction target');
+  const bad = await api('POST', `${chatBase}/channels/${ch.id}/messages/${fresh.id}/reactions`, { emoji: '🤖' });
+  assert.strictEqual(bad.status, 400, JSON.stringify(bad.json));
+
+  // The rejected attempt must not have mutated the message.
+  const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
+  const row = msgs.json.messages.find((x: any) => x.id === fresh.id);
+  assert.strictEqual(row.reactions, undefined);
+});

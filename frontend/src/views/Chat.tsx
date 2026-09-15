@@ -54,6 +54,7 @@ import {
   updateChatChannelSettings,
   editChatMessage,
   deleteChatMessage,
+  toggleChatReaction,
   listUsers,
   avatarUrl,
   type ChatChannel,
@@ -286,6 +287,87 @@ function MessageStatus({ status }: { status?: TeamChatMessage['status'] }) {
   return null;
 }
 
+const ALL_REACTIONS = ['👍','❤️','😂','🎉','👀','✅','🔥','🙏','👎','😮','💯','🚀'];
+
+function EmojiPicker({ onSelect, onClose }: { onSelect: (emoji: string) => void; onClose: () => void }) {
+  const ref = useEmojiPickerRef(onClose);
+  return (
+    <div class="tchat-emoji-picker" ref={ref} role="listbox" aria-label="Pick a reaction">
+      {ALL_REACTIONS.map((e) => (
+        <button
+          key={e}
+          class="tchat-emoji-option"
+          role="option"
+          aria-label={e}
+          onClick={() => onSelect(e)}
+        >
+          {e}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function useEmojiPickerRef(onClose: () => void) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onDown = (e: MouseEvent) => {
+      if (!el.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [onClose]);
+  return ref;
+}
+
+function MessageReactions({
+  reactions,
+  meId,
+  onToggle,
+  onPicker,
+}: {
+  reactions?: Record<string, string[]>;
+  meId: string;
+  onToggle: (emoji: string) => void;
+  onPicker: () => void;
+}) {
+  const entries = reactions
+    ? Object.entries(reactions).filter(([, ids]) => ids.length > 0).sort((a, b) => b[1].length - a[1].length)
+    : [];
+  return (
+    <div class="tchat-reactions">
+      {entries.map(([emoji, ids]) => {
+        const mine = ids.includes(meId);
+        const count = ids.length;
+        return (
+          <button
+            key={emoji}
+            class={`tchat-reaction-chip${mine ? ' mine' : ''}`}
+            aria-pressed={mine}
+            aria-label={`${emoji} ${count}${mine ? ', you reacted' : ''}`}
+            onClick={() => onToggle(emoji)}
+          >
+            <span class="tchat-reaction-emoji">{emoji}</span>
+            <span class="tchat-reaction-count">{count}</span>
+          </button>
+        );
+      })}
+      <button class="tchat-reaction-add" aria-label="Add reaction" onClick={onPicker} title="Add reaction">
+        <Plus width={12} height={12} />
+      </button>
+    </div>
+  );
+}
+
 export function Chat() {
   const { user } = useAuth();
   const meId = user?.id || '';
@@ -316,6 +398,7 @@ export function Chat() {
   const [deleteMsgTarget, setDeleteMsgTarget] = useState<TeamChatMessage | null>(null);
   const [deletedNotice, setDeletedNotice] = useState('');
   const [lightbox, setLightbox] = useState<{ images: { id: string; name: string }[]; index: number } | null>(null);
+  const [emojiPickerFor, setEmojiPickerFor] = useState<string | null>(null);
 
   // ── Global search (across all channels)
   const [globalOpen, setGlobalOpen] = useState(false);
@@ -333,6 +416,7 @@ export function Chat() {
   const switchChannel = (id: string | null) => {
     setActiveId(id);
     setLightbox(null);
+    setEmojiPickerFor(null);
   };
   
   // ── Voice Recording state
@@ -890,6 +974,27 @@ export function Chat() {
     }
   };
 
+  const doToggleReaction = async (msgId: string, emoji: string) => {
+    if (!activeId) return;
+    // optimistic: toggle locally
+    setMessages((prev) => prev.map((m) => {
+      if (m.id !== msgId) return m;
+      const reactions = { ...(m.reactions || {}) };
+      const ids = reactions[emoji] ? [...reactions[emoji]] : [];
+      const idx = ids.indexOf(meId);
+      if (idx >= 0) ids.splice(idx, 1); else ids.push(meId);
+      if (ids.length) reactions[emoji] = ids; else delete reactions[emoji];
+      return { ...m, reactions };
+    }));
+    try {
+      await toggleChatReaction(activeId, msgId, emoji);
+      // WS message_updated will deliver the authoritative version.
+    } catch (err) {
+      // On failure the WS broadcast of the authoritative state will reconcile.
+      setError(err instanceof Error ? err.message : 'Failed to react');
+    }
+  };
+
   const doSearch = async () => {
     if (!activeId || !searchQ.trim()) return;
     setError('');
@@ -1131,6 +1236,21 @@ export function Chat() {
             {m.attachments && m.attachments.length > 0 && (
               <MessageAttachments message={m} onOpenLightbox={(imgs, i) => setLightbox({ images: imgs, index: i })} />
             )}
+            <MessageReactions
+              reactions={m.reactions}
+              meId={meId}
+              onToggle={(emoji) => void doToggleReaction(m.id, emoji)}
+              onPicker={() => setEmojiPickerFor((cur) => (cur === m.id ? null : m.id))}
+            />
+            {emojiPickerFor === m.id && (
+              <EmojiPicker
+                onSelect={(emoji) => {
+                  setEmojiPickerFor(null);
+                  void doToggleReaction(m.id, emoji);
+                }}
+                onClose={() => setEmojiPickerFor(null)}
+              />
+            )}
             <div class="tchat-msg-time">
               {fmtTime(m.createdAt)}
               {m.editedAt && <span class="tchat-msg-edited" title={`Edited ${new Date(m.editedAt).toLocaleString()}`}>edited</span>}
@@ -1179,7 +1299,7 @@ export function Chat() {
         </div>
       );
     });
-  }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText]);
+  }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText, emojiPickerFor]);
 
   const pinned = useMemo(() => messages.filter((m) => m.pinned), [messages]);
 

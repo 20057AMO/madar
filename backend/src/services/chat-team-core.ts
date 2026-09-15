@@ -37,6 +37,8 @@ export interface TeamMessage {
   status: 'sent' | 'delivered' | 'read';
   /** Users who have read this message. */
   readBy: string[];
+  /** Emoji reactions: whitelisted emoji → user ids who reacted (absent when none). */
+  reactions?: Record<string, string[]>;
 }
 
 export interface ChannelMember {
@@ -68,6 +70,28 @@ export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_MSG_CAP = 500;
 /** Cumulative attachment storage ceiling per channel (disk-exhaustion guard). */
 export const MAX_CHANNEL_ATTACHMENT_BYTES = 500 * 1024 * 1024; // 500 MB per channel
+
+/** The ONLY emoji users may react with — enforced at the normalize boundary. */
+export const ALLOWED_REACTIONS = [
+  '👍',
+  '❤️',
+  '😂',
+  '🎉',
+  '👀',
+  '✅',
+  '🔥',
+  '🙏',
+  '👎',
+  '😮',
+  '💯',
+  '🚀',
+] as const;
+
+export type ReactionEmoji = (typeof ALLOWED_REACTIONS)[number];
+
+/** Distinct reaction types a single message may carry (structural guard —
+ * the whitelist above is narrower today, the cap protects the data shape). */
+export const MAX_REACTION_TYPES = 20;
 /** Restrictive chat id — used in every fs/ws/route key. */
 export const CHANNEL_ID_RE = /^[a-z0-9._:-]{1,72}$/;
 export const MESSAGE_ID_RE = /^m-[a-z0-9-]{1,48}$/;
@@ -147,6 +171,84 @@ export function normalizeEditMessage(raw: unknown): { text: string; mentions: st
   const text = sanitizePlain(body.text, MAX_TEXT_CHARS);
   if (!text) return null;
   return { text, mentions: parseMentions(text) };
+}
+
+/** Whitelist-gate an inbound reaction emoji — anything not in
+ * ALLOWED_REACTIONS (non-string, junk, unknown emoji) → null so the caller
+ * can 400. This is the ONLY point the whitelist is enforced. */
+export function normalizeReaction(emoji: unknown): ReactionEmoji | null {
+  if (typeof emoji !== 'string') return null;
+  return (ALLOWED_REACTIONS as readonly string[]).includes(emoji) ? (emoji as ReactionEmoji) : null;
+}
+
+/**
+ * Pure reaction toggle — NEVER mutates the input. Returns:
+ *  - a NEW map with `userId` added to / removed from the emoji's user list
+ *    (empty keys are dropped as they form, insertion order preserved),
+ *  - undefined when the map became completely empty (the caller should then
+ *    drop the reactions field entirely — an empty map is the absence of data),
+ *  - the SAME reference when the toggle is refused (MAX_REACTION_TYPES distinct
+ *    types already present and the emoji is a NEW type) — nothing changed and
+ *    nothing needs persisting.
+ */
+export function toggleReaction(
+  reactions: Record<string, string[]> | undefined,
+  emoji: ReactionEmoji,
+  userId: string
+): Record<string, string[]> | undefined {
+  const current = reactions || {};
+  const existing = current[emoji];
+  if (Array.isArray(existing)) {
+    if (existing.includes(userId)) {
+      // Toggle-off: rebuild in insertion order, dropping the key when empty.
+      const users = existing.filter((u) => u !== userId);
+      const next: Record<string, string[]> = {};
+      for (const [key, list] of Object.entries(current)) {
+        if (key === emoji) {
+          if (users.length > 0) next[key] = users;
+        } else {
+          next[key] = list;
+        }
+      }
+      return Object.keys(next).length > 0 ? next : undefined;
+    }
+    // Key exists but user is absent — add them (no cap check: not a new type).
+    const next: Record<string, string[]> = {};
+    for (const [key, list] of Object.entries(current)) next[key] = list;
+    next[emoji] = [...existing, userId];
+    return next;
+  }
+  // Cap: a NEW type is refused once the distinct-type ceiling is reached —
+  // existing types keep toggling (removals are always allowed).
+  if (Object.keys(current).length >= MAX_REACTION_TYPES) return current;
+  const next: Record<string, string[]> = {};
+  for (const [key, list] of Object.entries(current)) next[key] = list;
+  next[emoji] = [userId];
+  return next;
+}
+
+/** One ranked reaction row for display. */
+export interface ReactionCount {
+  emoji: ReactionEmoji;
+  count: number;
+  users: string[];
+}
+
+/**
+ * Rank reactions for the UI: highest count first, ties in insertion order
+ * (Array#sort is stable, so Object.entries order — which toggleReaction keeps
+ * as first-appearance order — survives). Defensive: non-whitelisted keys and
+ * non-array user lists are skipped; user arrays are copied, never shared.
+ */
+export function sortReactions(reactions: Record<string, string[]> | undefined): ReactionCount[] {
+  if (!reactions) return [];
+  const out: ReactionCount[] = [];
+  for (const [emoji, users] of Object.entries(reactions)) {
+    const norm = normalizeReaction(emoji);
+    if (!norm || !Array.isArray(users)) continue;
+    out.push({ emoji: norm, count: users.length, users: users.slice() });
+  }
+  return out.sort((a, b) => b.count - a.count);
 }
 
 /** Edit permission — message authors only (channel roles never widen this). */
