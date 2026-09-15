@@ -24,15 +24,20 @@ const BOT_REPLY_COOLDOWN_MS = 10_000;
 /** Min gap between two bot NOTICES in the same channel. */
 const BOT_NOTICE_COOLDOWN_MS = 5 * 60_000;
 /** A generation that outlives this is aborted and reported as a timeout. */
-const BOT_TIMEOUT_MS = 60_000;
+export const BOT_TIMEOUT_MS = 60_000;
 /** Cap an LLM reply. */
 const BOT_MAX_REPLY_CHARS = 4000;
 /** Partial text this short+ errored is never worth publishing. */
-const BOT_MIN_PARTIAL_CHARS = 40;
+export const BOT_MIN_PARTIAL_CHARS = 40;
 /** Marker appended when an errored partial reply is published anyway. */
 const BOT_STOP_MARKER = '\n\n― generation stopped';
 /** Global concurrent generations across ALL channels. */
 const BOT_MAX_CONCURRENT = 3;
+/** Per-user generation budget (on top of the global cap): at most this many
+ *  generation ATTEMPTS per user inside the rolling window — successes and
+ *  failures alike, so a spamming user burns their budget either way. */
+export const BOT_USER_BUDGET_MAX = 5;
+export const BOT_USER_BUDGET_WINDOW_MS = 60_000;
 
 /** Bot replies only in team rooms — never in direct 1:1 chats. */
 const BOT_CHANNEL_KINDS = new Set(['channel', 'project']);
@@ -214,6 +219,21 @@ export async function maybeInvokeBot(
     const lastReply = state.lastReplyAt.get(channelId) ?? null;
     if (lastReply !== null && Date.now() - lastReply < BOT_REPLY_COOLDOWN_MS) return;
 
+    // Per-user generation budget (5 attempts / rolling 60s window) — the extra
+    // layer under the global 3-cap: one user can no longer occupy all three
+    // concurrent slots forever. Attempts are counted BEFORE the generation runs
+    // (successes and failures both consume a slot).
+    const userId = message.userId;
+    if (userId) {
+      const now = Date.now();
+      const recent = (state.userGenerationAt.get(userId) ?? []).filter(
+        (t) => now - t < BOT_USER_BUDGET_WINDOW_MS
+      );
+      if (recent.length >= BOT_USER_BUDGET_MAX) return;
+      recent.push(now);
+      state.userGenerationAt.set(userId, recent);
+    }
+
     state.channelLocks.add(channelId);
     state.active += 1;
     try {
@@ -233,6 +253,8 @@ export interface InvocationState {
   channelLocks: Set<string>;
   lastReplyAt: Map<string, number>;
   lastNoticeAt: Map<string, number>;
+  /** Per-user recent generation timestamps (rolling window for the budget). */
+  userGenerationAt: Map<string, number[]>;
   active: number;
 }
 
@@ -242,6 +264,7 @@ export function createInvocationState(): InvocationState {
     channelLocks: new Set(),
     lastReplyAt: new Map(),
     lastNoticeAt: new Map(),
+    userGenerationAt: new Map(),
     active: 0,
   };
 }
@@ -264,6 +287,13 @@ async function runGeneration(
 
   const finishDone = async (full: string): Promise<void> => {
     if (posted) return;
+    if (timedOut) {
+      // The stream actually delivered a full reply but only AFTER the abort
+      // fired — the timeout notice is the single, honest outcome. Never both.
+      await sendBotNotice(runtime, channelId, 'timeout', state, channel);
+      posted = true;
+      return;
+    }
     const reply = sanitizeBotReply(full, BOT_MAX_REPLY_CHARS);
     if (!reply) {
       await sendBotNotice(runtime, channelId, 'empty_reply', state, channel);
@@ -276,6 +306,13 @@ async function runGeneration(
 
   const finishError = async (): Promise<void> => {
     if (posted) return;
+    if (timedOut) {
+      // Timeout wins over partial salvage — exactly ONE timeout notice, the
+      // mid-abort partial text is never published as a second message.
+      await sendBotNotice(runtime, channelId, 'timeout', state, channel);
+      posted = true;
+      return;
+    }
     const partialText = partial.trim();
     if (partialText.length >= BOT_MIN_PARTIAL_CHARS) {
       // Enough already generated — publish it with an honest stop marker.
@@ -294,6 +331,9 @@ async function runGeneration(
   };
 
   try {
+    // Pre-stream phase — hasUsableProvider, message read, system prompt. Any
+    // throw here (deformed provider config, fs error, …) must surface as the
+    // SAME 'unavailable' notice as a missing provider — never an empty silence.
     if (!runtime.hasUsableProvider()) {
       await sendBotNotice(runtime, channelId, 'unavailable', state, channel);
       return;
@@ -304,6 +344,9 @@ async function runGeneration(
       if (partial.length < BOT_MAX_REPLY_CHARS) partial += text;
     };
     timer = setTimeout(() => {
+      // The timer only MARKS + ABORTS — it never posts. The single post
+      // decision happens in finishDone/finishError once the stream settles,
+      // so a user can never see two messages (timeout notice + partial).
       timedOut = true;
       control.cancelled = true;
       try {
@@ -311,7 +354,6 @@ async function runGeneration(
       } catch {
         /* best-effort abort */
       }
-      void sendBotNotice(runtime, channelId, 'timeout', state, channel).catch(() => {});
     }, BOT_TIMEOUT_MS);
 
     const result = await runtime
@@ -329,14 +371,19 @@ async function runGeneration(
       .then(async () => {
         if (donePromise) await donePromise;
         if (errorPromise) await errorPromise;
-        if (!posted && !timedOut) {
-          // Engine returned without onDone and never threw — empty reply.
-          await sendBotNotice(runtime, channelId, 'empty_reply', state, channel);
+        if (!posted) {
+          // The stream settled without onDone and without throwing — an empty
+          // reply (or a timeout that never reached a finish path). Either way
+          // exactly one notice.
+          await sendBotNotice(runtime, channelId, timedOut ? 'timeout' : 'empty_reply', state, channel);
         }
       });
     void result;
   } catch {
-    // Belt & suspenders — nothing here may reach the message-send path.
+    // Pre-stream failure (buildSystemPrompt throw, store error, …) — the same
+    // degraded path as hasUsableProvider: a cooldown-aware 'unavailable'
+    // notice, never a silent dead end.
+    await sendBotNotice(runtime, channelId, 'unavailable', state, channel).catch(() => {});
   } finally {
     if (timer) { clearTimeout(timer); timer = null; }
     runtime.typing(channelId, false);

@@ -825,7 +825,9 @@ app.get('/api/chat/info', async (_req, res) => {
 });
 
 // Update chat configuration (provider / model / language / system prompt / temperature)
-app.post('/api/chat/config', (req, res) => {
+// Admin-only: the global chat config steers the LLM for EVERY user + the @madar
+// bot — changing the provider/model/system prompt is a platform-level decision.
+app.post('/api/chat/config', requireAdmin, (req, res) => {
   try {
     const { provider, model, systemPrompt, language, temperature } = req.body || {};
     const patch: Partial<ChatConfig> = {};

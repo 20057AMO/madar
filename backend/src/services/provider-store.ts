@@ -223,12 +223,19 @@ export function getProviderMeta(id: string): ProviderMeta | null {
   return listProviders().find((p) => p.id === id) || null;
 }
 
-/** Resolve a provider config by id; falls back to the first available provider. */
+/**
+ * Resolve a provider config by id.
+ * A DISABLED provider is treated like a missing one — the admin turned it off,
+ * so it must never be called with its stored key (paid spend on a provider the
+ * operator stopped). Resolution falls back to the first ENABLED provider (the
+ * same fallback all chat/agent surfaces already rely on after a provider
+ * delete); 503 when NO provider is enabled at all.
+ */
 export function getProviderConfig(id: string): ProviderConfig {
   const cfg = load();
-  if (owns(cfg, id)) return { ...cfg[id], apiKey: openSecret(cfg[id].apiKey) };
-  const fallback = Object.values(cfg).find((p) => p.enabled) || Object.values(cfg)[0];
-  if (!fallback) throwStatus(500, 'No providers configured');
+  if (owns(cfg, id) && cfg[id].enabled) return { ...cfg[id], apiKey: openSecret(cfg[id].apiKey) };
+  const fallback = Object.values(cfg).find((p) => p.enabled);
+  if (!fallback) throwStatus(503, 'No enabled providers available');
   return { ...fallback, apiKey: openSecret(fallback.apiKey) };
 }
 

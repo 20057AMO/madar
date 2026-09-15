@@ -160,3 +160,38 @@ test("the 'madar' username is reserved for the bot (POST /api/users → 400)", a
     assert.ok(/reserved/i.test(String(body.error || '')), `expected a reserved error, got ${JSON.stringify(body)}`);
   }
 });
+
+test('chat config is admin-only — a non-admin editor is 403 on POST /api/chat/config', async () => {
+  // The @madar bot reads the GLOBAL chat config (provider / model / system
+  // prompt) — its content steers every user's LLM, so changing it can never be
+  // open to editors. This gates the config the bot's hasUsableProvider resolves.
+  const editor = await makeEditor();
+
+  // Snapshot the current config so the admin-write restore is exact.
+  const before = await reqAuth('GET', '/chat/info');
+  assert.ok(before.ok, 'chat info must be readable');
+  const cfgBefore = await before.json();
+
+  try {
+    const denied = await asUser(editor.token, 'POST', '/chat/config', {
+      provider: 'ollama',
+      model: 'unused-model',
+    });
+    assert.strictEqual(denied.status, 403, `non-admin chat-config write must be forbidden, got ${denied.status}`);
+
+    // Admin can still write (no error path).
+    const admin = await reqAuth('POST', '/chat/config', {
+      language: 'en',
+    });
+    assert.ok([200, 201].includes(admin.status), `admin chat-config write must succeed, got ${admin.status}`);
+  } finally {
+    // Restore the exact previous provider/model/language/systemPrompt/temperature.
+    await reqAuth('POST', '/chat/config', {
+      provider: cfgBefore.provider,
+      model: cfgBefore.model,
+      language: cfgBefore.language,
+      systemPrompt: cfgBefore.systemPrompt,
+      temperature: cfgBefore.temperature,
+    }).catch(() => {});
+  }
+});
