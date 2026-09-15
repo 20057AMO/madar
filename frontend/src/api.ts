@@ -1509,6 +1509,36 @@ export function revokeChatAttachmentObjectUrl(attachmentId: string) {
   }
 }
 
+const chatAttachmentTextCache = new Map<string, Promise<string>>();
+/**
+ * Fetch an authenticated attachment's raw text (code/text previews).
+ * Cached per attachment id so a folded/unfolded preview never re-downloads;
+ * the eviction caps the cache at 20 so a busy channel can't leak memory.
+ */
+export function chatAttachmentText(attachmentId: string): Promise<string> {
+  const hit = chatAttachmentTextCache.get(attachmentId);
+  if (hit) {
+    // True LRU: touching an entry re-inserts it at the tail so the oldest
+    // (least recently used) entry is the one evicted when the cap is hit.
+    chatAttachmentTextCache.delete(attachmentId);
+    chatAttachmentTextCache.set(attachmentId, hit);
+    return hit;
+  }
+  const p = fetch(chatAttachmentUrl(attachmentId), {
+    headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
+  }).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.text();
+  });
+  if (chatAttachmentTextCache.size >= 20) {
+    const first = chatAttachmentTextCache.keys().next().value;
+    if (first) chatAttachmentTextCache.delete(first);
+  }
+  chatAttachmentTextCache.set(attachmentId, p);
+  p.catch(() => chatAttachmentTextCache.delete(attachmentId));
+  return p;
+}
+
 /** Current online team-chat users (labels only). */
 export interface ChatPresenceUser {
   userId: string;

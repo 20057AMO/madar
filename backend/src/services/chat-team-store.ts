@@ -11,6 +11,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { randomBytes } from 'crypto';
 
 import { withFileLockAsync } from './write-queue';
 import {
@@ -37,7 +38,7 @@ function channelsFileEmpty(): string {
 }
 
 export function genId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`;
 }
 
 function messagesFile(channelId: string): string {

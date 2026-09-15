@@ -432,15 +432,7 @@
   display: block;
   object-fit: cover;
 }
-.tchat-attachment-file {
-  font-size: 0.72rem;
-  padding: 6px 10px;
-  background: var(--panel-2);
-  border-radius: 8px;
-  display: inline-flex;
-}
 .tchat-empty-msg { align-self: center; color: var(--text-2); font-size: 0.78rem; padding: 30px 0; }
-
 .tchat-typing {
   display: flex;
   align-items: center;
@@ -469,7 +461,19 @@
   border-radius: 8px;
 }
 .tchat-composer-att { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; }
-.tchat-x { background: transparent; border: none; color: var(--text-3); cursor: pointer; padding: 2px; border-radius: 4px; }
+.tchat-x {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 .tchat-x:hover { color: var(--text); }
 .tchat-textarea {
   flex: 1;
@@ -613,4 +617,230 @@
   background: var(--red) !important;
   color: white !important;
   animation: vn-pulse 1s infinite;
+}
+
+/* ── Attachment grid (2+ images) ─────────────────────────────── */
+.tchat-attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  max-width: min(320px, 100%);
+  margin-top: 6px;
+}
+.tchat-grid-item {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 0;
+}
+.tchat-grid-item:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.tchat-grid-item img {
+  width: 100%;
+  max-height: 150px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  display: block;
+}
+.tchat-grid-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 8px; }
+.tchat-img-btn {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.tchat-img-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 8px; }
+
+/* ── File attachment cards (non-image, non-voice) ────────────── */
+.tchat-attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(320px, 100%);
+  font-size: 0.72rem;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.tchat-fico { flex-shrink: 0; }
+.tchat-fico-code { color: var(--green); }
+.tchat-fico-text, .tchat-fico-pdf { color: var(--text-2); }
+.tchat-fico-archive { color: var(--yellow); }
+.tchat-fico-image { color: var(--blue); }
+.tchat-fico-audio { color: var(--green); }
+.tchat-fico-video { color: var(--blue); }
+.tchat-fico-file { color: var(--text-3); }
+.tchat-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tchat-file-size { flex-shrink: 0; }
+.tchat-preview-btn {
+  background: transparent;
+  border: 1px solid var(--border-2);
+  color: var(--text-2);
+  font-size: 0.66rem;
+  line-height: 1.4;
+  border-radius: 5px;
+  padding: 3px 10px;
+  min-height: 24px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tchat-preview-btn:hover { color: var(--text); border-color: var(--text-3); }
+.tchat-preview-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-preview-btn:disabled { opacity: 0.55; cursor: default; }
+.tchat-preview-btn[aria-expanded='true'] { color: var(--accent); border-color: var(--text-3); }
+.tchat-preview-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.66rem;
+  color: var(--text-3);
+  margin-top: 4px;
+  min-height: 24px;
+}
+.tchat-preview-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.66rem;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.tchat-preview-too-big { font-size: 0.66rem; flex-shrink: 0; }
+.tchat-file-preview {
+  margin: 6px 0 2px;
+  max-width: min(320px, 100%);
+  max-height: 300px;
+  overflow: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: isolate;
+}
+.tchat-file-preview:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* ── Image lightbox ──────────────────────────────────────────── */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lightbox-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 94vw;
+  max-height: 92vh;
+}
+.lightbox-img {
+  max-width: min(92vw, 1200px);
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+  background: #000;
+  display: block;
+}
+.lightbox-loading {
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+}
+.lightbox-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: 0.8rem;
+}
+.lightbox-retry {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 14px;
+  min-height: 24px;
+  font-size: 0.75rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.lightbox-retry:hover { background: rgba(255, 255, 255, 0.22); }
+.lightbox-retry:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.lightbox-caption {
+  position: absolute;
+  bottom: -34px;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--text);
+  padding: 4px 12px;
+}
+.lightbox-name {
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.lightbox-caption .dim { color: var(--text-3); }
+.lightbox-close,
+.lightbox-nav {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #fff;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1;
+}
+.lightbox-close:hover,
+.lightbox-nav:hover { background: rgba(255, 255, 255, 0.22); }
+.lightbox-close:focus-visible,
+.lightbox-nav:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.lightbox-close { top: 14px; right: 14px; }
+.lightbox-prev { left: 14px; top: 50%; transform: translateY(-50%); }
+.lightbox-next { right: 14px; top: 50%; transform: translateY(-50%); }
+@media (max-width: 640px) {
+  .lightbox-prev { left: 8px; }
+  .lightbox-next { right: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-close, .lightbox-nav { transition: none; }
 }

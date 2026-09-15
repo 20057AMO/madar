@@ -27,6 +27,13 @@ import {
   Settings,
   Pencil,
   Trash2,
+  File as FileIcon,
+  FileCode2,
+  FileText,
+  FileArchive,
+  FileImage,
+  FileAudio,
+  FileVideo,
 } from 'lucide-preact';
 import {
   listChatChannels,
@@ -41,6 +48,7 @@ import {
   uploadChatAttachment,
   chatAttachmentObjectUrl,
   revokeChatAttachmentObjectUrl,
+  chatAttachmentText,
   searchChatMessages,
   updateChatChannelSettings,
   editChatMessage,
@@ -49,12 +57,15 @@ import {
   avatarUrl,
   type ChatChannel,
   type TeamChatMessage,
+  type ChatAttachment,
 } from '../api';
 import { Avatar } from '../components/Avatar';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { VoiceNotePlayer } from '../components/VoiceNotePlayer';
+import { AttachmentLightbox } from '../components/AttachmentLightbox';
 import { useTeamChatSocket, type ChatSocketEvent } from '../useTeamChatSocket';
 import { renderTeamMarkdown } from '../lib/markdown';
+import { attachmentGroup, attachmentIcon, previewability } from '../lib/attachment-types';
 import '../tchat.css';
 
 interface ChatPresenceUser {
@@ -135,6 +146,117 @@ function AttachImage({ id, alt }: { id: string; alt: string }) {
   return <img class="tchat-attachment-img" src={url} alt={alt} loading="lazy" />;
 }
 
+const FICO_BY_NAME: Record<string, any> = {
+  FileCode2, FileText, FileArchive, FileImage, FileAudio, FileVideo, FileIcon,
+};
+
+/** Non-image attachment card: group icon + name + size + optional text preview. */
+function FileAttachmentCard({ attachment }: { attachment: ChatAttachment }) {
+  const group = attachmentGroup(attachment.name, attachment.kind);
+  const iconName = attachmentIcon(group);
+  const Fico = FICO_BY_NAME[iconName] || FileIcon;
+  const pref = previewability(attachment.name, attachment.size);
+  const [preview, setPreview] = useState<{ state: '' | 'loading' | 'ready' | 'error'; text: string }>({ state: '', text: '' });
+
+  const togglePreview = () => {
+    // Folded back — collapse without re-fetching (the text cache in api.ts
+    // would reuse the promise anyway; the module cache never re-downloads).
+    if (preview.state === 'ready') {
+      setPreview({ state: '', text: '' });
+      return;
+    }
+    if (preview.state === 'loading') return;
+    setPreview({ state: 'loading', text: '' });
+    chatAttachmentText(attachment.id)
+      .then((text) => setPreview({ state: 'ready', text }))
+      .catch(() => setPreview({ state: 'error', text: '' }));
+  };
+
+  return (
+    <div class="tchat-attachment">
+      <div class="tchat-attachment-file">
+        <Fico width={14} height={14} class={`tchat-fico tchat-fico-${group}`} />
+        <span class="tchat-file-name" title={attachment.name}>{attachment.name}</span>
+        <span class="dim tchat-file-size">{fmtBytes(attachment.size)}</span>
+        {pref === 'ok' ? (
+          <button
+            class="tchat-preview-btn"
+            onClick={togglePreview}
+            disabled={preview.state === 'loading'}
+            aria-expanded={preview.state === 'ready'}
+            aria-controls={`prev-${attachment.id}`}
+          >
+            Preview
+          </button>
+        ) : pref === 'too-big' ? (
+          <span class="dim tchat-preview-too-big" title="File too large to preview">Too large</span>
+        ) : null}
+      </div>
+      {pref === 'ok' && (
+        <div class="tchat-preview-status" role="status" aria-live="polite">
+          {preview.state === 'loading' && <>loading…</>}
+          {preview.state === 'error' && (
+            <button class="tchat-preview-btn" onClick={togglePreview} aria-label="Retry preview">Error · Retry</button>
+          )}
+        </div>
+      )}
+      {preview.state === 'ready' && preview.text !== '' && (
+        <pre
+          id={`prev-${attachment.id}`}
+          class="tchat-file-preview"
+          tabIndex={0}
+          role="region"
+          aria-label="File preview"
+        >{preview.text}</pre>
+      )}
+    </div>
+  );
+}
+
+/** Message attachment block — images grid/single + voice-first file cards. */
+function MessageAttachments({ message, onOpenLightbox }: {
+  message: TeamChatMessage;
+  onOpenLightbox: (images: { id: string; name: string }[], index: number) => void;
+}) {
+  const atts = message.attachments || [];
+  const images = atts.filter((a) => a.kind === 'image');
+  const rest = atts.filter((a) => a.kind !== 'image');
+  return (
+    <>
+      {images.length >= 2 && (
+        <div class="tchat-attachment-grid">
+          {images.map((img, i) => (
+            <button
+              class="tchat-grid-item"
+              key={img.id}
+              aria-label={`Open image ${i + 1}: ${img.name}`}
+              onClick={() => onOpenLightbox(images, i)}
+            >
+              <AttachImage id={img.id} alt={img.name} />
+            </button>
+          ))}
+        </div>
+      )}
+      {images.length === 1 && (
+        <div class="tchat-attachment">
+          <button class="tchat-img-btn" aria-label={`Open image: ${images[0].name}`} onClick={() => onOpenLightbox(images, 0)}>
+            <AttachImage id={images[0].id} alt={images[0].name} />
+          </button>
+        </div>
+      )}
+      {rest.map((a) =>
+        /\.(webm|ogg|oga|m4a|mp3|wav)$/i.test(a.name || '') ? (
+          <div class="tchat-attachment" key={a.id}>
+            <VoiceNotePlayer attachmentId={a.id} attachmentName={a.name} />
+          </div>
+        ) : (
+          <FileAttachmentCard key={a.id} attachment={a} />
+        )
+      )}
+    </>
+  );
+}
+
 function MessageStatus({ status }: { status?: TeamChatMessage['status'] }) {
   if (!status) return null;
   if (status === 'sent') return <Check width={12} height={12} class="tchat-msg-status" />;
@@ -172,6 +294,15 @@ export function Chat() {
   const [editText, setEditText] = useState('');
   const [deleteMsgTarget, setDeleteMsgTarget] = useState<TeamChatMessage | null>(null);
   const [deletedNotice, setDeletedNotice] = useState('');
+  const [lightbox, setLightbox] = useState<{ images: { id: string; name: string }[]; index: number } | null>(null);
+
+  // Channel switches close any open lightbox SYNCHRONOUSLY — a delayed effect
+  // would retire the image URL after the messages already unmounted, leaving
+  // the overlay on a revoked/blobless broken frame.
+  const switchChannel = (id: string | null) => {
+    setActiveId(id);
+    setLightbox(null);
+  };
   
   // ── Voice Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -325,6 +456,9 @@ export function Chat() {
     void load();
     return () => { cancelled = true; };
   }, []);
+
+  // Switching channels (above, in the rail/handlers) closes the lightbox —
+  // synchronously, inside switchChannel, not via a delayed effect.
 
   // ── activate channel: subscribe + REST detail + history
   useEffect(() => {
@@ -580,7 +714,7 @@ export function Chat() {
     try {
       const { channel } = await createChatChannel(name);
       setChannels((prev) => [...prev, channel as unknown as ChatChannel]);
-      setActiveId(channel.id);
+      switchChannel(channel.id);
       setCreateOpen(false);
       setNewChannelName('');
     } catch (err) {
@@ -596,7 +730,7 @@ export function Chat() {
         if (prev.some((c) => c.id === channel.id)) return prev;
         return [...prev, channel as unknown as ChatChannel];
       });
-      setActiveId(channel.id);
+      switchChannel(channel.id);
       setDirectOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to open conversation');
@@ -614,7 +748,7 @@ export function Chat() {
         return rest;
       });
       if (activeId === deleteTarget.id) {
-        setActiveId(rest[0]?.id || null);
+        switchChannel(rest[0]?.id || null);
       }
       setDeleteTarget(null);
     } catch (err) {
@@ -914,20 +1048,9 @@ export function Chat() {
                 />
               )
             )}
-            {m.attachments?.map((a) => (
-              <div key={a.id} class="tchat-attachment">
-                {a.kind === 'image' ? (
-                  <AttachImage id={a.id} alt={a.name} />
-                ) : /\.(webm|ogg|oga|m4a|mp3|wav)$/i.test(a.name || '') ? (
-                  <VoiceNotePlayer attachmentId={a.id} attachmentName={a.name} />
-                ) : (
-                  <div class="tchat-attachment-file">
-                    <Paperclip width={12} height={12} style="margin-right:6px" />
-                    {a.name} <span class="dim" style="margin-left:6px">{fmtBytes(a.size)}</span>
-                  </div>
-                )}
-              </div>
-            ))}
+            {m.attachments && m.attachments.length > 0 && (
+              <MessageAttachments message={m} onOpenLightbox={(imgs, i) => setLightbox({ images: imgs, index: i })} />
+            )}
             <div class="tchat-msg-time">
               {fmtTime(m.createdAt)}
               {m.editedAt && <span class="tchat-msg-edited" title={`Edited ${new Date(m.editedAt).toLocaleString()}`}>edited</span>}
@@ -1041,11 +1164,11 @@ export function Chat() {
               >
                 <div
                   class={`tchat-channel-row${isActive ? ' active' : ''}${c.unread ? ' unread' : ''}`}
-                  onClick={() => setActiveId(c.id)}
+                  onClick={() => switchChannel(c.id)}
                   role="button"
                   tabIndex={0}
                   aria-label={c.unread ? `${label}, ${c.unread} unread messages` : label}
-                  onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveId(c.id); } }}
+                  onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchChannel(c.id); } }}
                 >
                   <span class="tchat-channel-icon">
                     {c.kind === 'project' ? <FolderOpen width={15} height={15} /> : c.kind === 'direct' ? <UserIcon width={15} height={15} /> : <Hash width={15} height={15} />}
@@ -1433,6 +1556,16 @@ export function Chat() {
         onCancel={() => setDeleteMsgTarget(null)}
         message="This message will be permanently deleted. This cannot be undone."
       />
+
+      {/* attachment lightbox */}
+      {lightbox && (
+        <AttachmentLightbox
+          images={lightbox.images}
+          index={lightbox.index}
+          onClose={() => setLightbox(null)}
+          onIndexChange={(i) => setLightbox((lb) => (lb ? { ...lb, index: i } : lb))}
+        />
+      )}
     </div>
   );
 }
