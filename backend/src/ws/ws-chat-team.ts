@@ -16,6 +16,10 @@
  * Protocol (server → client, JSON):
  *   { type: "subscribed", channelId, messages }   → replay (latest ≤100) on join
  *   { type: "message", channel, message }         → live broadcast
+ *   { type: "chat_bump", channelId, message }     → compact mini-notification (id/author/preview)
+ *                                                  for a message in a channel the receiving
+ *                                                  socket did NOT subscribe to — fanned to
+ *                                                  every socket that can access the channel
  *   { type: "message_updated", channelId, message } → edit broadcast (REST PUT)
  *   { type: "message_deleted", channelId, msgId }   → delete broadcast (REST DELETE)
  *   { type: "typing", channelId, user }           → typing indicator
@@ -75,6 +79,42 @@ function broadcastToChannel(channelId: string, payload: unknown): void {
 /** Push a new chat message to every socket subscribed to the channel. */
 export function broadcastChatMessage(channel: TeamChannel, message: unknown): void {
   broadcastToChannel(channel.id, { type: 'message', channel, message });
+}
+
+/**
+ * Push a compact "new message elsewhere" mini-notification to EVERY connected
+ * team-chat socket whose user can see the channel — the `message` broadcast
+ * above is subscriber-scoped, so a message landing in a channel the client did
+ * NOT open would otherwise never reach it live (unread badges would freeze).
+ * The bump is intentionally tiny (id/author/80-char preview — never the full
+ * channel/message payload) and rides the exact same canAccessChannel rule as
+ * every other surface, so it adds no new attack surface. The sender's own
+ * sockets are skipped: a user never needs a notification about their own
+ * message (the tab they sent from already holds the live `message` frame).
+ */
+export function broadcastChatBump(user: ChatUser, channel: TeamChannel, message: unknown): void {
+  const m = message as {
+    id?: string;
+    userId?: string;
+    username?: string;
+    text?: string;
+    createdAt?: string;
+  };
+  const payload = {
+    type: 'chat_bump',
+    channelId: channel.id,
+    message: {
+      id: m.id,
+      userId: m.userId,
+      username: m.username,
+      text: String(m.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 80),
+      createdAt: m.createdAt,
+    },
+  };
+  for (const client of clients.values()) {
+    if (client.user.id === user.id) continue;
+    if (canAccessChannel(client.user, channel) !== 'none') send(client.ws, payload);
+  }
 }
 
 /** Push a message text edit to every socket subscribed to the channel. */

@@ -5,7 +5,8 @@
  * direct 1:1 conversations. Text is sent over REST (single authoritative
  * write path); the WebSocket delivers live messages/typing/read/pin/presence.
  */
-import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'preact/hooks';
+import { Fragment } from 'preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { useAuth } from '../auth';
 import {
@@ -34,6 +35,12 @@ import {
   FileImage,
   FileAudio,
   FileVideo,
+  Menu,
+  ChevronLeft,
+  ChevronRight,
+  ArrowDownToLine,
+  Volume2,
+  VolumeX,
 } from 'lucide-preact';
 import {
   listChatChannels,
@@ -69,6 +76,8 @@ import { AttachmentLightbox } from '../components/AttachmentLightbox';
 import { useTeamChatSocket, type ChatSocketEvent } from '../useTeamChatSocket';
 import { renderTeamMarkdown } from '../lib/markdown';
 import { attachmentGroup, attachmentIcon, previewability } from '../lib/attachment-types';
+import { daySeparatorKey, formatDayLabel, shouldGroup } from '../lib/chat-format';
+import { useDocumentVisible } from '../lib/visibility';
 import '../tchat.css';
 
 interface ChatPresenceUser {
@@ -115,8 +124,17 @@ function fmtBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function reducedMotion(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function snippetHtml(text: string, q: string, max = 140): string {
@@ -281,9 +299,9 @@ function MessageAttachments({ message, onOpenLightbox }: {
 
 function MessageStatus({ status }: { status?: TeamChatMessage['status'] }) {
   if (!status) return null;
-  if (status === 'sent') return <Check width={12} height={12} class="tchat-msg-status" />;
-  if (status === 'delivered') return <CheckCheck width={12} height={12} class="tchat-msg-status" />;
-  if (status === 'read') return <CheckCheck width={12} height={12} class="tchat-msg-status read" />;
+  if (status === 'sent') return <Check width={12} height={12} class="tchat-msg-status" role="img" aria-label="Sent" />;
+  if (status === 'delivered') return <CheckCheck width={12} height={12} class="tchat-msg-status" role="img" aria-label="Delivered" />;
+  if (status === 'read') return <CheckCheck width={12} height={12} class="tchat-msg-status read" role="img" aria-label="Read" />;
   return null;
 }
 
@@ -292,12 +310,11 @@ const ALL_REACTIONS = ['👍','❤️','😂','🎉','👀','✅','🔥','🙏',
 function EmojiPicker({ onSelect, onClose }: { onSelect: (emoji: string) => void; onClose: () => void }) {
   const ref = useEmojiPickerRef(onClose);
   return (
-    <div class="tchat-emoji-picker" ref={ref} role="listbox" aria-label="Pick a reaction">
+    <div class="tchat-emoji-picker" ref={ref} role="group" aria-label="Pick a reaction">
       {ALL_REACTIONS.map((e) => (
         <button
           key={e}
           class="tchat-emoji-option"
-          role="option"
           aria-label={e}
           onClick={() => onSelect(e)}
         >
@@ -368,6 +385,66 @@ function MessageReactions({
   );
 }
 
+/** Local matchMedia hook — re-renders on breakpoint changes. */
+function useMediaQuery(query: string, initial = false): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(query).matches : initial
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = () => setMatches(mq.matches);
+    setMatches(mq.matches);
+    mq.addEventListener?.('change', onChange);
+    if (!mq.addEventListener) mq.addListener?.(onChange);
+    return () => {
+      mq.removeEventListener?.('change', onChange);
+      if (!mq.removeEventListener) mq.removeListener?.(onChange);
+    };
+  }, [query]);
+  return matches;
+}
+
+// ── Notification sound (short oscillator blip). Lazily created so the
+// AudioContext costs nothing until the first message, and the context is
+// unlocked by the first pointer/key interaction (browser autoplay policy).
+let chatAudioCtx: AudioContext | null = null;
+let lastSoundPlayedAt = 0;
+const SOUND_MIN_GAP_MS = 500;
+function getChatAudioCtx(): AudioContext | null {
+  if (!chatAudioCtx) {
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return null;
+    chatAudioCtx = new AC();
+  }
+  if (chatAudioCtx.state === 'suspended') void chatAudioCtx.resume();
+  return chatAudioCtx;
+}
+function playChatSound(): void {
+  try {
+    // Throttle: never fire two notification blips within 500ms — a burst of
+    // messages (or a cross-channel chat_bump storm) must not machine-gun.
+    const now = Date.now();
+    if (now - lastSoundPlayedAt < SOUND_MIN_GAP_MS) return;
+    lastSoundPlayedAt = now;
+    const ctx = getChatAudioCtx();
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, t);
+    osc.frequency.setValueAtTime(660, t + 0.09);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.12, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.26);
+  } catch {
+    /* sound is best-effort — never break chat over a blocked AudioContext */
+  }
+}
+
 export function Chat() {
   const { user } = useAuth();
   const meId = user?.id || '';
@@ -400,6 +477,38 @@ export function Chat() {
   const [lightbox, setLightbox] = useState<{ images: { id: string; name: string }[]; index: number } | null>(null);
   const [emojiPickerFor, setEmojiPickerFor] = useState<string | null>(null);
 
+  // ── Responsive layout: drawer rail on phones, collapsible rail on tablets
+  const isTablet = useMediaQuery('(max-width: 1023px)');
+  const isPhone = useMediaQuery('(max-width: 639px)');
+  const [railOpen, setRailOpen] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem('wsd.chat.railCollapsed') === '1');
+
+  // ── Load-earlier paging + jump-to-bottom FAB
+  const [noMore, setNoMore] = useState(false);
+  const [loadingEarly, setLoadingEarly] = useState(false);
+  const [showJump, setShowJump] = useState(false);
+
+  // ── Notifications: local unread tally (non-active channels), title + sound
+  const docVisible = useDocumentVisible();
+  const [soundOn, setSoundOn] = useState(() => localStorage.getItem('wsd.chat.sound') !== 'off');
+
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const railRestoreRef = useRef<HTMLElement | null>(null);
+  const burgerRef = useRef<HTMLButtonElement | null>(null);
+  const modalsOpenRef = useRef(false);
+  modalsOpenRef.current = createOpen || directOpen;
+  const messagesRef = useRef<TeamChatMessage[]>([]);
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const unreadLocal = useRef<Map<string, Set<string>>>(new Map());
+  const origTitleRef = useRef('');
+  const docVisibleRef = useRef(true);
+  const soundOnRef = useRef(true);
+  const loadingEarlierRef = useRef(false);
+  const noMoreRef = useRef(false);
+  docVisibleRef.current = docVisible;
+  soundOnRef.current = soundOn;
+  messagesRef.current = messages;
+
   // ── Global search (across all channels)
   const [globalOpen, setGlobalOpen] = useState(false);
   const [globalQ, setGlobalQ] = useState('');
@@ -417,7 +526,67 @@ export function Chat() {
     setActiveId(id);
     setLightbox(null);
     setEmojiPickerFor(null);
+    if (isPhone) setRailOpen(false);
+    // Kill any ghost unread tally synchronously — the message is now on
+    // screen, so the count must not linger until the next poll reconciles.
+    if (id) {
+      unreadLocal.current.delete(id);
+      if (unreadTotal() === 0) document.title = origTitleRef.current || document.title;
+    }
   };
+
+  const openRail = () => {
+    if (isPhone) setRailOpen(true);
+    else {
+      setRailCollapsed(false);
+      localStorage.setItem('wsd.chat.railCollapsed', '0');
+    }
+  };
+
+  const closeRail = () => setRailOpen(false);
+
+  const toggleRailCollapsed = () => {
+    setRailCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem('wsd.chat.railCollapsed', next ? '1' : '0');
+      return next;
+    });
+  };
+
+  const toggleSound = () => {
+    setSoundOn((s) => {
+      const next = !s;
+      localStorage.setItem('wsd.chat.sound', next ? 'on' : 'off');
+      return next;
+    });
+  };
+
+  // Drawer focus management (ConfirmModal pattern): save the opening trigger,
+  // move focus into the channel list, close on Escape, restore focus on close.
+  useEffect(() => {
+    if (!railOpen) return;
+    railRestoreRef.current = document.activeElement as HTMLElement | null;
+    requestAnimationFrame(() => {
+      const first = railRef.current?.querySelector<HTMLElement>('.tchat-channel-row');
+      (first || railRef.current)?.focus();
+    });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || modalsOpenRef.current) return;
+      e.preventDefault();
+      setRailOpen(false);
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      // rAF: the rail may be mid-close — focus once the DOM has settled.
+      requestAnimationFrame(() => {
+        const target = burgerRef.current
+          || (railRestoreRef.current?.isConnected ? railRestoreRef.current : null);
+        target?.focus();
+      });
+      railRestoreRef.current = null;
+    };
+  }, [railOpen]);
   
   // ── Voice Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -437,6 +606,9 @@ export function Chat() {
   const listRef = useRef<HTMLDivElement | null>(null);
   const settingsWrapRef = useRef<HTMLDivElement | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
+  const globalSearchBtnRef = useRef<HTMLButtonElement | null>(null);
+  const channelSearchBtnRef = useRef<HTMLButtonElement | null>(null);
+  const fabWasVisibleRef = useRef(false);
   const firstOptionRef = useRef<HTMLButtonElement | null>(null);
   const settingsOpenByKeyRef = useRef(false);
   const skipScroll = useRef(false);
@@ -449,6 +621,30 @@ export function Chat() {
   // so flips of local state (sending, editing) never re-parse 500 messages.
   const mdCache = useRef(new Map<string, string>());
 
+  const unreadTotal = () => {
+    let n = 0;
+    for (const s of unreadLocal.current.values()) n += s.size;
+    return n;
+  };
+
+  // Notification bump for a message landing in a NON-active channel: tally it
+  // locally (deduped by message id), update the tab title when hidden, and
+  // ping the sound toggle. The 30s channel-list poll reconciles authoritative
+  // server unread counts.
+  const bumpUnread = (channelId: string, msg: { id: string }) => {
+    if (channelId === activeIdRef.current) return;
+    let set = unreadLocal.current.get(channelId);
+    if (!set) {
+      set = new Set();
+      unreadLocal.current.set(channelId, set);
+    }
+    if (set.has(msg.id)) return;
+    set.add(msg.id);
+    if (!docVisibleRef.current && unreadTotal() > 0) {
+      document.title = `(${unreadTotal()}) Madar — Team Chat`;
+    }
+    if (soundOnRef.current) playChatSound();
+  };
 
   // ── socket — one connection per session
   const onEvent = (ev: ChatSocketEvent) => {
@@ -481,11 +677,27 @@ export function Chat() {
       if (list) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === ev.message.id)) return prev;
-          return [...prev, ev.message].slice(-500);
+          // Dynamic ceiling: live appends must never truncate history that
+          // loadEarlier paged in (up to 2000). Cap at max(500, current size)
+          // so prepended history survives incremental live messages.
+          const max = Math.max(500, prev.length);
+          return [...prev, ev.message].slice(-max);
         });
+      } else {
+        bumpUnread(cid, ev.message);
       }
       setChannels((prev) =>
         prev.map((c) => (c.id === cid ? { ...c, lastMessageAt: ev.message.createdAt } : c))
+      );
+      return;
+    }
+    if (ev.type === 'chat_bump') {
+      // Lightweight cross-channel notification frame (no full message body):
+      // bump the local unread tally + title/sound; the channel list refresh
+      // (poll + subscriptions) reconciles the authoritative server unread.
+      bumpUnread(ev.channelId, ev.message);
+      setChannels((prev) =>
+        prev.map((c) => (c.id === ev.channelId ? { ...c, lastMessageAt: ev.message.createdAt } : c))
       );
       return;
     }
@@ -549,6 +761,7 @@ export function Chat() {
     }
   };
   const sock = useTeamChatSocket(onEvent);
+  const connTitle = sock.status === 'open' ? 'Connected' : sock.status === 'reconnecting' ? 'Reconnecting…' : 'Offline';
 
   // ── initial load
   useEffect(() => {
@@ -599,6 +812,11 @@ export function Chat() {
     setEditingMsgId(null);
     setEditText('');
     setDeleteMsgTarget(null);
+    setNoMore(false);
+    setLoadingEarly(false);
+    setShowJump(false);
+    noMoreRef.current = false;
+    loadingEarlierRef.current = false;
     let cancelled = false;
     void getChatChannel(activeId)
       .then((res) => {
@@ -625,6 +843,42 @@ export function Chat() {
     return () => { cancelled = true; sock.unsubscribe(activeId); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
+
+  // Subscribe ONLY to the active channel (handled in the activate effect
+  // above). The server skips the sender on `chat_bump`, so a message I send
+  // never loops back as a full `message` frame → no self sound / self unread.
+  // Cross-channel notifications ride on `chat_bump` (arrives for every
+  // authorized client) + the 30s list poll reconciles authoritative counts.
+
+  // Keep the channel list fresh (unread counts, lastMessageAt recency).
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      void listChatChannels().then(({ channels: chans }) => {
+        if (!alive) return;
+        setChannels(chans);
+        chans.forEach((c) => { if ((c.unread || 0) === 0) unreadLocal.current.delete(c.id); });
+      }).catch(() => {});
+    };
+    const t = setInterval(poll, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  // ── Tab title: keep the app's own title around, show a live unread count
+  // while this tab is hidden, and restore the original on visibility, when
+  // the count hits zero, or on unmount.
+  useEffect(() => {
+    if (!origTitleRef.current) origTitleRef.current = document.title;
+    return () => { document.title = origTitleRef.current; };
+  }, []);
+
+  useEffect(() => {
+    if (docVisible || unreadTotal() === 0) {
+      document.title = origTitleRef.current || document.title;
+    } else {
+      document.title = `(${unreadTotal()}) Madar — Team Chat`;
+    }
+  }, [docVisible, channels]);
 
   // Mark read whenever the active channel list changes (new messages).
   useEffect(() => {
@@ -673,12 +927,102 @@ export function Chat() {
     el.scrollTop = el.scrollHeight;
   }, [messages, activeId]);
 
+  // ── Load-earlier paging: prepend older history, preserving the reader's
+  // distance from the bottom so the view doesn't jump when messages land.
+  const loadEarlier = useCallback(() => {
+    const cid = activeIdRef.current;
+    if (!cid || loadingEarlierRef.current || noMoreRef.current) return;
+    const anchorId = messagesRef.current[0]?.id;
+    if (!anchorId) return;
+    const el = listRef.current;
+    const prevHeight = el ? el.scrollHeight : 0;
+    const prevTop = el ? el.scrollTop : 0;
+    loadingEarlierRef.current = true;
+    setLoadingEarly(true);
+    getChatMessages(cid, { limit: 200, before: anchorId })
+      .then((res) => {
+        const older = res.messages || [];
+        if (!older.length) {
+          noMoreRef.current = true;
+          setNoMore(true);
+          return;
+        }
+        setMessages((prevList) => {
+          const have = new Set(prevList.map((m) => m.id));
+          const fresh = older.filter((m) => !have.has(m.id));
+          if (!fresh.length) return prevList;
+          const merged = [...fresh, ...prevList];
+          return merged.length > 2000 ? merged.slice(0, 2000) : merged;
+        });
+      })
+      .catch(() => { /* transient — retry on the next scroll-up */ })
+      .finally(() => {
+        loadingEarlierRef.current = false;
+        setLoadingEarly(false);
+        // Double rAF (same style as the `subscribed` reset): the first frame
+        // lets Preact commit the prepended DOM, the second restores the exact
+        // distance from the bottom so the view never jumps.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const el2 = listRef.current;
+            if (el2) el2.scrollTop = prevTop + (el2.scrollHeight - prevHeight);
+          });
+        });
+      });
+  }, []);
+
+  const jumpToBottom = useCallback((instant = false) => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: reducedMotion() || instant ? 'auto' : 'smooth',
+    });
+  }, []);
+
+  // Scroll listener: drives the jump-to-bottom FAB and load-earlier paging.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowJump(dist > 120);
+      if (el.scrollTop < 80) void loadEarlier();
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [loadEarlier, loading, activeId]);
+
+  // The FAB stays mounted (visibility:hidden) so it never leaves the DOM —
+  // but if it disappears WHILE focused, redirect focus into the message list
+  // instead of dropping it to <body> (a hidden+disabled button can't hold it).
+  useEffect(() => {
+    if (showJump) {
+      fabWasVisibleRef.current = true;
+      return;
+    }
+    const wasVisible = fabWasVisibleRef.current;
+    fabWasVisibleRef.current = false;
+    if (wasVisible && document.activeElement?.classList.contains('tchat-jump-bottom')) {
+      listRef.current?.focus();
+    }
+  }, [showJump]);
+
   // clear typing indicators after a pause
   useEffect(() => {
     if (!typing.length) return;
     const t = setTimeout(() => setTyping([]), 4500);
     return () => clearTimeout(t);
   }, [typing]);
+
+  // Composer auto-grow: fit the textarea to its content (cap at 150px), and
+  // reset it whenever the draft is cleared or the channel switches.
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    if (composer.text) el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+  }, [composer.text, activeId]);
 
   // ── pendingJump: scroll to a message after switching to its channel
   useEffect(() => {
@@ -906,6 +1250,8 @@ export function Chat() {
     setError('');
     try {
       await deleteChatChannel(deleteTarget.id);
+      unreadLocal.current.delete(deleteTarget.id);
+      if (unreadTotal() === 0) document.title = origTitleRef.current || document.title;
       let rest: ChatChannel[] = [];
       setChannels((prev) => {
         rest = prev.filter((c) => c.id !== deleteTarget.id);
@@ -1080,7 +1426,7 @@ export function Chat() {
     const el = document.getElementById(`msg-${id}`);
     if (el) {
       skipScroll.current = true;
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' });
       el.setAttribute('tabindex', '-1');
       el.focus({ preventScroll: true });
       el.classList.add('tchat-msg-highlight');
@@ -1091,6 +1437,11 @@ export function Chat() {
     }
   };
   
+  const otherDirectName = (c: ChatChannel): string => {
+    const other = c.members.find((m) => m.userId !== meId);
+    return other ? (other.displayName || other.username) : 'them';
+  };
+
   const canDelete = (c: ChatChannel) => {
     if (c.kind !== 'channel') return false;
     return user?.role === 'admin' || c.createdBy === meId;
@@ -1174,7 +1525,10 @@ export function Chat() {
     return messages.map((m, i) => {
       const isMine = m.userId === meId;
       const prev = messages[i - 1];
-      const isGrouped = prev && prev.userId === m.userId;
+      const isGrouped = prev ? shouldGroup(prev.createdAt, m.createdAt, 600_000, prev.userId === m.userId) : false;
+      const dayKey = daySeparatorKey(m.createdAt);
+      const prevDayKey = prev ? daySeparatorKey(prev.createdAt) : undefined;
+      const showDaySep = !prev || dayKey !== prevDayKey;
       const reply = m.replyTo ? messages.find((x) => x.id === m.replyTo) : undefined;
       const author = active?.members.find((x) => x.userId === m.userId);
       const canDeleteMsg = isMine || user?.role === 'admin' || canManageChannel();
@@ -1182,7 +1536,13 @@ export function Chat() {
       const bodyHtml = m.text ? renderMsgHtml(m) : '';
 
       return (
-        <div key={m.id} id={`msg-${m.id}`} class={`tchat-msg ${isMine ? 'mine' : ''}`}>
+        <Fragment key={m.id}>
+          {showDaySep && (
+            <div class="tchat-day-sep">
+              <span>{formatDayLabel(dayKey)}</span>
+            </div>
+          )}
+          <div id={`msg-${m.id}`} class={`tchat-msg ${isMine ? 'mine' : ''}${isGrouped ? ' grouped' : ''}`}>
           {!isGrouped && (
             <div class="tchat-msg-avatar">
               <Avatar name={m.username} avatar={avatarUrl(m.userId, author?.avatarExt)} size={32} />
@@ -1297,6 +1657,7 @@ export function Chat() {
             )}
           </div>
         </div>
+        </Fragment>
       );
     });
   }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText, emojiPickerFor]);
@@ -1317,15 +1678,46 @@ export function Chat() {
 
   return (
     <div class="view chat-view">
-      <div class="tchat-rail">
+      <div class={`tchat-backdrop${railOpen ? ' open' : ''}`} onClick={closeRail} />
+      <div
+        id="tchat-rail"
+        ref={railRef}
+        class={`tchat-rail${railOpen ? ' open' : ''}${railCollapsed ? ' collapsed' : ''}`}
+      >
+        <nav class="tchat-rail-nav" aria-label="Channels">
         <div class="tchat-rail-head">
           <span class="tchat-rail-title">
             <MessageCircle width={16} height={16} class="icon" />
             Team Chat
           </span>
           <div style="display:flex;align-items:center;gap:8px">
+            <span
+              class={`tchat-conn-dot tchat-conn-${sock.status}`}
+              role="status"
+              aria-label={connTitle}
+              title={connTitle}
+            />
             <button
               class="btn btn-icon btn-sm"
+              onClick={toggleSound}
+              aria-pressed={soundOn}
+              title={soundOn ? 'Disable notification sound' : 'Enable notification sound'}
+              aria-label={soundOn ? 'Disable notification sound' : 'Enable notification sound'}
+            >
+              {soundOn ? <Volume2 width={14} height={14} /> : <VolumeX width={14} height={14} />}
+            </button>
+            <button
+              class="btn btn-icon btn-sm tchat-collapse-btn"
+              onClick={toggleRailCollapsed}
+              aria-expanded={!railCollapsed}
+              title={railCollapsed ? 'Expand channel list' : 'Collapse channel list'}
+              aria-label={railCollapsed ? 'Expand channel list' : 'Collapse channel list'}
+            >
+              {railCollapsed ? <ChevronRight width={14} height={14} /> : <ChevronLeft width={14} height={14} />}
+            </button>
+            <button
+              class="btn btn-icon btn-sm"
+              ref={globalSearchBtnRef}
               onClick={toggleGlobalSearch}
               aria-pressed={globalOpen}
               title="Search all channels"
@@ -1346,7 +1738,7 @@ export function Chat() {
                     <Avatar name={p.displayName || p.username} avatar={avatarUrl(p.id, p.avatarExt)} size={22} title={p.displayName || p.username} />
                   </button>
                 ))}
-                {presence.size > 5 && <span class="tchat-members-all" title={`${presence.size} members online`}>+{presence.size - 5}</span>}
+                {presence.size > 5 && <span class="tchat-members-all" title={`${presence.size} members online`} aria-label={`${presence.size} members online`}>+{presence.size - 5}</span>}
               </span>
             )}
           </div>
@@ -1369,6 +1761,7 @@ export function Chat() {
                   setGlobalOpen(false);
                   setGlobalQ('');
                   setGlobalResults(null);
+                  globalSearchBtnRef.current?.focus();
                 }
               }}
             />
@@ -1435,7 +1828,7 @@ export function Chat() {
             </button>
           </div>
         )}
-        <div class="tchat-channel-list">
+        <div class="tchat-channel-list" aria-label="Channel list">
           {channels.map((c) => {
             const isActive = c.id === activeId;
             const onlineNow = c.members.filter((m) => presence.has(m.userId) && m.userId !== meId).length;
@@ -1486,13 +1879,27 @@ export function Chat() {
             <div class="tchat-empty-rail">No conversations yet. Create a channel to get started.</div>
           )}
         </div>
+        </nav>
       </div>
 
-      <div class="tchat-main">
+      <div class="tchat-main" inert={railOpen && isPhone}>
         {active ? (
           <>
             <div class="tchat-head">
               <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                {(isTablet || railCollapsed) && (
+                  <button
+                    ref={burgerRef}
+                    class="tchat-burger"
+                    onClick={openRail}
+                    aria-expanded={isPhone ? railOpen : !railCollapsed}
+                    aria-controls="tchat-rail"
+                    title="Toggle channel list"
+                    aria-label="Toggle channel list"
+                  >
+                    <Menu width={16} height={16} />
+                  </button>
+                )}
                 <span class="tchat-channel-icon">{active.kind === 'project' ? <FolderOpen width={15} height={15} /> : active.kind === 'direct' ? <UserIcon width={15} height={15} /> : <Hash width={15} height={15} />}</span>
                 <div style="min-width:0">
                   <div class="tchat-head-title">{channelLabel(active, { id: meId })}</div>
@@ -1515,12 +1922,12 @@ export function Chat() {
                     </button>
                   ))}
                   {(!active.members.length || active.kind === 'channel') && (
-                    <span class="tchat-members-all" title="All members">
+                    <span class="tchat-members-all" title="All members" aria-label="All channel members">
                       <UsersIcon width={14} height={14} />
                     </span>
                   )}
                 </div>
-                <button class="btn btn-sm" onClick={() => setSearchResults((prev) => (prev === null ? [] : null))} aria-pressed={searchResults !== null} title="Search">
+                <button class="btn btn-sm" ref={channelSearchBtnRef} onClick={() => setSearchResults((prev) => (prev === null ? [] : null))} aria-pressed={searchResults !== null} title="Search" aria-label="Search messages in this channel">
                   <Search width={14} height={14} /> Search
                 </button>
                 {active.kind === 'channel' && canManageChannel() && (
@@ -1605,7 +2012,14 @@ export function Chat() {
                   aria-label="Search messages"
                   value={searchQ}
                   onInput={(e: Event) => setSearchQ((e.target as HTMLInputElement).value)}
-                  onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') void doSearch(); }}
+                  onKeyDown={(e: KeyboardEvent) => {
+                  if (e.key === 'Enter') void doSearch();
+                  else if (e.key === 'Escape') {
+                    setSearchResults(null);
+                    setSearchQ('');
+                    channelSearchBtnRef.current?.focus();
+                  }
+                }}
                 />
                 {searchResults.length > 0 && (
                   <div class="tchat-search-results">
@@ -1620,13 +2034,70 @@ export function Chat() {
               </div>
             )}
 
-             <div class="tchat-messages" ref={listRef} role="log" aria-live="polite" aria-label="Messages">
+             <div class="tchat-messages" ref={listRef} role="log" aria-live="polite" aria-relevant="additions" aria-busy={loadingEarly} aria-label="Messages" tabIndex={-1}>
+               {noMore && messages.length > 0 && (
+                 <div class="tchat-history-start">Beginning of conversation</div>
+               )}
+               {!noMore && messages.length > 0 && (
+                 <button
+                   class="tchat-load-earlier"
+                   onClick={() => void loadEarlier()}
+                   disabled={loadingEarly}
+                   aria-label="Load earlier messages"
+                 >
+                   {loadingEarly ? (
+                     <><Loader2 width={12} height={12} class="icon spin" /> Loading earlier…</>
+                   ) : (
+                     'Load earlier'
+                   )}
+                 </button>
+               )}
                {renderedMessages}
                {!messages.length && (
-
-                <div class="tchat-empty-msg">No messages yet. Say hello 👋</div>
-              )}
+                 <div class="tchat-empty-msg">
+                   {active?.kind === 'direct' ? (
+                     <>
+                       You and {otherDirectName(active)} — say hello
+                       {userCanWrite() && (
+                         <button class="tchat-empty-btn" onClick={() => taRef.current?.focus()}>
+                           Write first message
+                         </button>
+                       )}
+                     </>
+                   ) : active?.kind === 'project' ? (
+                     'Workspace channel'
+                   ) : active ? (
+                     `# ${active.name} — Start the conversation`
+                   ) : (
+                     'No messages yet.'
+                   )}
+                 </div>
+               )}
             </div>
+            {/* Stay mounted: unmounting mid-focus drops focus to <body>. visibility
+              removes it from the tab order + a11y tree, disabled blocks clicks. */}
+            <button
+              class="tchat-jump-bottom"
+              onClick={(e: MouseEvent) => {
+                // e.detail === 0 means a keyboard activation (Enter/Space).
+                // Instant jump for keyboard: a focused container + smooth scroll
+                // conflict in Chromium (focus trims the animation), so keyboard
+                // users get an instant jump and then focus moves to the list.
+                const fromKeyboard = e.detail === 0;
+                jumpToBottom(fromKeyboard);
+                if (fromKeyboard) {
+                  requestAnimationFrame(() => listRef.current?.focus());
+                }
+              }}
+              aria-label="Jump to latest"
+              title="Jump to latest"
+              disabled={!showJump}
+              aria-hidden={!showJump}
+              tabIndex={showJump ? 0 : -1}
+              style={showJump ? undefined : 'visibility:hidden'}
+            >
+              <ArrowDownToLine width={16} height={16} />
+            </button>
             {deletedNotice && <div role="status" aria-live="polite" class="sr-only">{deletedNotice}</div>}
 
             {/* typing row */}
@@ -1661,21 +2132,27 @@ export function Chat() {
                 ))}
                     <div style="display:flex;gap:8px;align-items:flex-end">
                       {isRecording && (
-                        <div class="tchat-recording-indicator" role="status">
-                          <span class="tchat-recording-pulse"></span>
-                          <span>{Math.floor(recordTime / 60)}:{ (recordTime % 60).toString().padStart(2, '0') }</span>
+                        <div class="tchat-recording-indicator">
+                          <span class="tchat-recording-pulse" aria-hidden="true"></span>
+                          <span role="status">Recording…</span>
+                          <span aria-hidden="true">{Math.floor(recordTime / 60)}:{ (recordTime % 60).toString().padStart(2, '0') }</span>
                         </div>
                       )}
                       <textarea
+                        ref={taRef}
                         class="tchat-textarea"
                         placeholder={isRecording ? "Recording..." : "Type a message…"}
                         aria-label="Type a message"
                         rows={2}
+                        maxLength={5000}
                         value={composer.text}
                         onInput={(e: Event) => {
-                          const v = (e.target as HTMLTextAreaElement).value;
+                          const el = e.target as HTMLTextAreaElement;
+                          const v = el.value;
                           setComposer((c) => ({ ...c, text: v }));
                           if (v.trim()) sock.sendTyping(active.id);
+                          el.style.height = 'auto';
+                          el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
                         }}
                         onKeyDown={(e: KeyboardEvent) => {
                           if (e.key === 'Enter' && !e.shiftKey) {
@@ -1723,6 +2200,9 @@ export function Chat() {
                         {sending ? <Loader2 width={16} height={16} class="icon spin" /> : <Send width={16} height={16} />}
                       </button>
                     </div>
+                    {composer.text.length > 4800 && (
+                      <span class="tchat-char-counter" aria-live="off">{composer.text.length}/5000</span>
+                    )}
 
               </div>
             ) : viewerOnly ? (

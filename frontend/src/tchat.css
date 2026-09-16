@@ -25,6 +25,14 @@
   background: var(--panel);
   min-height: 0;
 }
+/* nav wrapper keeps the rail's column flow so the head/actions/list stack
+   exactly as they did before the landmark was introduced */
+.tchat-rail-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .tchat-rail-head {
   display: flex;
   align-items: center;
@@ -693,8 +701,10 @@ mark.tchat-search-hit {
   border: 1px solid var(--border);
   color: var(--text-2);
   font-size: 0.65rem;
+  line-height: 1;
   border-radius: 4px;
-  padding: 2px 4px;
+  padding: 4px 8px;
+  min-height: 24px;
   cursor: pointer;
 }
 .vn-speed-btn:hover { background: var(--panel); color: var(--text); }
@@ -1053,3 +1063,265 @@ mark.tchat-search-hit {
 .tchat-emoji-option:hover { background: var(--panel-2); }
 .tchat-emoji-option:active { transform: scale(0.92); }
 .tchat-emoji-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* ── Responsive layout & mobile structure ───────────────────── */
+/* Dynamic viewport height — falls back to vh in engines without dvh.
+   Desktop (≥641px) keeps the old 60px `.main` padding offset so the chat
+   never overflows under the page header. */
+@media (min-width: 641px) {
+  .chat-view,
+  .tchat-view {
+    height: calc(100vh - 60px);
+  }
+  @supports (height: 100dvh) {
+    .chat-view,
+    .tchat-view {
+      height: calc(100dvh - 60px);
+    }
+  }
+}
+/* Logical border so the rail edge flips with the document direction */
+.tchat-rail {
+  border-inline-end: 1px solid var(--border);
+}
+
+/* Drawer: the rail leaves the flow ≤1023px and pins flush to the viewport */
+.tchat-backdrop { display: none; }
+@media (max-width: 1023px) {
+  .tchat-rail {
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    z-index: 95;
+    transform: translateX(-110%);
+    transition: transform 0.25s ease;
+  }
+  .tchat-rail:dir(rtl) { transform: translateX(110%); }
+  .tchat-rail.open,
+  .tchat-rail.open:dir(rtl) {
+    transform: none;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  }
+  .tchat-backdrop.open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+/* Tablet: the rail pins open unless explicitly collapsed */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .tchat-rail,
+  .tchat-rail:dir(rtl) { transform: none; }
+  .tchat-rail.collapsed { transform: translateX(-110%); }
+  .tchat-rail.collapsed:dir(rtl) { transform: translateX(110%); }
+  .tchat-rail.open,
+  .tchat-rail.open:dir(rtl) { transform: none; }
+}
+/* Desktop: static in-flow rail (previous behavior) */
+@media (min-width: 1024px) {
+  .tchat-rail,
+  .tchat-rail:dir(rtl) {
+    position: static;
+    transform: none;
+    width: 270px;
+  }
+  .tchat-burger { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tchat-rail { transition: none; }
+}
+
+/* ── Phone tweaks (≤640px) ──────────────────────────────────── */
+@media (max-width: 640px) {
+  .chat-view,
+  .tchat-view {
+    /* 55px = mobile topbar, 68px = .main mobile padding (18+50) */
+    height: calc(100vh - 55px - 68px);
+  }
+  @supports (height: 100dvh) {
+    .chat-view,
+    .tchat-view {
+      height: calc(100dvh - 55px - 68px);
+    }
+  }
+  /* The rail-collapse chevron is meaningless on phones (the drawer has no
+     pinned-open state) — hide it so it doesn't render as a dead control. */
+  .tchat-collapse-btn { display: none; }
+  .tchat-msg { max-width: 88%; }
+  .tchat-attachment-img,
+  .tchat-attachment-grid { max-width: 100%; }
+  .tchat-composer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+}
+
+/* ── Touch targets — coarse pointers only (screens without hover) ── */
+@media (hover: none) and (pointer: coarse) {
+  .tchat-msg-action { min-width: 44px; min-height: 44px; }
+  .tchat-reaction-add { width: 44px; height: 44px; opacity: 1; }
+  .tchat-emoji-option { width: 44px; height: 44px; }
+  .tchat-emoji-picker { grid-template-columns: repeat(6, 44px); }
+  .tchat-burger { width: 44px; height: 44px; }
+  .vn-speed-btn { min-width: 44px; min-height: 44px; }
+  .tchat-delete-btn { opacity: 1; min-width: 44px; min-height: 44px; }
+  .tchat-channel-row { min-height: 48px; }
+  .tchat-msg-side { opacity: 1; }
+  .lightbox-nav { width: 44px; height: 44px; }
+}
+
+/* ── Day separator (centered, faint rule either side) ───────── */
+.tchat-day-sep {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.tchat-day-sep::before,
+.tchat-day-sep::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Consecutive messages from the same author: drop avatar/author,
+   tighten the column gap so the run reads as one block */
+.tchat-msg.grouped { margin-top: -6px; }
+.tchat-msg.grouped .tchat-msg-avatar,
+.tchat-msg.grouped .tchat-msg-author { display: none; }
+
+/* ── Jump-to-bottom FAB ─────────────────────────────────────── */
+.tchat-main,
+.tchat-messages { position: relative; }
+.tchat-jump-bottom {
+  position: absolute;
+  inset-inline-end: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 5;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  color: var(--text-2);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.tchat-jump-bottom:hover { background: var(--panel-2); color: var(--text); border-color: var(--text-3); }
+.tchat-jump-bottom:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* ── Load-earlier row (centered, spinner stays inline) ──────── */
+.tchat-history-start {
+  align-self: center;
+  font-size: 0.66rem;
+  color: var(--text-3);
+  padding: 6px 16px 2px;
+}
+.tchat-load-earlier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: center;
+  padding: 8px 16px;
+  font-size: 0.72rem;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tchat-load-earlier:hover { background: var(--panel-2); color: var(--text); }
+.tchat-load-earlier:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* ── Rail hamburger (drawer reopen on tablet; hidden on desktop) ── */
+.tchat-burger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.tchat-burger svg { width: 20px; height: 20px; }
+.tchat-burger:hover { background: var(--panel-2); color: var(--text); }
+.tchat-burger:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* ── Connection dot ─────────────────────────────────────────── */
+.tchat-conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.tchat-conn-open { background: var(--green); box-shadow: 0 0 6px rgba(63, 185, 80, 0.6); }
+.tchat-conn-reconnecting { background: var(--yellow); }
+.tchat-conn-offline { background: var(--red); }
+
+/* ── Empty states (large muted icon + text + action) ────────── */
+.tchat-empty-msg,
+.tchat-empty-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--text-2);
+}
+.tchat-empty-msg { flex: 1; padding: 40px 20px; font-size: 0.8rem; }
+.tchat-empty-rail { align-self: stretch; padding: 30px 16px; font-size: 0.75rem; }
+.tchat-empty-msg > .icon,
+.tchat-empty-rail > .icon,
+.tchat-empty-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--text-3);
+  opacity: 0.55;
+}
+.tchat-empty-btn {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.tchat-empty-btn:hover { border-color: var(--text-3); background: var(--panel-2); }
+.tchat-empty-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* ── Composer char counter (small muted; caller renders from 4800) ── */
+.tchat-char-counter {
+  align-self: flex-end;
+  font-size: 0.66rem;
+  line-height: 1.2;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.tchat-char-counter.warn { color: var(--yellow); }
+.tchat-char-counter.danger { color: var(--red); }

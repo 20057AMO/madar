@@ -73,6 +73,7 @@ import { canAccessChannel, canSendInChannel, type ChatUser } from './chat-team-a
 import { detectImageExt } from './avatar-store';
 import {
   broadcastChatMessage,
+  broadcastChatBump,
   broadcastMessageUpdated,
   broadcastMessageDeleted,
   broadcastPinChange,
@@ -491,6 +492,10 @@ export function registerChatTeamRoutes(app: any): void {
     await appendMessage(channelId, message);
     const freshChannel = getChannel(channelId) || channel;
     broadcastChatMessage(freshChannel, message);
+    // Side-by-side mini-broadcast: subscribers get the full `message` frame
+    // above; EVERY other accessible socket gets a compact `chat_bump` so a
+    // channel that isn't open still updates live (unread badges never freeze).
+    broadcastChatBump(user, freshChannel, message);
     // Fire-and-forget @madar bot (dispatchWebhook pattern): a mention in a
     // channel/project room schedules a background reply — the 201 is never
     // slowed down by LLM latency, and a bot failure never breaks the send.

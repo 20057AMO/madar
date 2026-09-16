@@ -9,8 +9,11 @@ import { useEffect, useRef, useCallback, useState } from 'preact/hooks';
 import { wsUrl } from './api';
 import type { ChatChannel, TeamChatMessage } from './api';
 
+export type ChatSocketStatus = 'open' | 'reconnecting' | 'offline';
+
 export type ChatSocketEvent =
   | { type: 'message'; channel: ChatChannel; message: TeamChatMessage }
+  | { type: 'chat_bump'; channelId: string; message: { id: string; userId: string; username: string; text: string; createdAt: string } }
   | { type: 'typing'; channelId: string; user: { id: string; username: string } }
   | { type: 'typing_stop'; channelId: string; user: { id: string; username: string } }
   | { type: 'read'; channelId: string; userId: string; msgId: string }
@@ -32,6 +35,8 @@ export interface TeamChatSocket {
   sendRead: (channelId: string, msgId: string) => void;
   /** True when the socket is connected (or reconnecting). */
   connected: boolean;
+  /** Live socket health: open / reconnecting (was open, retrying) / offline. */
+  status: ChatSocketStatus;
 }
 
 /**
@@ -42,6 +47,10 @@ export interface TeamChatSocket {
 export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamChatSocket {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  const [status, setStatus] = useState<ChatSocketStatus>('offline');
+  // Track whether this socket ever opened: a close AFTER an open is a
+  // reconnect (amber), a never-opened failure is just offline (red).
+  const hadOpenRef = useRef(false);
   const subscribed = useRef<Set<string>>(new Set());
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
@@ -69,6 +78,7 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
       try {
         ws = new WebSocket(wsUrl('/ws/chat-team'));
       } catch {
+        setStatus(hadOpenRef.current ? 'reconnecting' : 'offline');
         reconnectTimer = setTimeout(connect, 3000);
         return;
       }
@@ -76,7 +86,9 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
 
       ws.onopen = () => {
         if (!alive) return;
+        hadOpenRef.current = true;
         setConnected(true);
+        setStatus('open');
         resubscribe();
       };
 
@@ -93,6 +105,9 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
             break;
           case 'message':
             onEventRef.current({ type: 'message', channel: msg.channel, message: msg.message });
+            break;
+          case 'chat_bump':
+            onEventRef.current({ type: 'chat_bump', channelId: msg.channelId, message: msg.message });
             break;
           case 'typing_start':
             onEventRef.current({ type: 'typing', channelId: msg.channelId, user: msg.user });
@@ -131,6 +146,7 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
       ws.onclose = () => {
         if (!alive) return;
         setConnected(false);
+        setStatus(hadOpenRef.current ? 'reconnecting' : 'offline');
         reconnectTimer = setTimeout(connect, 3000);
       };
 
@@ -184,5 +200,5 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
     [send]
   );
 
-  return { subscribe, unsubscribe, sendTyping, sendRead, connected };
+  return { subscribe, unsubscribe, sendTyping, sendRead, connected, status };
 }
