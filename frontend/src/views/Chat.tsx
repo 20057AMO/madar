@@ -981,6 +981,10 @@ export function Chat() {
   }, []);
 
   // Scroll listener: drives the jump-to-bottom FAB and load-earlier paging.
+  // Deps include `active`, not just activeId: on initial load the messages
+  // list only renders after `setActive` (activate effect), so without `active`
+  // here the listener would attach to a null listRef on first load and never
+  // re-run — leaving the FAB dead for the auto-selected channel until a switch.
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -991,7 +995,7 @@ export function Chat() {
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [loadEarlier, loading, activeId]);
+  }, [loadEarlier, loading, activeId, active]);
 
   // The FAB stays mounted (visibility:hidden) so it never leaves the DOM —
   // but if it disappears WHILE focused, redirect focus into the message list
