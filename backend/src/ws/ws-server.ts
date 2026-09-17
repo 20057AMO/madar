@@ -111,7 +111,7 @@ export function attachWebSockets(server: http.Server): void {
       // container itself (git + docker CLI + socket) → strict admin decision
       // (the legacy open-projects bypass must not hand out host shells).
       const termAllowed = mode === 'control'
-        ? decideControlAccess(authUser?.id ?? '', (authUser?.role ?? 'viewer') as 'admin' | 'editor' | 'viewer', loadMeta(slug) || {})
+        ? decideControlAccess(authUser?.id ?? '', (authUser?.role ?? 'viewer') as 'admin' | 'editor' | 'viewer', loadMeta(slug) || {}).allowed
         : gateProject(slug, authUser, 'editor');
       if (!termAllowed) {
         ws.close(1008, 'project access denied');

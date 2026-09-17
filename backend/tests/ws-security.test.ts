@@ -29,6 +29,14 @@ function wsCloseCode(path: string, token: string, timeoutMs = 8000): Promise<{ c
     const sep = path.includes('?') ? '&' : '?';
     const ws = new WebSocket(`${WS_BASE}${path}${sep}token=${encodeURIComponent(token)}`, { handshakeTimeout: timeoutMs });
     const timer = setTimeout(() => { try { ws.terminate(); } catch { /* noop */ } reject(new Error('ws timeout')); }, timeoutMs + 2000);
+    // Any data frame arriving before the close frame means the gate let the
+    // connection through (e.g. a truthy-but-non-boolean gate result) — treat
+    // that as a denial failure, not a pass.
+    ws.on('message', () => {
+      clearTimeout(timer);
+      try { ws.terminate(); } catch { /* noop */ }
+      reject(new Error('gate leaked a data frame before closing (e.g. "ready")'));
+    });
     ws.on('close', (code, reason) => { clearTimeout(timer); resolve({ code, reason: reason.toString() }); });
     ws.on('error', (err: NodeJS.ErrnoException) => {
       clearTimeout(timer);
