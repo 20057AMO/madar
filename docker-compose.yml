@@ -27,6 +27,10 @@ services:
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       WSD_OPENCODE_PORT: ${WSD_OPENCODE_PORT:-4096}
       WSD_TESTING: ${WSD_TESTING:-0}
+      # Off by default: opts into the CLI fallback for agent delegation
+      # (attached to the named-agent session; only fires when a safe target
+      # exists — never a base-agent `--session new` run).
+      WSD_DELEGATE_CLI_FALLBACK: ${WSD_DELEGATE_CLI_FALLBACK:-0}
       WSD_ENCRYPTION_KEY: ${WSD_ENCRYPTION_KEY:-}
       WSD_TRUST_PROXY: ${WSD_TRUST_PROXY:-}
       # Crash-detector sweep cadence (min 5s; lower = faster detection, more

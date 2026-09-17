@@ -36,6 +36,7 @@ import {
   MessageCircle,
   CircleCheck,
   RotateCcw,
+  BrainCircuit,
 } from 'lucide-preact';
 import type { ActivityDetails } from '../api';
 
@@ -165,6 +166,8 @@ const META: Record<string, ActivityMeta> = {
     dotClass: 'review_deleted',
     fmtDetail: fmtGeneric,
   },
+  // ── Agents ──
+  agent_run: { Icon: BrainCircuit, label: 'Agent run', dotClass: 'agent_run', fmtDetail: fmtGeneric },
 };
 
 /** Presentation metadata for an action (unknown actions get a neutral fallback). */

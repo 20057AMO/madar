@@ -76,7 +76,9 @@ export type AuditEvent =
   | 'webhook-send-failed'
   | 'webhook-config-change'
   | 'chat-channel-settings'
-  | 'chat-channel-settings-failed';
+  | 'chat-channel-settings-failed'
+  | 'agent-run'
+  | 'agent-run-failed';
 
 export interface AuditEntry {
   ts: string;

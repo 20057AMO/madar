@@ -40,6 +40,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   'opencode-studio': 'Opencode Studio edited',
   'opencode-update': 'Opencode updated',
   'opencode-update-failed': 'Opencode update failed',
+  'agent-run': 'Agent run completed',
+  'agent-run-failed': 'Agent run failed',
 };
 
 export type Msg = { type: 'ok' | 'err'; text: string } | null;

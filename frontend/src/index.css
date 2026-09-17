@@ -81,7 +81,7 @@ input, select { font: inherit; color: inherit; }
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .modern-input::placeholder { color: var(--text-3); }
-.modern-input:focus { border-color: var(--text-3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 12%, transparent); }
+.modern-input:focus { border-color: var(--text-3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 25%, transparent); }
 select.modern-input { appearance: none; cursor: pointer; }
 
 .btn-primary {
@@ -1502,6 +1502,7 @@ textarea.agent-prompt-input {
 .activity-dot.review_reopened { background: var(--yellow); } .activity-ico.review_reopened { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
 .activity-dot.review_deleted { background: var(--red); } .activity-ico.review_deleted { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .activity-dot.unknown { background: var(--text-3); } .activity-ico.unknown { color: var(--text-3); background: color-mix(in srgb, var(--text-3) 12%, transparent); }
+.activity-dot.agent_run { background: var(--accent); } .activity-ico.agent_run { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 /* Icon tints for the five legacy dot classes (their dots are styled above) */
 .activity-ico.created { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
 .activity-ico.started { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }

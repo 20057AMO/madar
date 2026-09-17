@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -48,6 +48,7 @@ import type {
 } from '../api';
 import { NotesPanel } from '../components/NotesPanel';
 import { ReviewsPanel } from '../components/ReviewsPanel';
+import { AgentRunPanel } from '../components/AgentRunPanel';
 import { fmtCpu, fmtMem, limitsPending } from '../lib/limits';
 import { fmtAction } from '../lib/activity-meta';
 import { ProjectChat } from '../components/ProjectChat';
@@ -63,9 +64,9 @@ import { usePresence } from '../usePresence';
 import { useDocumentVisible } from '../lib/visibility';
 import { VSCodeIcon, OpencodeIcon } from '../components/brand-icons';
 
-type Tab = 'overview' | 'chat' | 'files' | 'reviews' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'activity' | 'snapshots' | 'canvas';
+type Tab = 'overview' | 'chat' | 'files' | 'reviews' | 'logs' | 'terminal' | 'notes' | 'scripts' | 'team' | 'activity' | 'snapshots' | 'canvas' | 'agents';
 
-const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'reviews', 'logs', 'terminal', 'notes', 'scripts', 'team', 'activity', 'snapshots', 'canvas'];
+const VALID_TABS: readonly Tab[] = ['overview', 'chat', 'files', 'reviews', 'logs', 'terminal', 'notes', 'scripts', 'team', 'activity', 'snapshots', 'canvas', 'agents'];
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'Overview',
@@ -80,6 +81,7 @@ const TAB_LABELS: Record<Tab, string> = {
   activity: 'Activity',
   snapshots: 'Snapshots',
   canvas: 'Canvas',
+  agents: 'Agents',
 };
 
 const TAB_ICON: Record<Tab, any> = {
@@ -95,6 +97,7 @@ const TAB_ICON: Record<Tab, any> = {
   activity: History,
   snapshots: Camera,
   canvas: PenTool,
+  agents: BrainCircuit,
 };
 
 function fmtBytes(bytes: number): string {
@@ -708,6 +711,7 @@ export function Project({ params }: { params: { slug: string } }) {
         {tab === 'activity' && <ActivityPanel slug={slug} readOnly={readOnly} />}
         {tab === 'snapshots' && <SnapshotsPanel slug={slug} />}
         {tab === 'canvas' && <ProjectCanvas slug={slug} readOnly={readOnly} />}
+        {tab === 'agents' && <AgentRunPanel slug={slug} readOnly={readOnly} />}
       </div>
 
       <ConfirmModal

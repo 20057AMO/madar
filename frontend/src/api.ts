@@ -744,6 +744,66 @@ export const runStudioUpdate = () =>
     method: 'POST',
   });
 
+// ── Agent delegation (run a roster subagent on a project's workspace) ────
+export type DelegateCapability = 'readonly' | 'write';
+export type DelegationStatus = 'running' | 'done' | 'failed';
+
+export interface DelegationResult {
+  text: string;
+  agent?: string;
+  model?: string;
+  finish?: string;
+  cost?: number | null;
+  tokens?: number | null;
+  files?: string[];
+}
+
+export interface DelegationEntry {
+  id: string;
+  agent: string;
+  capability: DelegateCapability;
+  prompt: string;
+  status: DelegationStatus;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  userId?: string;
+  actorName?: string;
+  error?: string;
+  result?: DelegationResult;
+}
+
+export interface DelegationActiveState {
+  state: 'running';
+  entryId: string;
+  agent: string;
+  startedAt: string;
+  tail: string[];
+}
+export type DelegationState = DelegationActiveState | { state: 'idle' };
+
+export const delegateStart = (slug: string, body: { agent: string; prompt: string }) =>
+  api<{ id: string; agent: string; capability: DelegateCapability; status: 'running'; createdAt: string }>(
+    `/api/opencode/delegate/${encodeURIComponent(slug)}`,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+export const delegateStatus = (slug: string) =>
+  api<DelegationState>(`/api/opencode/delegate/${encodeURIComponent(slug)}`);
+export const delegateList = (slug: string) =>
+  api<{ entries: DelegationEntry[]; total: number }>(
+    `/api/opencode/delegate/${encodeURIComponent(slug)}/history`,
+  );
+export const delegateGet = (slug: string, id: string) =>
+  api<DelegationEntry>(
+    `/api/opencode/delegate/${encodeURIComponent(slug)}/history/${encodeURIComponent(id)}`,
+  );
+export const delegateDelete = (slug: string, id: string) =>
+  api<{ ok: boolean }>(
+    `/api/opencode/delegate/${encodeURIComponent(slug)}/history/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+
 export type AgentPermission = 'none' | 'read' | 'bash' | 'full';
 
 export interface AgentDef {

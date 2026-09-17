@@ -4,7 +4,7 @@
  * Docker, no service imports (same pattern as alerts-core/serve-core).
  *
  * Contract under test:
- *  - The canonical 33-action vocabulary, unknown/junk rejected.
+ *  - The canonical 34-action vocabulary, unknown/junk rejected.
  *  - sanitizeDetails: numbers/strings/string-arrays only, 400-char cap,
  *    booleans/objects/null/nested dropped, empty → undefined.
  *  - appendActivity/capActivity: injectable ceiling, newest kept.
@@ -28,7 +28,7 @@ import {
   type ActivityEntry,
 } from '../src/services/activity-core.ts';
 
-describe('activity vocabulary — the 33 canonical actions', () => {
+describe('activity vocabulary — the 34 canonical actions', () => {
   test('covers the full saladin action list', () => {
     const expected = [
       'created', 'recreated', 'duplicated', 'imported', 'restored', 'deleted',
@@ -40,8 +40,9 @@ describe('activity vocabulary — the 33 canonical actions', () => {
       'serve_started', 'serve_stopped',
       'crashed', 'crash_cleared',
       'review_opened', 'review_commented', 'review_resolved', 'review_reopened', 'review_deleted',
+      'agent_run',
     ];
-    assert.strictEqual(ACTIVITY_ACTIONS.length, 33);
+    assert.strictEqual(ACTIVITY_ACTIONS.length, 34);
     assert.deepStrictEqual([...ACTIVITY_ACTIONS].sort(), expected.sort());
   });
 

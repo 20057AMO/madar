@@ -77,6 +77,17 @@ import { startAlertsAutomation, manualClearCrash } from './services/project-aler
 import { startAttachmentGcSweep } from './services/attachment-gc-sweep';
 import { serveStatus, startServeProcess, stopServeProcess } from './services/project-serve';
 import { sanitizeServeConfig } from './services/serve-core';
+import {
+  startDelegation,
+  getDelegationState,
+  listDelegations,
+  getDelegation,
+  deleteDelegation,
+  type DelegationEntry,
+} from './services/opencode-delegate';
+import { agentCapability, type DelegateCapability } from './services/opencode-delegate-core';
+import { probeOpencodeServer } from './services/opencode-api';
+import { reconcileRunningDelegations } from './services/opencode-delegate-store';
 import { getStorageMetrics, invalidateStorageCache } from './services/storage-metrics';
 import { getCachedProjects, invalidateProjectsCache } from './services/projects-cache';
 import { cleanupStorage } from './services/storage-cleanup';
@@ -2155,6 +2166,118 @@ app.post('/api/opencode-studio/update', async (_req, res) => {
   }
 });
 
+// ── Agent delegation (run a roster subagent on a project's workspace) ────
+// POST starts a background agent run (returns {id, status:'running'}); the
+// run's progress is polled via GET state (live tail) and the finished result
+// persists in the per-project history. Access is capability-gated (readonly
+// agents → viewer+, write agents → editor+) and enforced BOTH in the route
+// (before any meta read or probe — a denied user always gets a uniform 403,
+// never a 404/503 that would leak project existence or opencode state) and
+// inside startDelegation (authoritative, on freshly-read frontmatter).
+
+app.post('/api/opencode/delegate/:slug', userWriteLimiter, async (req: any, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    // Permission gate FIRST (L1 anti-oracle): resolve the capability from the
+    // roster and gate access before loadMeta/probe, so users without access
+    // can never distinguish 404/503 from their 403.
+    let capability: DelegateCapability = 'write';
+    const agentName = typeof req.body?.agent === 'string' ? req.body.agent.trim() : '';
+    if (agentName) {
+      try {
+        capability = agentCapability(studio.getAgent(agentName).content);
+      } catch {
+        /* unknown agent — the service 404s it after the access gate */
+      }
+    }
+    const { allowed } = checkProjectAccess(
+      req.user.id,
+      req.user.role,
+      slug,
+      capability === 'readonly' ? 'viewer' : 'editor',
+    );
+    if (!allowed) return res.status(403).json({ error: 'Access denied to this project' });
+    if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
+    const probe = await probeOpencodeServer();
+    if (!probe.ok) return res.status(503).json({ error: 'opencode_offline' });
+    const result = await startDelegation(
+      slug,
+      { agent: req.body?.agent, prompt: req.body?.prompt },
+      { id: req.user.id, username: req.user.username, role: req.user.role },
+      // CLI fallback is off by default; WSD_DELEGATE_CLI_FALLBACK=1 opts in.
+      { allowCliFallback: process.env.WSD_DELEGATE_CLI_FALLBACK === '1', ip: req.ip },
+    );
+    res.status(201).json(result);
+  } catch (err: any) {
+    res.status(err.statusCode || err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/opencode/delegate/:slug', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
+    res.json(getDelegationState(slug));
+  } catch (err: any) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+/**
+ * L2 viewer-safe delegation view: the full prompt/result stay editor+ (or the
+ * task's OWN author — who knows what they typed); everyone else gets the
+ * public metadata shape (agent/status/at/duration). The route is already
+ * viewer-gated; this is the second, content-level gate.
+ */
+function delegationView(entry: DelegationEntry, userId: string, role: string, slug: string): DelegationEntry | Record<string, unknown> {
+  // `role` arrives from req.user (verified by verifyToken) so this cast is
+  // safe; typed as UserRole to match checkProjectAccess's signature.
+  const editorAccess = checkProjectAccess(userId, role as UserRole, slug, 'editor').allowed;
+  if (editorAccess || (entry.userId && entry.userId === userId)) return entry;
+  const { prompt, result, ...publicEntry } = entry;
+  void prompt;
+  void result;
+  return publicEntry;
+}
+
+app.get('/api/opencode/delegate/:slug/history', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
+    const all = listDelegations(slug);
+    // Newest first for the UI, mirroring the activity feed list contract.
+    const entries = all.map((e) => delegationView(e, req.user.id, req.user.role, slug));
+    res.json({ entries: [...entries].reverse(), total: all.length });
+  } catch (err: any) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/opencode/delegate/:slug/history/:id', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
+    const entry = getDelegation(slug, String(req.params.id || ''));
+    if (!entry) return res.status(404).json({ error: 'Delegation not found' });
+    res.json(delegationView(entry, req.user.id, req.user.role, slug));
+  } catch (err: any) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/opencode/delegate/:slug/history/:id', requireProjectAccess('editor'), (req: any, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
+    if (!deleteDelegation(slug, String(req.params.id || ''))) {
+      return res.status(404).json({ error: 'Delegation not found' });
+    }
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // Project container logs
 app.get('/api/projects/:slug/logs', requireProjectAccess('viewer'), async (req, res) => {
   try {
@@ -2570,6 +2693,9 @@ server.listen(PORT, HOST, () => {
 
 // Automatic orphaned-workspace cleanup (boot + every WSD_JANITOR_INTERVAL_MS).
 startJanitor();
+
+// Flip delegations left `running` by a crashed server to failed.
+reconcileRunningDelegations();
 
 // Per-project automated snapshot captures (boot + every WSD_SNAPSHOT_SWEEP_MS).
 snapAuto.startSnapshotAutomation();
