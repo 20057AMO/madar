@@ -17,6 +17,7 @@ import { relTime } from '../lib/time';
 import { Avatar } from './Avatar';
 import { ConfirmModal } from './ConfirmModal';
 import { useAuth } from '../auth';
+import { ReviewPathPicker } from './ReviewPathPicker';
 
 type Filter = 'all' | ReviewStatus;
 
@@ -258,16 +259,19 @@ export function ReviewsPanel({
       ) : (
         /* Composer */
         <div style="display:flex;flex-direction:column;gap:8px;background:rgba(255,255,255,.03);border:1px solid var(--border,#333);border-radius:12px;padding:10px">
-          <input
-            ref={pathInputRef}
-            class="modern-input mono"
-            style="width:100%;box-sizing:border-box"
-            placeholder="File path, e.g. src/app.ts"
-            aria-label="Review file path"
-            name="review-path"
-            value={pathDraft}
-            onInput={(e: any) => setPathDraft(e.target.value)}
-          />
+          <div style="display:flex;align-items:center;gap:6px">
+            <input
+              ref={pathInputRef}
+              class="modern-input mono"
+              style="flex:1;min-width:0;box-sizing:border-box"
+              placeholder="File path, e.g. src/app.ts"
+              aria-label="Review file path"
+              name="review-path"
+              value={pathDraft}
+              onInput={(e: any) => setPathDraft(e.target.value)}
+            />
+            <ReviewPathPicker slug={slug} onPick={(p) => setPathDraft(p)} />
+          </div>
           <textarea
             class="modern-input"
             style="width:100%;min-height:56px;resize:vertical;font-size:0.82rem;line-height:1.5;box-sizing:border-box"
