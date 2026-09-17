@@ -967,6 +967,9 @@ export const updateProject = (slug: string, patch: { name?: string; description?
   });
 export const recreateProject = (slug: string) =>
   api<{ project: Project }>(`/api/projects/${slug}/recreate`, { method: 'POST' });
+/** Fetch the project's env values (editor+ only; generic payloads omit env). */
+export const getProjectEnv = (slug: string) =>
+  api<{ env: Record<string, string> }>(`/api/projects/${slug}/env`);
 export const setProjectEnv = (slug: string, env: Record<string, string>) =>
   api<{ env: Record<string, string>; needsRecreate: boolean }>(`/api/projects/${slug}/env`, {
     method: 'PUT',

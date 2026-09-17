@@ -247,6 +247,7 @@ backend/tests/
   *.test.ts            — Node test runner suites (real-Docker against the running app)
   *-core.test.ts       — offline unit tests on import-free modules
   e2e/limits_ui.py     — Playwright browser E2E (resource-limits UI)
+  e2e/reviews_ui.py    — Playwright browser E2E (file reviews UI)
 ```
 
 ### Running
@@ -257,6 +258,7 @@ cd backend && node --test --test-concurrency=1 "tests/**/*.test.ts"
 
 # UI E2E (Python + Playwright)
 python backend/tests/e2e/limits_ui.py
+python backend/tests/e2e/reviews_ui.py
 ```
 
 ### Conventions

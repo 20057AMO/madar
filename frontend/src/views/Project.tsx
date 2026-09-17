@@ -3,6 +3,7 @@ import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil,
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
+  getProjectEnv,
   startProject,
   stopProject,
   deleteProject,
@@ -753,6 +754,20 @@ function OverviewPanel({
   const [cloneMsg, setCloneMsg] = useState<string | null>(null);
 
   const [envText, setEnvText] = useState('');
+  // Project payloads no longer carry env (secrets). Editors fetch the real
+  // values from the dedicated env endpoint; viewers keep the count only.
+  const [envVars, setEnvVars] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (readOnly) {
+      setEnvVars({});
+      return;
+    }
+    getProjectEnv(slug)
+      .then((d) => { if (!cancelled) setEnvVars(d.env || {}); })
+      .catch(() => { if (!cancelled) setEnvVars({}); });
+    return () => { cancelled = true; };
+  }, [slug, readOnly]);
   const [envMsg, setEnvMsg] = useState<string | null>(null);
 
   const [portsText, setPortsText] = useState('');
@@ -880,8 +895,8 @@ function OverviewPanel({
 
   useEffect(() => {
     if (document.activeElement === envInputRef.current || envDirtyRef.current) return;
-    setEnvText(Object.entries(project?.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
-  }, [project?.env]);
+    setEnvText(Object.entries(envVars || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
+  }, [envVars]);
 
   useEffect(() => {
     if (document.activeElement === portsInputRef.current) return;
@@ -1576,7 +1591,7 @@ function OverviewPanel({
                   <button class="btn-primary sm" onClick={saveEnv}>Save env</button>
                   <button class="btn-ghost sm" onClick={() => {
                     envDirtyRef.current = false;
-                    setEnvText(Object.entries(project?.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
+                    setEnvText(Object.entries(envVars || {}).map(([k, v]) => `${k}=${v}`).join('\n'));
                     setEditSection(null);
                   }}>Cancel</button>
                   {envMsg && <span class="dim" style="color: var(--text-3)" role={msgRole(envMsg)}>{envMsg}</span>}
@@ -1584,9 +1599,9 @@ function OverviewPanel({
               </>
             ) : (
               <>
-                {Object.keys(project?.env || {}).length > 0 ? (
+                {Object.keys(envVars || {}).length > 0 ? (
                   <div class="ov-env-view">
-                    {Object.entries(project?.env || {}).map(([k, v]) => (
+                    {Object.entries(envVars || {}).map(([k, v]) => (
                       <span class="ov-env-chip" key={k}>{k}={v}</span>
                     ))}
                   </div>
