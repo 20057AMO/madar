@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { execSync, type ExecSyncOptions } from 'child_process';
-import { WORKSPACES_ROOT } from './docker-manager';
+
+/** Same convention as project-context/canvas/reviews: resolve locally. */
+const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 
 const MAX_OUTPUT = 50000;
 const EXEC_TIMEOUT = 30000;
@@ -104,7 +106,7 @@ export function listFiles(slug: string, rel: string): string {
   return lines.join('\n') || '(empty)';
 }
 
-function isDangerousCommand(cmd: string): string | null {
+export function isDangerousCommand(cmd: string): string | null {
   if (cmd.length > MAX_CMD_LENGTH) return 'Command too long (max 1000 characters)';
 
   // Block shell chain operators that could hide malicious commands.
@@ -143,32 +145,51 @@ function isDangerousCommand(cmd: string): string | null {
   return null;
 }
 
-export function execCommand(slug: string, cmd: string): string {
+/**
+ * `execCommand` tool: runs INSIDE the project's container via docker exec.
+ *
+ * Historically this ran on the backend host (child_process.execSync in
+ * /workspaces/<slug>) — any valid token could execute host commands and the
+ * sync call blocked the event loop. Commands now execute under the project
+ * container's own filesystem / PID / network isolation.
+ *
+ * Set WSD_AGENT_LOCAL_FALLBACK=1 ONLY to restore legacy host-side execution
+ * for deployments without per-project containers — it is inherently unsafe.
+ */
+export async function execCommand(slug: string, cmd: string): Promise<string> {
   const clean = safeSlug(slug);
-  const cwd = path.resolve(WORKSPACES_ROOT, clean);
-  if (!fs.existsSync(cwd)) return `Workspace not found: ${slug}`;
-
   const danger = isDangerousCommand(cmd);
   if (danger) return `[Blocked] ${danger}`;
 
-  const opts: ExecSyncOptions = {
-    cwd,
-    timeout: EXEC_TIMEOUT,
-    maxBuffer: MAX_OUTPUT,
-    encoding: 'utf8',
-    shell: '/bin/bash',
-  };
+  if (process.env.WSD_AGENT_LOCAL_FALLBACK === '1') {
+    const cwd = path.resolve(WORKSPACES_ROOT, clean);
+    if (!fs.existsSync(cwd)) return `Workspace not found: ${slug}`;
+    const opts: ExecSyncOptions = {
+      cwd,
+      timeout: EXEC_TIMEOUT,
+      maxBuffer: MAX_OUTPUT,
+      encoding: 'utf8',
+      shell: '/bin/bash',
+    };
+    try {
+      const stdout = execSync(cmd, opts);
+      const str = stdout ? stdout.toString('utf8') : '';
+      const trimmed = str.length > MAX_OUTPUT ? str.slice(0, MAX_OUTPUT) + '\n…(truncated)' : str;
+      return trimmed || '(no output)';
+    } catch (err: any) {
+      const stderr = err.stderr || '';
+      const stdout = err.stdout || '';
+      const msg = err.message || String(err);
+      return [stdout, stderr, msg].filter(Boolean).join('\n').slice(0, MAX_OUTPUT);
+    }
+  }
 
   try {
-    const stdout = execSync(cmd, opts);
-    const str = stdout ? stdout.toString('utf8') : '';
-    const trimmed = str.length > MAX_OUTPUT ? str.slice(0, MAX_OUTPUT) + '\n…(truncated)' : str;
-    return trimmed || '(no output)';
+    const { execInProjectContainer } = await import('./docker-manager.js');
+    const res = await execInProjectContainer(clean, cmd, { timeoutMs: EXEC_TIMEOUT, maxOutput: MAX_OUTPUT });
+    return res.output || '(no output)';
   } catch (err: any) {
-    const stderr = err.stderr || '';
-    const stdout = err.stdout || '';
-    const msg = err.message || String(err);
-    return [stdout, stderr, msg].filter(Boolean).join('\n').slice(0, MAX_OUTPUT);
+    return `[Command failed] ${err?.message || String(err)}`;
   }
 }
 

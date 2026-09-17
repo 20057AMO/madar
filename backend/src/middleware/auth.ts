@@ -1,5 +1,6 @@
 import { verifyToken, type UserRole } from '../services/user-store';
 import { loadMeta, type ProjectMember } from '../services/projects-meta';
+import { decideProjectAccess } from '../services/access-core';
 
 export interface AuthRequest extends Express.Request {
   user?: { id: string; username: string; role: UserRole; jti?: string };
@@ -55,28 +56,8 @@ export function checkProjectAccess(
   slug: string,
   minRole: 'admin' | 'editor' | 'viewer' = 'viewer'
 ): { allowed: boolean; memberRole?: string } {
-  if (userRole === 'admin') return { allowed: true, memberRole: 'admin' };
-  // Global editor: write-level access to every project without membership.
-  if (userRole === 'editor') {
-    return { allowed: minRole !== 'admin', memberRole: 'editor' };
-  }
-
   const meta = loadMeta(slug);
-  // Legacy projects without membership data: allow all authenticated users
-  if (!meta || (!meta.ownerId && (!meta.members || meta.members.length === 0))) {
-    return { allowed: true, memberRole: 'editor' };
-  }
-
-  // Owner always has admin
-  if (meta.ownerId === userId) return { allowed: true, memberRole: 'admin' };
-
-  const member = (meta.members || []).find((m) => m.userId === userId);
-  if (!member) return { allowed: false };
-
-  const hierarchy: Record<string, number> = { admin: 3, editor: 2, viewer: 1 };
-  const hasLevel = hierarchy[member.role] || 0;
-  const needLevel = hierarchy[minRole] || 0;
-  return { allowed: hasLevel >= needLevel, memberRole: member.role };
+  return decideProjectAccess(userId, userRole, meta, minRole);
 }
 
 /**

@@ -126,8 +126,10 @@ import {
 } from './services/user-store';
 import { otpauthUri } from './services/totp';
 import { buildBackup, restoreFromBackup } from './services/settings-export';
+import { publicProject, publicProjects } from './services/docker-manager';
 import { recordAudit, listAudit, listUserActivity } from './services/audit-store';
 import { checkUserWrite, sweepUserWriteBuckets } from './services/user-write-limiter';
+import type { UserRole } from './services/user-store';
 import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkProjectAccess } from './middleware/auth';
 import { attachWebSockets } from './ws/ws-server';
 import { getPresence } from './ws/ws-presence';
@@ -1177,7 +1179,9 @@ app.put('/api/agents/:id/sessions/:chatId', (req, res) => {
 // listContainers + per-project meta/canvas file I/O per request.
 app.get('/api/projects', async (_req, res) => {
   try {
-    res.json({ projects: await getCachedProjects() });
+    // env stripped: list is viewer-visible for every authenticated user and
+    // must never carry container secrets.
+    res.json({ projects: publicProjects(await getCachedProjects()) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1254,7 +1258,7 @@ app.post('/api/archive/:entry/restore', requireRole('editor'), userWriteLimiter,
     const userId = req.user?.id;
     if (userId) setArchiveOwner(project.slug, userId);
     recordAudit('archive-restore', true, req.ip);
-    res.status(201).json({ project });
+    res.status(201).json({ project: publicProject(project) });
   } catch (err: any) {
     recordAudit('archive-restore', false, req.ip);
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -1287,7 +1291,7 @@ app.post('/api/projects', async (req: any, res) => {
     }
     invalidateStorageCache();
     invalidateProjectsCache();
-    res.status(201).json({ project });
+    res.status(201).json({ project: publicProject(project) });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -1333,7 +1337,7 @@ app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async 
     }
     invalidateStorageCache();
     invalidateProjectsCache();
-    res.status(201).json({ project });
+    res.status(201).json({ project: publicProject(project) });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -1398,7 +1402,7 @@ app.post('/api/projects/import', requireRole('editor'), upload.single('file'), a
     invalidateProjectsCache();
     recordAudit('snapshot-import', true, req.ip);
     recordActivity(project.slug, 'imported', { userId: req.user?.id });
-    res.status(201).json({ project });
+    res.status(201).json({ project: publicProject(project) });
   } catch (err: any) {
     recordAudit('snapshot-import', false, req.ip);
     res.status(err.statusCode || 400).json({ error: err.message });
@@ -1418,7 +1422,7 @@ app.get('/api/projects/:slug', requireProjectAccess('viewer'), async (req, res) 
   try {
     const project = await getProject(req.params.slug);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    res.json({ project });
+    res.json({ project: publicProject(project) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1681,7 +1685,7 @@ app.post('/api/projects/:slug/snapshots/:file/restore', requireProjectAccess('ed
     invalidateProjectsCache();
     recordAudit('snapshot-restore', true, req.ip);
     recordActivity(project.slug, 'restored', { userId: req.user?.id });
-    res.status(201).json({ project });
+    res.status(201).json({ project: publicProject(project) });
   } catch (err: any) {
     recordAudit('snapshot-restore', false, req.ip);
     res.status(err.statusCode || 400).json({ error: err.message });
@@ -1905,7 +1909,7 @@ app.post('/api/projects/:slug/crash-clear', requireProjectAccess('editor'), user
 app.post('/api/projects/:slug/start', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const project = await startProject(req.params.slug, req.user?.id);
-    res.json({ project });
+    res.json({ project: publicProject(project) });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -1915,7 +1919,7 @@ app.post('/api/projects/:slug/start', requireProjectAccess('editor'), async (req
 app.post('/api/projects/:slug/stop', requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const project = await stopProject(req.params.slug, req.user?.id);
-    res.json({ project });
+    res.json({ project: publicProject(project) });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -2204,7 +2208,7 @@ app.patch('/api/projects/:slug', requireProjectAccess('editor'), async (req: any
     if (typeof description === 'string') meta.description = description.trim().slice(0, 2000);
     saveMeta(project.slug, meta);
     recordActivity(project.slug, 'updated', { userId: req.user?.id });
-    res.json({ project: await getProject(project.slug) });
+    res.json({ project: publicProject(await getProject(project.slug)) });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -2216,7 +2220,20 @@ app.post('/api/projects/:slug/recreate', requireProjectAccess('editor'), async (
     const project = await getProject(req.params.slug);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const recreated = await recreateProject(project.slug, req.user?.id);
-    res.json({ project: recreated });
+    res.json({ project: publicProject(recreated) });
+  } catch (err: any) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Read the project's environment variables (editor+ only). This is the ONLY
+// sanctioned read path for env values — the generic project payloads have env
+// stripped (publicProject) so secrets never ride along on list/detail calls.
+app.get('/api/projects/:slug/env', requireProjectAccess('editor'), async (req: any, res) => {
+  try {
+    const project = await getProject(req.params.slug);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    res.json({ env: project.env || {} });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }

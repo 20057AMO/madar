@@ -94,7 +94,7 @@ export async function streamChatGemini(
     });
 
     if (control.cancelled) throw new Error('Chat stopped');
-    handlers.onDone(full);
+    await handlers.onDone(full);
     return full;
   } catch (err: any) {
     if (control.cancelled) throw new Error('Chat stopped');

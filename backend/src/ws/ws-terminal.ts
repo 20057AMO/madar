@@ -99,15 +99,21 @@ export function handleTerminalSocket(
   ws.on('error', finish);
 
   let notifyExit = finish;
-  const start =
-    mode === 'control'
-      ? startControlShell(slug, subdirInfo, send, () => notifyExit())
-      : startProjectExec(slug, subdirInfo, send, () => notifyExit()).catch((err: any) => {
-          if (err?.statusCode === 404) {
-            throw new Error(`Project container 'wsd-${slug}' not found. Start the project first.`);
-          }
-          throw err;
-        });
+  // pty.spawn can throw SYNCHRONOUSLY (e.g. missing shell binary on exotic
+  // hosts); a throw here would propagate through the ws connection handler
+  // and take down the whole backend. Convert every failure path into a
+  // graceful socket close.
+  const start = (async () => {
+    if (mode === 'control') return startControlShell(slug, subdirInfo, send, () => notifyExit());
+    try {
+      return await startProjectExec(slug, subdirInfo, send, () => notifyExit());
+    } catch (err: any) {
+      if (err?.statusCode === 404) {
+        throw new Error(`Project container 'wsd-${slug}' not found. Start the project first.`);
+      }
+      throw err;
+    }
+  })();
 
   start
     .then((sh) => {
@@ -142,6 +148,29 @@ export function handleTerminalSocket(
 }
 
 /** Shell running in the app/control container, cwd = the project workspace. Uses node-pty for real PTY support. */
+/**
+ * Env allowlist for the control shell. NEVER pass `process.env` through: the
+ * backend container holds JWT_SECRET, encryption keys, and provider API keys
+ * that must not leak into an interactive shell. Only known-safe variables are
+ * inherited; everything else the shell needs is set explicitly.
+ */
+const CONTROL_ENV_ALLOWLIST = [
+  'PATH', 'HOME', 'LANG', 'LC_ALL', 'TERM', 'TZ',
+  'HOSTNAME', 'SHELL', 'USER', 'LOGNAME',
+] as const;
+
+function controlEnv(): Record<string, string> {
+  const env: Record<string, string> = {
+    TERM: 'xterm-256color',
+    LANG: 'C.UTF-8',
+  };
+  for (const key of CONTROL_ENV_ALLOWLIST) {
+    const v = process.env[key];
+    if (typeof v === 'string') env[key] = v;
+  }
+  return env;
+}
+
 function startControlShell(
   slug: string,
   subdirInfo: { subdir: string },
@@ -151,12 +180,13 @@ function startControlShell(
   const base = path.join(WORKSPACES_ROOT, slug);
   const cwd = subdirInfo.subdir ? path.join(base, subdirInfo.subdir) : base;
 
-  const ptyProcess = pty.spawn('/bin/bash', ['-l'], {
+  const shellBinary = process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : '/bin/bash';
+  const ptyProcess = pty.spawn(shellBinary, ['-l'], {
     name: 'xterm-256color',
     cols: 80,
     rows: 24,
     cwd,
-    env: { ...process.env, TERM: 'xterm-256color', LANG: 'C.UTF-8' } as Record<string, string>,
+    env: controlEnv(),
   });
 
   let exited = false;

@@ -88,7 +88,7 @@ function isToolAllowed(toolName: string, permission: AgentPermission | undefined
   }
 }
 
-export function executeToolCall(slug: string, call: ToolCall, permission?: AgentPermission): ToolResult {
+export async function executeToolCall(slug: string, call: ToolCall, permission?: AgentPermission): Promise<ToolResult> {
   const { name, args } = call;
 
   if (!isToolAllowed(name, permission)) {
@@ -109,7 +109,8 @@ export function executeToolCall(slug: string, call: ToolCall, permission?: Agent
         output = listFiles(slug, args.path || '.');
         break;
       case 'execCommand':
-        output = execCommand(slug, args.command || 'echo "no command"');
+        // Async: executes inside the project container via docker exec.
+        output = await execCommand(slug, args.command || 'echo "no command"');
         break;
       case 'getProjectTree':
         output = getProjectTree(slug, parseInt(args.maxDepth || '3', 10));

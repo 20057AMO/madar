@@ -17,6 +17,30 @@ import { handleProjectsStatusSocket, shutdownProjectsStatusBroadcaster } from '.
 import { handlePresenceSocket } from './ws-presence';
 import { handleChatTeamSocket } from './ws-chat-team';
 import { verifyToken } from '../services/user-store';
+import { decideProjectAccess, decideControlAccess, type AccessSnapshot } from '../services/access-core';
+import { loadMeta } from '../services/projects-meta';
+
+/**
+ * Project-level authorization gate for WebSocket routes.
+ *
+ * The upgrade handler only verifies the JWT — project membership/role must be
+ * checked here per route, exactly like requireProjectAccess() does for REST.
+ * Uses the shared pure decision core (access-core) with the project's meta
+ * snapshot — same rules as the REST middleware by construction.
+ * Without this, any authenticated user (even a viewer) could open a terminal
+ * or logs socket for a project they are not a member of.
+ *
+ * Reject BEFORE acquireRoom() so denied connections never consume room slots.
+ */
+function gateProject(
+  slug: string,
+  user: { id: string; role: string } | null,
+  minRole: 'admin' | 'editor' | 'viewer'
+): boolean {
+  if (!user) return false;
+  const meta: AccessSnapshot = loadMeta(slug) || {};
+  return decideProjectAccess(user.id, user.role as 'admin' | 'editor' | 'viewer', meta, minRole).allowed;
+}
 
 /** Interactive rooms (chat/terminal/logs/agent/presence) stay at 8. */
 const MAX_CONNECTIONS_PER_ROOM = 8;
@@ -82,6 +106,17 @@ export function attachWebSockets(server: http.Server): void {
         return;
       }
       const mode = url.searchParams.get('mode') === 'control' ? 'control' : 'project';
+      // Terminal = interactive shell. `project` mode execs inside the project
+      // container → editor+; `control` mode runs a shell inside the backend
+      // container itself (git + docker CLI + socket) → strict admin decision
+      // (the legacy open-projects bypass must not hand out host shells).
+      const termAllowed = mode === 'control'
+        ? decideControlAccess(authUser?.id ?? '', (authUser?.role ?? 'viewer') as 'admin' | 'editor' | 'viewer', loadMeta(slug) || {})
+        : gateProject(slug, authUser, 'editor');
+      if (!termAllowed) {
+        ws.close(1008, 'project access denied');
+        return;
+      }
       const room = `term:${slug}:${mode}`;
       if (!acquireRoom(room)) {
         ws.close(1013, 'too many connections for terminal');
@@ -96,6 +131,10 @@ export function attachWebSockets(server: http.Server): void {
       const slug = decodeURIComponent(logsMatch[1]);
       if (!isSafeChatId(slug)) {
         ws.close(1008, 'invalid slug');
+        return;
+      }
+      if (!gateProject(slug, authUser, 'viewer')) {
+        ws.close(1008, 'project access denied');
         return;
       }
       const room = `logs:${slug}`;
@@ -123,6 +162,10 @@ export function attachWebSockets(server: http.Server): void {
       const slug = decodeURIComponent(statusMatch[1]);
       if (!isSafeChatId(slug)) {
         ws.close(1008, 'invalid slug');
+        return;
+      }
+      if (!gateProject(slug, authUser, 'viewer')) {
+        ws.close(1008, 'project access denied');
         return;
       }
       const room = `status:${slug}`;
@@ -172,6 +215,10 @@ export function attachWebSockets(server: http.Server): void {
       const slug = decodeURIComponent(presenceMatch[1]);
       if (!isSafeChatId(slug)) {
         ws.close(1008, 'invalid slug');
+        return;
+      }
+      if (!gateProject(slug, authUser, 'viewer')) {
+        ws.close(1008, 'project access denied');
         return;
       }
       const room = `presence:${slug}`;

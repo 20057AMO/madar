@@ -34,6 +34,11 @@ import {
   unregisterOpencodeProjectSessions,
 } from './opencode-api';
 import { ensureServeRunning, probeServe } from './project-serve';
+import { publicProject, publicProjects } from './project-public';
+
+// Re-exported so the rest of the app can import these helpers from the
+// docker-manager barrel as before.
+export { publicProject, publicProjects };
 import { deriveServeState, type ServeState } from './serve-core';
 import { invalidateProjectsCache } from './projects-cache';
 import { ensureProjectChannel, deleteChannel } from './chat-team-store';
@@ -1017,18 +1022,14 @@ export interface ScriptRunResult {
   output: string;
 }
 
-/** Run `npm run <script>` inside the project container (must be running). */
-export async function runProjectScript(slug: string, script: string): Promise<ScriptRunResult> {
-  const projectSlug = validateProjectSlug(slug);
-  const proj = await requireContainer(projectSlug);
-  if (proj.status !== 'running') throw new HttpError(409, 'Project is stopped. Start it first.');
-
-  const container = docker.getContainer(`wsd-${projectSlug}`);
-  const exec = await container.exec({
-    Cmd: ['sh', '-lc', `npm run ${script} 2>&1`],
-    AttachStdout: true,
-    AttachStderr: true,
-  });
+/**
+ * Shared docker-exec stream collector: demuxes the [stream][pad][len][payload]
+ * frames (merging stdout+stderr), caps output, and tears down on timeout.
+ */
+async function collectExecOutput(
+  exec: Docker.Exec,
+  opts: { timeoutMs: number; maxOutput: number }
+): Promise<ScriptRunResult> {
   const stream: any = await exec.start({ hijack: false });
 
   let output = '';
@@ -1044,7 +1045,7 @@ export async function runProjectScript(slug: string, script: string): Promise<Sc
         output += raw.subarray(8, 8 + size).toString('utf8');
         raw = raw.subarray(8 + size);
       }
-      if (output.length > 300000) output = output.slice(-300000);
+      if (output.length > opts.maxOutput) output = output.slice(-opts.maxOutput);
     };
     stream.on('data', onData);
     stream.on('end', resolve);
@@ -1056,7 +1057,7 @@ export async function runProjectScript(slug: string, script: string): Promise<Sc
         /* ignore */
       }
       resolve();
-    }, 180000);
+    }, opts.timeoutMs);
     stream.on('close', () => {
       clearTimeout(timer);
       resolve();
@@ -1065,6 +1066,50 @@ export async function runProjectScript(slug: string, script: string): Promise<Sc
 
   const info = await exec.inspect().catch(() => null);
   return { exitCode: info?.ExitCode ?? null, output };
+}
+
+/**
+ * Run a shell command INSIDE the project's container (docker exec).
+ *
+ * This is the sanctioned execution path for AI-agent tool calls: commands run
+ * under the container's own filesystem/isolated PID+net namespaces instead of
+ * on the backend host. `collectExecOutput` is async and never blocks the
+ * event loop (unlike the old host-side execSync).
+ */
+export async function execInProjectContainer(
+  slug: string,
+  cmd: string,
+  opts: { timeoutMs?: number; maxOutput?: number } = {}
+): Promise<ScriptRunResult> {
+  const projectSlug = validateProjectSlug(slug);
+  const proj = await requireContainer(projectSlug);
+  if (proj.status !== 'running') throw new HttpError(409, 'Project is stopped. Start it first.');
+
+  const container = docker.getContainer(`wsd-${projectSlug}`);
+  const exec = await container.exec({
+    Cmd: ['bash', '-lc', cmd],
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+  return collectExecOutput(exec, {
+    timeoutMs: opts.timeoutMs ?? 120_000,
+    maxOutput: opts.maxOutput ?? 300_000,
+  });
+}
+
+/** Run `npm run <script>` inside the project container (must be running). */
+export async function runProjectScript(slug: string, script: string): Promise<ScriptRunResult> {
+  const projectSlug = validateProjectSlug(slug);
+  const proj = await requireContainer(projectSlug);
+  if (proj.status !== 'running') throw new HttpError(409, 'Project is stopped. Start it first.');
+
+  const container = docker.getContainer(`wsd-${projectSlug}`);
+  const exec = await container.exec({
+    Cmd: ['sh', '-lc', `npm run ${script} 2>&1`],
+    AttachStdout: true,
+    AttachStderr: true,
+  });
+  return collectExecOutput(exec, { timeoutMs: 180_000, maxOutput: 300_000 });
 }
 
 /** git clone into the project workspace (empty workspace → root, else subdir). */

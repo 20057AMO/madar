@@ -12,10 +12,13 @@ import {
   MAX_TOOL_ITERATIONS,
 } from '../services/agent-tool-executor';
 import { checkUserWrite } from '../services/user-write-limiter';
+import { checkProjectAccess } from '../middleware/auth';
 import type { UserRole } from '../services/user-store';
 
 const MAX_PROMPT_CHARS = 20000;
 const MAX_HISTORY_TURNS = 20;
+/** Mirrors ws-chat's PROJECT_RE — only plausible project slugs get gated. */
+const PROJECT_SLUG_RE = /^[a-z0-9._-]{1,32}$/i;
 const TOTAL_CONTEXT_BUDGET = 24000;
 const TOUCH_DEBOUNCE_MS = 1000;
 
@@ -199,6 +202,23 @@ export function handleAgentSocket(
     }
     const project = typeof msg.project === 'string' ? msg.project : undefined;
 
+    // Project-scoped agent runs execute tools (read files, run commands) in
+    // that project's name — the requesting user must hold editor+ on it.
+    // Checked here (not just at upgrade) because `project` arrives per prompt
+    // from the client and the room is shared by agentId, not by user.
+    if (project && project !== 'all' && PROJECT_SLUG_RE.test(project)) {
+      const allowed = checkProjectAccess(
+        authUser?.id ?? '',
+        (authUser?.role ?? 'viewer') as UserRole,
+        project,
+        'editor'
+      ).allowed;
+      if (!allowed) {
+        sendJson(ws, { type: 'error', message: 'Project access denied' });
+        return;
+      }
+    }
+
     active.set(room, true);
 
     const userContent = buildUserContent(text, attachments);
@@ -289,7 +309,7 @@ export function handleAgentSocket(
             debouncedTouch(agentId, chatId);
             broadcast(room, { type: 'event', event: ev });
           },
-          onDone: (final: string) => {
+          onDone: async (final: string) => {
             const fullText = final || accumulated;
 
             if (agent.toolsEnabled && hasToolCalls(fullText)) {
@@ -309,7 +329,7 @@ export function handleAgentSocket(
                   );
                   broadcast(room, { type: 'event', event: toolCallEvent });
 
-                  const result = executeToolCall(slug, call, agent.permission);
+                  const result = await executeToolCall(slug, call, agent.permission);
 
                   const toolResultEvent = appendAgentEvent(
                     agentId, chatId, 'tool_result',

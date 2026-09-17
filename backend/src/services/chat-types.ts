@@ -13,7 +13,8 @@ export interface ChatMessage {
 
 export interface StreamHandlers {
   onDelta: (text: string) => void;
-  onDone: (full: string) => void;
+  /** May return a promise (agent tool loops await it); engines MUST await it. */
+  onDone: (full: string) => void | Promise<void>;
   onError: (error: string) => void;
 }
 
