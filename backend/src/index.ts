@@ -87,6 +87,8 @@ import {
 } from './services/opencode-delegate';
 import { agentCapability, type DelegateCapability } from './services/opencode-delegate-core';
 import { probeOpencodeServer } from './services/opencode-api';
+import * as componentUpdates from './services/component-updates';
+import type { ComponentId } from './services/component-updates';
 import { reconcileRunningDelegations } from './services/opencode-delegate-store';
 import { getStorageMetrics, invalidateStorageCache } from './services/storage-metrics';
 import { getCachedProjects, invalidateProjectsCache } from './services/projects-cache';
@@ -2038,131 +2040,198 @@ app.post('/api/opencode/open', async (req: any, res) => {
   }
 });
 
-// ── Opencode Studio: subagents / skills / config CRUD + update ──────────
+// ── Opencode Studio: subagents / skills / config CRUD ───────────────────
+// Admin-only surface (roster files are read by every project's agent runs and
+// the config feeds the provider wiring — a non-admin must never be able to
+// tamper with them). Audited with ip/userId on every write; the old
+// /update route is gone — updates flow through the unified /api/updates.
 
-app.get('/api/opencode-studio/agents', (_req, res) => {
+app.get('/api/opencode-studio/agents', requireAdmin, (_req, res) => {
   res.json({ agents: studio.listAgents() });
 });
 
-app.get('/api/opencode-studio/agents/:name', (req, res) => {
+app.get('/api/opencode-studio/agents/:name', requireAdmin, (req: any, res) => {
   try {
     res.json(studio.getAgent(String(req.params.name)));
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.post('/api/opencode-studio/agents/:name', (req, res) => {
+app.post('/api/opencode-studio/agents/:name', requireAdmin, (req: any, res) => {
   try {
     const content = String(req.body?.content ?? '');
     if (!content.trim()) return res.status(400).json({ error: 'Agent content is required' });
     studio.saveAgent(String(req.params.name), content);
-    recordAudit('opencode-studio', true);
+    recordAudit('opencode-studio', true, req.ip, req.user?.id);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.delete('/api/opencode-studio/agents/:name', (req, res) => {
+app.delete('/api/opencode-studio/agents/:name', requireAdmin, (req: any, res) => {
   try {
     studio.deleteAgent(String(req.params.name));
+    recordAudit('opencode-studio', true, req.ip, req.user?.id);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.get('/api/opencode-studio/skills', (_req, res) => {
+app.get('/api/opencode-studio/skills', requireAdmin, (_req, res) => {
   res.json({ skills: studio.listSkills() });
 });
 
-app.get('/api/opencode-studio/skills/:name', (req, res) => {
+app.get('/api/opencode-studio/skills/:name', requireAdmin, (req: any, res) => {
   try {
     res.json(studio.getSkill(String(req.params.name)));
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.post('/api/opencode-studio/skills/:name', (req, res) => {
+app.post('/api/opencode-studio/skills/:name', requireAdmin, (req: any, res) => {
   try {
     const content = String(req.body?.content ?? '');
     if (!content.trim()) return res.status(400).json({ error: 'Skill content is required' });
     studio.saveSkill(String(req.params.name), content);
-    recordAudit('opencode-studio', true);
+    recordAudit('opencode-studio', true, req.ip, req.user?.id);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.delete('/api/opencode-studio/skills/:name', (req, res) => {
+app.delete('/api/opencode-studio/skills/:name', requireAdmin, (req: any, res) => {
   try {
     studio.deleteSkill(String(req.params.name));
+    recordAudit('opencode-studio', true, req.ip, req.user?.id);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.get('/api/opencode-studio/commands', (_req, res) => {
+app.get('/api/opencode-studio/commands', requireAdmin, (_req, res) => {
   res.json({ commands: studio.listCommands() });
 });
 
-app.get('/api/opencode-studio/commands/:name', (req, res) => {
+app.get('/api/opencode-studio/commands/:name', requireAdmin, (req: any, res) => {
   try {
     res.json(studio.getCommand(String(req.params.name)));
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.post('/api/opencode-studio/commands/:name', (req, res) => {
+app.post('/api/opencode-studio/commands/:name', requireAdmin, (req: any, res) => {
   try {
     const content = typeof req.body?.content === 'string' ? req.body.content : '';
     studio.saveCommand(String(req.params.name), content);
-    recordAudit('opencode-studio', true);
+    recordAudit('opencode-studio', true, req.ip, req.user?.id);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.delete('/api/opencode-studio/commands/:name', (req, res) => {
+app.delete('/api/opencode-studio/commands/:name', requireAdmin, (req: any, res) => {
   try {
     studio.deleteCommand(String(req.params.name));
+    recordAudit('opencode-studio', true, req.ip, req.user?.id);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.get('/api/opencode-studio/config', (_req, res) => {
+app.get('/api/opencode-studio/config', requireAdmin, (_req, res) => {
   res.json(studio.getConfig());
 });
 
-app.put('/api/opencode-studio/config', (req, res) => {
+app.put('/api/opencode-studio/config', requireAdmin, (req: any, res) => {
   try {
-    res.json(studio.updateConfig(req.body));
+    const merged = studio.updateConfig(req.body);
+    recordAudit('opencode-studio', true, req.ip, req.user?.id);
+    res.json(merged);
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Internal error' });
   }
 });
 
-app.get('/api/opencode-studio/version', async (_req, res) => {
+app.get('/api/opencode-studio/version', requireAdmin, async (_req, res) => {
   try {
     res.json(await studio.getVersionInfo());
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch {
+    res.status(500).json({ error: 'Internal error' });
   }
 });
 
-app.post('/api/opencode-studio/update', async (_req, res) => {
+// ── Unified component updates: opencode + code-server (admin, sudo-gated) ──
+// Status/check are read-only (any admin); apply requires the account password
+// and is fire-and-forget — 202 the moment the background run starts, 409 when
+// another update is already in flight. The Studio opencode button keeps its
+// own route; this surface drives the same machinery plus code-server.
+
+const updateCheckLimiter = rateLimit('update-check', RATE_WINDOW, rateCeil('WSD_RATE_UPDATE_CHECK_MAX', 6, 60));
+const updateApplyLimiter = rateLimit('update-apply', RATE_WINDOW, rateCeil('WSD_RATE_UPDATE_APPLY_MAX', 2, 20));
+
+app.get('/api/updates', requireAdmin, async (_req: any, res) => {
   try {
-    res.json(await studio.runUpdate());
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.json(await componentUpdates.getUpdatesStatus());
+  } catch {
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+app.post('/api/updates/check', requireAdmin, updateCheckLimiter, async (req: any, res) => {
+  try {
+    res.json(await componentUpdates.checkNow({ ip: req.ip, userId: req.user?.id }));
+  } catch {
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+app.post('/api/updates/apply', requireAdmin, authLimiter, updateApplyLimiter, async (req: any, res) => {
+  try {
+    const component = String(req.body?.component ?? '');
+    if (!['opencode', 'code-server', 'all'].includes(component)) {
+      return res.status(400).json({ error: 'Invalid component' });
+    }
+    const accountPassword = String(req.body?.accountPassword ?? '');
+    if (!accountPassword) {
+      return res.status(400).json({ error: 'Account password is required' });
+    }
+    if (!(await verifyAccountPassword(accountPassword, req.user?.id))) {
+      return res.status(401).json({ error: 'Invalid account password' });
+    }
+    // Synchronous downgrade gate: reject BEFORE the background run starts when
+    // the registry's latest is not strictly newer than the installed version
+    // (400) — the backend's "not-newer" preflight stays as a second defense
+    // layer. An unreachable registry (latest null) → 503: we cannot verify, so
+    // we refuse to guess. `all` is exempt — each component gates itself inside
+    // the apply.
+    //
+    // The gate is skipped while ANY update is in flight: a concurrent second
+    // apply must reach beginApply's single-flight 409. Probing the live binary
+    // mid-run is racy — the new version may already be installed (dpkg done,
+    // boot-verify pending), which would make this gate answer a misleading
+    // "already up to date" 400 instead of the honest 409.
+    if (component !== 'all' && !componentUpdates.isUpdateInProgress()) {
+      const verdict = await componentUpdates.downgradeVerdict(component as 'opencode' | 'code-server');
+      if (verdict) {
+        return res.status(verdict.status).json({ error: verdict.error });
+      }
+    }
+    const started = componentUpdates.beginApply(component as ComponentId, { ip: req.ip, userId: req.user?.id });
+    if (!started.started) {
+      return res.status(409).json({ error: started.error });
+    }
+    res.status(202).json({ ok: true, component });
+  } catch {
+    res.status(500).json({ error: 'Internal error' });
   }
 });
 
@@ -2696,6 +2765,9 @@ startJanitor();
 
 // Flip delegations left `running` by a crashed server to failed.
 reconcileRunningDelegations();
+
+// Flip any component update left mid-flight by a crashed server to failed.
+componentUpdates.reconcileStaleStates();
 
 // Per-project automated snapshot captures (boot + every WSD_SNAPSHOT_SWEEP_MS).
 snapAuto.startSnapshotAutomation();

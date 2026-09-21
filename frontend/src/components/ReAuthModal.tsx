@@ -92,13 +92,13 @@ export function ReAuthModal({
 
   return (
     <div class="modal-overlay" ref={overlayRef} onMouseDown={(e: any) => { if (e.target === e.currentTarget && !loading) onCancel(); }}>
-      <form class="modal-card reauth-card" role="dialog" aria-modal="true" aria-labelledby="reauth-title" onSubmit={submit}>
+      <form class="modal-card reauth-card" role="dialog" aria-modal="true" aria-labelledby="reauth-title" aria-describedby="reauth-desc" onSubmit={submit}>
         <div class="reauth-avatar" aria-hidden="true">
           <User width={26} height={26} />
         </div>
         <div class="reauth-username">{username || 'account'}</div>
         <div class="reauth-title" id="reauth-title">{title}</div>
-        <p class="settings-hint" style="text-align:center">{description}</p>
+        <p class="settings-hint" id="reauth-desc" style="text-align:center">{description}</p>
 
         <input
           ref={pwRef}

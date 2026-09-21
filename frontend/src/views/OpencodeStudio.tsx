@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { ArrowLeft, Bot, Sparkles, SlidersHorizontal, RefreshCw, CheckCircle2, ArrowUpCircle, Lock, Trash2, Plus, Save, Terminal, BookOpen, Search, Copy, Check, AlertTriangle } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { ReAuthModal } from '../components/ReAuthModal';
+import { useAuth } from '../auth';
 import { StudioGuide } from './studio-guide';
 import {
   listStudioAgents,
@@ -19,7 +21,7 @@ import {
   getStudioConfig,
   updateStudioConfig,
   getStudioVersion,
-  runStudioUpdate,
+  applyUpdates,
   type StudioItem,
   type StudioVersionInfo,
 } from '../api';
@@ -124,6 +126,27 @@ export function OpencodeStudio() {
   // Version / update
   const [ver, setVer] = useState<StudioVersionInfo | null>(null);
   const [updating, setUpdating] = useState(false);
+  const { user } = useAuth();
+  const [pendingUpdate, setPendingUpdate] = useState(false);
+  const [reauthLoading, setReauthLoading] = useState(false);
+  const [reauthError, setReauthError] = useState<string | null>(null);
+
+  // Focus-return contract for the ReAuthModal update flow: the Update button is
+  // disabled (disabled buttons blur in Chrome) the moment the dialog opens, so
+  // ReAuthModal's own trigger-restore can capture BODY. Re-focus the button
+  // (or the active tab) explicitly once the dialog closes again.
+  const updateBtnRef = useRef<HTMLButtonElement | null>(null);
+  const prevPendingUpdate = useRef(false);
+  useEffect(() => {
+    if (prevPendingUpdate.current && !pendingUpdate) {
+      const t = window.setTimeout(() => {
+        if (updateBtnRef.current) updateBtnRef.current.focus();
+        else tabsRef.current?.querySelector<HTMLElement>(`[data-tab="${tab}"]`)?.focus();
+      }, 0);
+      return () => window.clearTimeout(t);
+    }
+    prevPendingUpdate.current = pendingUpdate;
+  }, [pendingUpdate, tab]);
 
   useEffect(() => {
     getStudioVersion()
@@ -248,15 +271,33 @@ export function OpencodeStudio() {
     }
   };
 
-  const update = async () => {
+  const update = () => {
+    setNotice(null);
+    setReauthError(null);
     setUpdating(true);
+    setPendingUpdate(true);
+  };
+
+  const executeUpdate = async (accountPassword: string) => {
+    setReauthLoading(true);
+    setReauthError(null);
     try {
-      const r = await runStudioUpdate();
-      if (r.ok) flash('ok', `Updated to ${r.updatedTo}`);
-      else flash('err', r.error || 'Update failed');
+      await applyUpdates(accountPassword, 'opencode');
+      setPendingUpdate(false);
+      flash('ok', 'opencode update started — progress is tracked in Settings → Updates.');
     } catch (err: any) {
-      flash('err', err.message);
+      const msg = err.message || 'Update failed.';
+      // Wrong sudo password / rate limit → keep the dialog open for retry;
+      // anything else is terminal — close it and surface the error inline.
+      const retryable = err.status === 401 || err.status === 429 || (err.status === 400 && /password/i.test(msg));
+      if (retryable) {
+        setReauthError(msg);
+        return;
+      }
+      setPendingUpdate(false);
+      flash('err', msg);
     } finally {
+      setReauthLoading(false);
       setUpdating(false);
       getStudioVersion().then(setVer).catch(() => {});
     }
@@ -272,6 +313,7 @@ export function OpencodeStudio() {
 
   return (
     <div class="opencode-page">
+      <h1 class="sr-only">Opencode Studio</h1>
       <div class="opencode-toolbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/')}><ArrowLeft width={13} height={13} class="icon" /> Dashboard</button>
         <span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px" ref={tabsRef} role="tablist" aria-label="Studio sections" onKeyDown={onTabsKeyDown}>
@@ -288,13 +330,18 @@ export function OpencodeStudio() {
         {ver && (
           <span class="mono" style="font-size:0.68rem;color:var(--text-3);margin-left:12px;display:inline-flex;align-items:center;gap:6px">
             opencode v{ver.current}
-            {updating || ver.updateRunning ? (
+            {ver.updateRunning ? (
               <RefreshCw width={12} height={12} class="icon spin" />
             ) : ver.upToDate === true ? (
               <CheckCircle2 width={12} height={12} style="color:var(--ok,#4ade80)" />
             ) : ver.upToDate === false && ver.channelUnlocked ? (
-              <button class="btn-primary sm" onClick={update} disabled={updating}>
-                <ArrowUpCircle width={12} height={12} class="icon" /> Update to {ver.latest}
+              <button ref={updateBtnRef} class="btn-primary sm" onClick={update} disabled={updating}>
+                {updating ? (
+                  <RefreshCw width={12} height={12} class="icon spin" />
+                ) : (
+                  <ArrowUpCircle width={12} height={12} class="icon" />
+                )}
+                {updating ? ' Authorizing…' : ` Update to ${ver.latest}`}
               </button>
             ) : ver.upToDate === false ? (
               <span title={`v${ver.latest} is a newer major than this Madar build supports (${ver.supportedMajors.join(', ')}). Update Madar first.`}>
@@ -308,6 +355,7 @@ export function OpencodeStudio() {
       {notice && (
         <div
           class="chat-save-msg"
+          role={notice.kind === 'err' ? 'alert' : 'status'}
           style={
             notice.kind === 'err'
               ? 'background:#7f1d1d;color:#fecaca;margin:10px 16px;padding:8px 12px;border-radius:8px;font-size:0.75rem'
@@ -329,7 +377,9 @@ export function OpencodeStudio() {
             Global opencode.json — applies to every project and interface.
             The $schema key is managed by Madar.
           </p>
+          <label class="sr-only" htmlFor="studio-config">Global opencode.json — applies to every project</label>
           <textarea
+            id="studio-config"
             class="modern-input mono"
             style="flex:1;min-height:320px;resize:vertical;font-size:0.78rem;line-height:1.5;white-space:pre"
             value={configText}
@@ -348,7 +398,9 @@ export function OpencodeStudio() {
           <div class="studio-list" style="width:260px;overflow:auto;border-right:1px solid var(--border,#333);padding-right:10px">
             <div style="position:relative;margin-bottom:8px">
               <Search width={12} height={12} class="icon" style="position:absolute;top:7px;inset-inline-start:8px;opacity:.45" />
+              <label class="sr-only" htmlFor="studio-filter">Filter items</label>
               <input
+                id="studio-filter"
                 class="modern-input"
                 style="width:100%;font-size:0.72rem;padding:5px 8px 5px 24px;box-sizing:border-box"
                 placeholder="Filter…"
@@ -367,62 +419,78 @@ export function OpencodeStudio() {
                 <div
                   key={it.name}
                   class="studio-item"
-                  style={`padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:6px;background:${
+                  style={`display:flex;align-items:center;gap:2px;padding:0 6px 0 10px;border-radius:8px;margin-bottom:6px;background:${
                     selected === it.name ? 'var(--accent-bg,rgba(99,102,241,.15))' : 'transparent'
                   }`}
-                  onClick={() => openItem(it.name)}
                 >
-                  <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
-                    <strong style="font-size:0.78rem">{it.name}</strong>
-                    {tab === 'agents' && it.mode && (
-                      <span style="font-size:0.62rem;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.08)">
-                        {it.mode}
-                      </span>
-                    )}
-                    {tab === 'commands' && it.agent && (
-                      <span title="Bound agent" style="font-size:0.62rem;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.08)">
-                        @{it.agent}
-                      </span>
-                    )}
-                    <span style="display:inline-flex;align-items:center;gap:4px;margin-inline-start:auto">
-                      {it.description && (
-                        copied === it.name ? (
-                          <Check width={13} height={13} class="icon" style="opacity:.8;color:var(--ok,#4ade80)" />
-                        ) : (
-                          <Copy
-                            width={13}
-                            height={13}
-                            class="icon"
-                            title="Copy description — paste into chat to summon this specialist by name"
-                            style="opacity:.5;cursor:pointer"
-                            onClick={(e: Event) => {
-                              e.stopPropagation();
-                              navigator.clipboard.writeText(it.description).then(() => {
-                                setCopied(it.name);
-                                setTimeout(() => setCopied((c) => (c === it.name ? null : c)), 1500);
-                              });
-                            }}
-                          />
-                        )
+                  <button
+                    type="button"
+                    class="studio-item-open"
+                    aria-current={selected === it.name ? 'true' : undefined}
+                    aria-expanded={selected === it.name ? 'true' : undefined}
+                    onClick={() => openItem(it.name)}
+                    style="flex:1;min-width:0;text-align:left;background:transparent;border:0;padding:8px 0;cursor:pointer;color:inherit;font:inherit"
+                  >
+                    <span style="display:flex;justify-content:space-between;align-items:center;gap:6px">
+                      <strong style="font-size:0.78rem">{it.name}</strong>
+                      {tab === 'agents' && it.mode && (
+                        <span style="font-size:0.62rem;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.08)">
+                          {it.mode}
+                        </span>
                       )}
-                      <Trash2
-                        width={13}
-                        height={13}
-                        class="icon"
-                        style="opacity:.5;cursor:pointer"
-                        onClick={(e: Event) => {
-                          e.stopPropagation();
-                          setConfirmDelete(it.name);
-                        }}
-                      />
+                      {tab === 'commands' && it.agent && (
+                        <span title="Bound agent" style="font-size:0.62rem;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.08)">
+                          @{it.agent}
+                        </span>
+                      )}
                     </span>
-                  </div>
-                  {it.description && (
-                    <div style="font-size:0.68rem;color:var(--text-3);margin-top:2px">
-                      {it.description.slice(0, 90)}
-                      {it.description.length > 90 ? '…' : ''}
-                    </div>
-                  )}
+                    {it.description && (
+                      <span style="display:block;font-size:0.68rem;color:var(--text-3);margin-top:2px">
+                        {it.description.slice(0, 90)}
+                        {it.description.length > 90 ? '…' : ''}
+                      </span>
+                    )}
+                  </button>
+                  <span style="display:inline-flex;align-items:center;gap:2px;flex-shrink:0">
+                    {it.description && (
+                      copied === it.name ? (
+                        <span style="display:inline-flex;align-items:center;padding:4px;opacity:.8;color:var(--ok,#4ade80)" role="status">
+                          <Check width={13} height={13} class="icon" aria-hidden="true" />
+                          <span class="sr-only">Copied</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          class="studio-action"
+                          aria-label={`Copy description of ${it.name}`}
+                          title="Copy description — paste into chat to summon this specialist by name"
+                          onClick={(e: Event) => {
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(it.description).then(() => {
+                              setCopied(it.name);
+                              setTimeout(() => setCopied((c) => (c === it.name ? null : c)), 1500);
+                            });
+                          }}
+                          style="background:transparent;border:0;padding:4px;cursor:pointer;opacity:.5;display:inline-flex;align-items:center;color:inherit"
+                        >
+                          <Copy width={13} height={13} class="icon" aria-hidden="true" />
+                        </button>
+                      )
+                    )}
+                    <button
+                      type="button"
+                      class="studio-action"
+                      aria-label={`Delete ${it.name}`}
+                      title="Delete"
+                      onClick={(e: Event) => {
+                        e.stopPropagation();
+                        setConfirmDelete(it.name);
+                      }}
+                      style="background:transparent;border:0;padding:4px;cursor:pointer;opacity:.5;display:inline-flex;align-items:center;color:inherit"
+                    >
+                      <Trash2 width={13} height={13} class="icon" aria-hidden="true" />
+                    </button>
+                  </span>
                 </div>
               ))
             )}
@@ -446,7 +514,9 @@ export function OpencodeStudio() {
             ) : (
               <>
                 <div style="display:flex;gap:8px;align-items:center">
+                  <label class="sr-only" htmlFor="studio-item-name">Item name (kebab-case)</label>
                   <input
+                    id="studio-item-name"
                     class="modern-input mono"
                     style="width:240px;font-size:0.78rem;padding:6px 10px"
                     placeholder={tab === 'skills' ? 'skill-name' : tab === 'commands' ? 'command-name' : 'agent-name'}
@@ -461,12 +531,14 @@ export function OpencodeStudio() {
                   </button>
                 </div>
                 {descriptionMissingTrigger(content) && (
-                  <div style="display:flex;gap:6px;align-items:center;font-size:0.7rem;color:#fbbf24;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);padding:6px 10px;border-radius:8px">
+                  <div role="status" style="display:flex;gap:6px;align-items:center;font-size:0.7rem;color:#fbbf24;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);padding:6px 10px;border-radius:8px">
                     <AlertTriangle width={13} height={13} class="icon" />
                     Description lacks a trigger phrase ("Use when…") — opencode may never select this item automatically.
                   </div>
                 )}
+                <label class="sr-only" htmlFor="agent-content">Agent content (frontmatter + body)</label>
                 <textarea
+                  id="agent-content"
                   class="modern-input mono"
                   style="flex:1;resize:none;font-size:0.78rem;line-height:1.55;white-space:pre;min-height:300px"
                   value={content}
@@ -498,6 +570,20 @@ export function OpencodeStudio() {
         confirmLabel="Delete"
         onConfirm={() => remove(confirmDelete!)}
         onCancel={() => setConfirmDelete(null)}
+      />
+
+      {/* Component updates now flow through the unified /api/updates route
+          (admin-only on the backend) — sudo-style identity confirmation. */}
+      <ReAuthModal
+        open={pendingUpdate}
+        username={user?.username}
+        loading={reauthLoading}
+        error={reauthError}
+        title="Authorize opencode update"
+        description="Updating opencode in place. Enter your account password to authorize."
+        confirmLabel="Update"
+        onConfirm={executeUpdate}
+        onCancel={() => { setPendingUpdate(false); setReauthError(null); setUpdating(false); }}
       />
     </div>
   );

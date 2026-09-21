@@ -13,7 +13,8 @@
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import { reqAuth, uniqueId, initTestAuth } from './helpers.ts';
+import jwt from 'jsonwebtoken';
+import { req, reqAuth, uniqueId, initTestAuth, JWT_SECRET } from './helpers.ts';
 
 let agentName = '';
 let skillName = '';
@@ -281,5 +282,33 @@ describe('Opencode Studio API', () => {
     assert.ok(typeof v.current === 'string' && v.current.length > 0);
     assert.deepEqual(v.supportedMajors, [1]);
     assert.equal(typeof v.updateRunning, 'boolean');
+  });
+
+  test('access matrix: viewer/editor 403 on every Studio surface (admin-only)', async () => {
+    // Studio is fully admin-gated — including reads: the roster/config files
+    // are read by every project's agent runs, so a non-admin must never even
+    // browse them (403, never a partial 200).
+    const forge = (role: string) =>
+      jwt.sign({ id: `studio-${role}`, username: `studio-${role}`, role, tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
+    for (const role of ['viewer', 'editor']) {
+      const h = { Authorization: `Bearer ${forge(role)}` };
+      const probes: [string, string, object?][] = [
+        ['GET', '/opencode-studio/agents', undefined],
+        ['GET', '/opencode-studio/version', undefined],
+        ['GET', '/opencode-studio/config', undefined],
+        ['POST', '/opencode-studio/agents/zz-nonadmin', { content: '---\ndescription: nope\n---\n\nx' }],
+        ['POST', '/opencode-studio/skills/zz-nonadmin', { content: '---\ndescription: nope\n---\n\nx' }],
+        ['POST', '/opencode-studio/commands/zz-nonadmin', { content: '---\ndescription: nope\n---\n\nx' }],
+        ['PUT', '/opencode-studio/config', { subagent_depth: 2 }],
+        ['DELETE', '/opencode-studio/commands/zz-nonadmin', undefined],
+      ];
+      for (const [method, url, body] of probes) {
+        const res = await req(method as any, url, body as any, h);
+        assert.equal(res.status, 403, `${role} ${method} ${url} → 403 (got ${res.status})`);
+      }
+    }
+    // Nothing from the blocked calls above landed on disk.
+    const gone = await reqAuth('GET', '/opencode-studio/agents/zz-nonadmin');
+    assert.equal(gone.status, 404, 'blocked writes never created files');
   });
 });

@@ -4,6 +4,9 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 
+import { assertAllowedUpdateBase, isStrictPublisherVersion, parseSemver } from './updates-core';
+import { bootTimeoutMs } from './code-server-update';
+
 /**
  * Unified opencode integration layer.
  *
@@ -43,17 +46,32 @@ export interface VersionInfo {
   supported: boolean;
 }
 
-/** Probe the installed opencode CLI version (`opencode --version`). */
-export function probeOpencodeVersion(): Promise<VersionInfo> {
+/**
+ * Probe the installed opencode CLI version (`opencode --version`).
+ *
+ * Non-force calls (status surfaces) degrade to the last-known cached version
+ * when the CLI does not answer, so transient hiccups never blank the UI.
+ * `force = true` bypasses the cache entirely and reports the honest 'unknown'
+ * on failure — boot-verification must never mistake a stale warm cache for a
+ * freshly-restarted binary (that produced a FALSE "new version is live" while
+ * opencode sat in a crash-loop).
+ */
+export function probeOpencodeVersion(force = false): Promise<VersionInfo> {
   return new Promise((resolve) => {
     execFile('opencode', ['--version'], { timeout: 8000 }, (err, stdout) => {
       if (!err && stdout.trim()) {
         cachedVersion = stdout.trim();
         const m = /(\d+)\./.exec(cachedVersion);
         if (m) cachedMajor = Number(m[1]);
+        resolve({
+          version: cachedVersion,
+          major: cachedMajor,
+          supported: cachedMajor === null ? false : SUPPORTED_MAJORS.includes(cachedMajor),
+        });
+        return;
       }
       resolve({
-        version: cachedVersion || 'unknown',
+        version: force || cachedVersion === null ? 'unknown' : cachedVersion,
         major: cachedMajor,
         supported: cachedMajor === null ? false : SUPPORTED_MAJORS.includes(cachedMajor),
       });
@@ -441,24 +459,68 @@ export interface RegistryInfo {
   channelUnlocked: boolean;
 }
 
-/** Latest published version on npm (1.x `latest` dist-tag). */
-export function fetchLatestVersion(): Promise<RegistryInfo> {
-  return fetch('https://registry.npmjs.org/opencode-ai/latest', {
+/**
+ * npm registry base (overridable for mirrors/proxies). HTTPS is mandatory
+ * outside WSD_TESTING=1 (the suite container's local mock); the host must
+ * pass the update-host blocklist so a mirror can never be pointed at
+ * cloud-metadata / link-local. A rejected value throws — the endpoints
+ * degrade to `latest: null` and the boot warning names the env var.
+ */
+function npmBase(): string {
+  return assertAllowedUpdateBase(
+    process.env.WSD_UPDATE_NPM_REGISTRY || 'https://registry.npmjs.org',
+    'WSD_UPDATE_NPM_REGISTRY',
+    process.env.WSD_TESTING === '1',
+  );
+}
+
+let latestVersionCache: { at: number; data: RegistryInfo } = {
+  at: 0,
+  data: { latest: null, latestMajor: null, channelUnlocked: false },
+};
+const LATEST_VERSION_CACHE_MS = 60_000;
+
+/** Invalidate the short npm-registry cache (manual refresh / apply gates). */
+export function clearLatestVersionCache(): void {
+  latestVersionCache = { at: 0, data: { latest: null, latestMajor: null, channelUnlocked: false } };
+}
+
+/**
+ * Latest published version on npm (1.x `latest` dist-tag), short 60s TTL
+ * mirroring code-server's release cache (every status poll must not hammer
+ * the registry). `force` bypasses the cache — used by the apply downgrade
+ * gate so a stale `latest` can never sneak a downgrade past the check.
+ */
+export function fetchLatestVersion(force = false): Promise<RegistryInfo> {
+  const now = Date.now();
+  if (!force && latestVersionCache.at > 0 && now - latestVersionCache.at < LATEST_VERSION_CACHE_MS) {
+    return Promise.resolve(latestVersionCache.data);
+  }
+  const fail = (): RegistryInfo => {
+    const info: RegistryInfo = { latest: null, latestMajor: null, channelUnlocked: false };
+    latestVersionCache = { at: Date.now(), data: info };
+    return info;
+  };
+  return fetch(`${npmBase()}/opencode-ai/latest`, {
     signal: AbortSignal.timeout(8000),
   })
     .then((r) => (r.ok ? r.json() : null))
     .then((j: any) => {
-      const latest = typeof j?.version === 'string' ? j.version : null;
-      const m = latest ? /(\d+)\./.exec(latest) : null;
-      const latestMajor = m ? Number(m[1]) : null;
-      return {
+      // Strict publisher format only — a forged range/dist-tag from a
+      // registry response (`1.99.0 || 2.0.0`, `latest`, `../evil`) must
+      // never reach the npm install argv and must never fake a comparison.
+      const latest = isStrictPublisherVersion(j?.version) ? String(j.version).trim() : null;
+      const latestMajor = latest ? parseInt(latest, 10) : null;
+      const info: RegistryInfo = {
         latest,
         latestMajor,
         channelUnlocked:
           latestMajor !== null && SUPPORTED_MAJORS.includes(latestMajor),
       };
+      latestVersionCache = { at: Date.now(), data: info };
+      return info;
     })
-    .catch(() => ({ latest: null, latestMajor: null, channelUnlocked: false }));
+    .catch(() => fail());
 }
 
 export interface UpdateResult {
@@ -472,6 +534,8 @@ export interface UpdateResult {
  * Install the newest compatible release inside the container and restart
  * the supervised opencode web process into it. Single-flight; refuses
  * unsupported target majors via the caller-side gate as well as here.
+ * Boot is verified (new binary on CLI + web, pid changed) before success —
+ * a non-booting update reports ok:false honestly.
  */
 export function performOpencodeUpdate(): Promise<UpdateResult> {
   if (updateInFlight) {
@@ -482,6 +546,7 @@ export function performOpencodeUpdate(): Promise<UpdateResult> {
     updateInFlight = false;
     return r;
   };
+  const oldPid = currentOpencodePid();
 
   return fetchLatestVersion()
     .then((reg) => {
@@ -501,19 +566,20 @@ export function performOpencodeUpdate(): Promise<UpdateResult> {
               resolve(done({ ok: false, error: `npm install failed: ${err.message}` }));
               return;
             }
-            const restarted = restartSupervisedWeb();
-            // Give the supervisor a moment before reporting fresh version.
-            setTimeout(() => {
-              probeOpencodeVersion().then((v) =>
-                resolve(
-                  done({
-                    ok: true,
-                    updatedTo: v.version,
-                    restarted,
-                  }),
-                ),
-              );
-            }, 1500);
+            restartSupervisedWeb().then(() => {
+              waitForOpencodeBoot(reg.latest as string, oldPid).then((bootedVersion) => {
+                if (bootedVersion === null) {
+                  resolve(
+                    done({
+                      ok: false,
+                      error: `Updated opencode ${reg.latest} did not boot within ${bootTimeoutMs()}s — restart the container to apply`,
+                    }),
+                  );
+                  return;
+                }
+                resolve(done({ ok: true, updatedTo: bootedVersion, restarted: true }));
+              });
+            });
           },
         );
       });
@@ -521,18 +587,181 @@ export function performOpencodeUpdate(): Promise<UpdateResult> {
     .catch((e: Error) => done({ ok: false, error: e.message }));
 }
 
-/** Kill the supervised opencode child so entrypoint revives it (new binary). */
-function restartSupervisedWeb(): boolean {
+/**
+ * Reinstall a pinned opencode version and restart the supervised web process
+ * into it. Mirrors performOpencodeUpdate exactly — used by the unified
+ * update facade to roll opencode back after a failed boot-to-new-version.
+ * `oldPid` MUST be the supervised pid captured BEFORE the failed update
+ * started (Boot-verify then demands a pid change — without it a stale child
+ * still running the broken binary could pass the version probe alone).
+ */
+export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Promise<UpdateResult> {
+  if (!isStrictPublisherVersion(currentVersion)) {
+    return Promise.resolve({ ok: false, error: `Invalid rollback version: ${currentVersion}` });
+  }
+  if (updateInFlight) {
+    return Promise.resolve({ ok: false, error: 'An update is already running' });
+  }
+  updateInFlight = true;
+  const done = (r: UpdateResult): UpdateResult => {
+    updateInFlight = false;
+    return r;
+  };
+  const pidBefore = oldPid ?? currentOpencodePid();
+
+  return new Promise<UpdateResult>((resolve) => {
+    execFile(
+      'npm',
+      ['install', '-g', `opencode-ai@${currentVersion}`, '--no-fund', '--no-audit'],
+      { timeout: 180_000 },
+      (err) => {
+        if (err) {
+          resolve(done({ ok: false, error: `npm install failed: ${err.message}` }));
+          return;
+        }
+        restartSupervisedWeb().then(() => {
+          waitForOpencodeBoot(currentVersion, pidBefore).then((bootedVersion) => {
+            if (bootedVersion === null) {
+              resolve(
+                done({
+                  ok: false,
+                  error: `Rolled-back opencode ${currentVersion} did not boot within ${bootTimeoutMs()}s — restart the container to apply`,
+                }),
+              );
+              return;
+            }
+            resolve(done({ ok: true, updatedTo: currentVersion, restarted: true }));
+          });
+        });
+      },
+    );
+  });
+}
+
+function semverEquals(a: string, b: string): boolean {
+  return parseSemver(a) === parseSemver(b);
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Currently-running supervised opencode child pid, or undefined when the
+ * pid file is missing/unparseable. Read BEFORE an update/rollback so boot
+ * verification can demand that the pid actually changed.
+ */
+export function currentOpencodePid(): number | undefined {
   try {
-    const pidFile = path.join(dataDir(), 'opencode-web.pid');
-    const raw = fs.readFileSync(pidFile, 'utf8').trim();
+    const raw = fs.readFileSync(path.join(dataDir(), 'opencode-web.pid'), 'utf8').trim();
     const pid = Number(raw);
-    if (Number.isFinite(pid) && pid > 1) {
+    return Number.isFinite(pid) && pid > 1 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Boot verification shared by performOpencodeUpdate and rollbackOpencodeTo:
+ * polls until the CLI probes as `targetVersion` AND the web server answers
+ * AND (when `oldPid` is known) the supervised child pid changed — or the
+ * boot window elapses (null). The CLI probe is FORCED (cache-bypass) so a
+ * stale warm cache can never fake a fresh binary, and the web check skips
+ * nothing: a server still serving an older version keeps polling. A server
+ * that reports no version passes the web gate on reachability alone (the
+ * pid-change + CLI version still bind it).
+ */
+export function waitForOpencodeBoot(
+  targetVersion: string | null,
+  oldPid?: number,
+  timeoutMs?: number,
+): Promise<string | null> {
+  if (!targetVersion) return Promise.resolve(null); // no target → can never boot-verify
+  const deadline = Date.now() + (timeoutMs ?? bootTimeoutMs());
+  const poll = async (): Promise<string | null> => {
+    if (Date.now() > deadline) return null;
+    const cli = await probeOpencodeVersion(true);
+    if (cli.version !== 'unknown' && semverEquals(cli.version, targetVersion)) {
+      const web = await probeOpencodeServer();
+      if (web.ok) {
+        if (typeof web.version === 'string' && web.version && !semverEquals(web.version, targetVersion)) {
+          await sleepMs(1000);
+          return poll();
+        }
+        if (oldPid !== undefined) {
+          const nowPid = currentOpencodePid();
+          if (nowPid !== undefined && nowPid === oldPid) {
+            // Supervisor never restarted into the new binary — keep waiting.
+            await sleepMs(1000);
+            return poll();
+          }
+        }
+        return cli.version;
+      }
+    }
+    await sleepMs(1000);
+    return poll();
+  };
+  return poll();
+}
+
+/**
+ * Process identity guard (project-serve pattern) for the supervised opencode
+ * child: a stale/rewritten pid file must never make us SIGTERM an unrelated
+ * process. opencode's native binary reports comm `opencode`; the npm shim
+ * (and the JS fallback) run as `node` with the component path in args. The
+ * Madar backend itself is also a `node dist/index.js` process, so a bare
+ * `comm === 'node'` would let a reused PID kill OUR OWN server — that exact
+ * shape is refused. Returns true only for a plausible opencode child.
+ */
+function isOpencodeProcess(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-p', String(pid), '-o', 'comm=', '-o', 'args='], { timeout: 5000 }, (err, stdout) => {
+      if (err) return resolve(false);
+      const line = String(stdout).trim();
+      if (!line) return resolve(false);
+      const [comm, ...rest] = line.split(/\s+/);
+      const args = rest.join(' ');
+      if (comm === 'opencode') return resolve(true);
+      if (comm !== 'node') return resolve(false);
+      if (args.includes('dist/index.js')) return resolve(false); // the Madar backend
+      resolve(args.includes('opencode'));
+    });
+  });
+}
+
+/**
+ * Kill the supervised opencode child so entrypoint revives it (new binary).
+ * Refuses (false) when the pid file is missing/stale or the target is not a
+ * genuine opencode process.
+ */
+export function restartSupervisedWeb(): Promise<boolean> {
+  const pid = currentOpencodePid();
+  if (pid === undefined) return Promise.resolve(false);
+  return isOpencodeProcess(pid).then((isOurs) => {
+    if (!isOurs) {
+      try {
+        // Best-effort detail to the update log (0600).
+        fs.appendFileSync(
+          path.join(updatesDirName(), 'update.log'),
+          `${new Date().toISOString()} [opencode] restart guard: pid ${pid} is not an opencode process — refusing to SIGTERM\n`,
+          { encoding: 'utf8', mode: 0o600 },
+        );
+      } catch {
+        /* update logging is best-effort */
+      }
+      return false;
+    }
+    try {
       process.kill(pid, 'SIGTERM');
       return true;
+    } catch {
+      /* process already gone — the supervisor will revive it anyway */
+      return false;
     }
-  } catch {
-    /* pid file missing/stale — next container restart applies the update */
-  }
-  return false;
+  });
+}
+
+function updatesDirName(): string {
+  return path.join(dataDir(), 'updates');
 }

@@ -18,14 +18,30 @@ else
 fi
 
 # ── Web IDE ───────────────────────────────────────────────────
-echo "Madar: starting code-server IDE on 0.0.0.0:8080 (no auth)"
+echo "Madar: starting supervised code-server IDE on 0.0.0.0:8080 (no auth)"
 # NOTE: code-server reads the PORT env var and it overrides --bind-addr,
 # so unset it (PORT is used by the dashboard node app).
 # Auth disabled (--auth none) — safe in local Docker environment.
-env -u PORT code-server --auth none --disable-telemetry --disable-update-check \
-  --bind-addr 0.0.0.0:8080 /workspaces \
-  > /tmp/code-server.log 2>&1 &
-CODE_SERVER_PID=$!
+# Supervised restart loop: same pattern as opencode below — if code-server
+# crashes or is killed (e.g. version update), the loop revives it within ~2s.
+# PID of the live child is published in $DATA_DIR/code-server.pid for the
+# backend to target precisely.
+CODE_SERVER_PID_FILE="$DATA_DIR/code-server.pid"
+rm -f "$CODE_SERVER_PID_FILE"
+(
+  while true; do
+    env -u PORT code-server --auth none --disable-telemetry --disable-update-check \
+      --bind-addr 0.0.0.0:8080 /workspaces \
+      > /tmp/code-server.log 2>&1 &
+    CODE_SERVER_CHILD=$!
+    printf '%s' "$CODE_SERVER_CHILD" > "$CODE_SERVER_PID_FILE"
+    RC=0
+    wait "$CODE_SERVER_CHILD" || RC=$?
+    echo "Madar: code-server exited (code=$RC) - restarting in 2s" >&2
+    sleep 2
+  done
+) &
+CODE_SERVER_SUPERVISOR=$!
 
 # ── opencode web (native UI, rooted at /workspaces) ───────────
 # Purge stale opencode projects BEFORE it starts: deleted Madar projects
@@ -116,7 +132,8 @@ if opencode_ready; then
 fi
 
 cleanup() {
-  kill "$CODE_SERVER_PID" "$OPENCODE_SUPERVISOR" 2>/dev/null || true
+  kill "$CODE_SERVER_SUPERVISOR" "$OPENCODE_SUPERVISOR" 2>/dev/null || true
+  [ -f "$CODE_SERVER_PID_FILE" ] && kill "$(cat "$CODE_SERVER_PID_FILE")" 2>/dev/null || true
   [ -f "$OPENCODE_PID_FILE" ] && kill "$(cat "$OPENCODE_PID_FILE")" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM

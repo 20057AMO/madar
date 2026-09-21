@@ -2186,6 +2186,47 @@ button.tag-chip.active {
 .audit-ip { color: var(--text-3); font-size: 0.65rem; font-family: monospace; }
 .audit-time { color: var(--text-3); font-size: 0.68rem; }
 
+/* ── Component updates (Settings panel + sidebar dot) ── */
+.upd-name {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: 0.85rem; min-width: 150px;
+}
+.upd-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.upd-dot.good { background: var(--green, #3fb950); box-shadow: 0 0 6px color-mix(in srgb, var(--green, #3fb950) 60%, transparent); }
+.upd-dot.warn { background: var(--yellow, #d29922); box-shadow: 0 0 6px color-mix(in srgb, var(--yellow, #d29922) 60%, transparent); }
+.upd-dot.unknown { background: var(--text-3); }
+.upd-version {
+  font-family: ui-monospace, monospace; font-size: 0.75rem; color: var(--text-2);
+  background: var(--bg-2, rgba(255,255,255,.04)); padding: 2px 8px; border-radius: 6px; white-space: nowrap;
+}
+.upd-pill-warn {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 0.68rem; color: var(--yellow, #d29922);
+  background: color-mix(in srgb, var(--yellow, #d29922) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow, #d29922) 35%, transparent);
+  border-radius: 999px; padding: 3px 9px; white-space: nowrap;
+}
+.upd-track { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
+.upd-steps { display: flex; gap: 4px; align-items: center; flex: 1; min-width: 120px; }
+.upd-step { flex: 1; height: 3px; border-radius: 2px; background: var(--border); transition: background 0.2s; }
+.upd-step.done { background: var(--green, #3fb950); }
+.upd-step.current {
+  background: var(--accent, #6ea8fe);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent, #6ea8fe) 50%, transparent);
+}
+.upd-msg-ok { color: var(--green, #3fb950); font-size: 0.72rem; display: inline-flex; align-items: center; gap: 5px; }
+.upd-msg-err { color: var(--red, #f85149); font-size: 0.72rem; }
+.upd-msg-warn { color: var(--yellow, #d29922); font-size: 0.72rem; }
+
+.nav-btn-wrap { position: relative; display: flex; }
+.updates-dot {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  width: 8px; height: 8px; border-radius: 50%;
+  pointer-events: none;
+}
+.updates-dot.warn { background: var(--yellow, #d29922); box-shadow: 0 0 6px color-mix(in srgb, var(--yellow, #d29922) 70%, transparent); }
+.updates-dot.good { background: var(--green, #3fb950); box-shadow: 0 0 6px color-mix(in srgb, var(--green, #3fb950) 70%, transparent); }
+
 /* â”€â”€ Password strength meter â”€â”€ */
 .pw-meter { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
 .pw-seg {

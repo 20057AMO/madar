@@ -29,7 +29,9 @@ import {
   avatarUrl,
   UNLOCK_KEY,
   getOpencodeStatus,
+  getUpdates,
 } from './api';
+import { UPDATE_RUNNING_STATES } from './views/settings-shared';
 import { Avatar } from './components/Avatar';
 
 const Dashboard = lazy(() => import('./views/Dashboard').then(m => ({ default: m.Dashboard })));
@@ -181,6 +183,7 @@ function ProvidersUnlockBadge() {
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, logout } = useAuth();
   const [ocPort, setOcPort] = useState(4096);
+  const [updatesFlag, setUpdatesFlag] = useState<'none' | 'available' | 'applying'>('none');
 
   useEffect(() => {
     getOpencodeStatus()
@@ -189,6 +192,35 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       })
       .catch(() => {});
   }, []);
+
+  // Update notification dot — admin only. Probed on mount, every 15 min and
+  // whenever the tab becomes visible again (pageshow/visibilitychange, same
+  // pattern as the providers-lock gate). Any failure stays silent.
+  useEffect(() => {
+    if (user?.role !== 'admin') return;
+    let alive = true;
+    const check = () => {
+      getUpdates()
+        .then((s) => {
+          if (!alive) return;
+          const applying = s.components.some((c) => c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState));
+          const available = s.components.some((c) => !c.updateRunning && c.upToDate === false && c.channelUnlocked !== false);
+          setUpdatesFlag(applying ? 'applying' : available ? 'available' : 'none');
+        })
+        .catch(() => { /* silent — a failed probe must never disturb the UI */ });
+    };
+    check();
+    const timer = setInterval(check, 15 * 60_000);
+    const onVisible = () => { if (!document.hidden) check(); };
+    window.addEventListener('pageshow', check);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      window.removeEventListener('pageshow', check);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [user?.role]);
 
   const toolBase = `${window.location.protocol === 'https:' ? 'https' : 'http'}://${window.location.hostname}`;
   return (
@@ -219,10 +251,25 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <NavButton href="/planner" label="Planner" icon={PencilRuler} />
         <NavButton href="/agents" label="Agents" icon={Bot} />
         <NavButton label="opencode" icon={OpencodeIcon} newTabUrl={`${toolBase}:${ocPort}/`} />
-        <NavButton href="/opencode-studio" label="OC Studio" icon={OpencodeIcon} />
+        {user?.role === 'admin' && <NavButton href="/opencode-studio" label="OC Studio" icon={OpencodeIcon} />}
         {user?.role === 'admin' && <NavButton href="/providers" label="Providers" icon={KeyRound} />}
         {user?.role === 'admin' && <NavButton href="/team" label="Team" icon={Users} />}
-        {user?.role === 'admin' && <NavButton href="/settings" label="Settings" icon={SettingsIcon} />}
+        {user?.role === 'admin' && (
+          <div class="nav-btn-wrap">
+            <NavButton
+              href="/settings"
+              label={updatesFlag === 'applying' ? 'Settings — update applying' : updatesFlag === 'available' ? 'Settings — updates available' : 'Settings'}
+              icon={SettingsIcon}
+            />
+            {updatesFlag !== 'none' && (
+              <span
+                class={`updates-dot ${updatesFlag === 'applying' ? 'good' : 'warn'}`}
+                title={updatesFlag === 'applying' ? 'An update is applying' : 'Updates available — open Settings'}
+                aria-hidden="true"
+              />
+            )}
+          </div>
+        )}
         <NavButton href="/ide" label="VS Code" icon={VSCodeIcon} />
       </nav>
       <div class="sidebar-footer">
@@ -287,7 +334,7 @@ function Shell() {
     return null;
   }
 
-  if (location.startsWith('/opencode-studio')) {
+  if (location.startsWith('/opencode-studio') && user.role === 'admin') {
     return <Suspense fallback={<div class="app-view" style="display:flex;align-items:center;justify-content:center;height:100vh;"><div class="dim" style="font-size:0.85rem">Loading…</div></div>}><OpencodeStudio /></Suspense>;
   }
 
@@ -319,11 +366,13 @@ function Shell() {
             <>
               <Route path="/providers" component={Providers} />
               <Route path="/team" component={Team} />
+              <Route path="/opencode-studio" component={OpencodeStudio} />
             </>
           ) : (
             <>
               <Route path="/providers" component={AdminOnly} />
               <Route path="/team" component={AdminOnly} />
+              <Route path="/opencode-studio" component={AdminOnly} />
             </>
           )}
           <Route path="/settings" component={Settings} />
@@ -353,6 +402,7 @@ function AdminOnly() {
         gap: '0.75rem',
       }}
     >
+      <h1 class="sr-only">Admin only</h1>
       <ShieldAlert size={32} style={{ color: 'var(--text-secondary)' }} />
       <div style={{ fontWeight: 600, fontSize: '1.05rem' }}>Admin only</div>
       <div class="dim" style={{ fontSize: '0.85rem', maxWidth: 380, textAlign: 'center' }}>

@@ -5,14 +5,12 @@ import {
   opencodeConfigDir,
   probeOpencodeVersion,
   fetchLatestVersion,
-  performOpencodeUpdate,
   isUpdateRunning,
   SUPPORTED_MAJORS,
 } from './opencode-api';
 // HttpError lives in docker-manager (historical); importing it here creates
 // no cycle — this module is only consumed by index.ts.
 import { HttpError } from './docker-manager';
-import { recordAudit } from './audit-store';
 
 /**
  * Opencode Studio backend: CRUD over the global opencode config directory
@@ -125,7 +123,6 @@ export function saveAgent(name: string, content: string): void {
 export function deleteAgent(name: string): void {
   getAgent(name); // 404 when missing
   fs.rmSync(safeJoin(agentsDir(), `${name}.md`));
-  recordAudit('opencode-studio', true);
 }
 
 // ── Skills ──────────────────────────────────────────────────────────────
@@ -168,7 +165,6 @@ export function saveSkill(name: string, content: string): void {
 export function deleteSkill(name: string): void {
   getSkill(name); // 404 when missing
   fs.rmSync(safeJoin(skillsDir(), name), { recursive: true });
-  recordAudit('opencode-studio', true);
 }
 
 // ── Commands (slash commands, <name>.md) ────────────────────────────────
@@ -213,7 +209,6 @@ export function saveCommand(name: string, content: string): void {
 export function deleteCommand(name: string): void {
   getCommand(name); // 404 when missing
   fs.rmSync(safeJoin(commandsDir(), `${name}.md`));
-  recordAudit('opencode-studio', true);
 }
 
 // ── Shared config (opencode.json) ───────────────────────────────────────
@@ -264,16 +259,4 @@ export async function getVersionInfo(): Promise<StudioVersionInfo> {
     supportedMajors: [...SUPPORTED_MAJORS],
     updateRunning: isUpdateRunning(),
   };
-}
-
-export function runUpdate(): Promise<{
-  ok: boolean;
-  updatedTo?: string;
-  restarted?: boolean;
-  error?: string;
-}> {
-  return performOpencodeUpdate().then((r) => {
-    recordAudit(r.ok ? 'opencode-update' : 'opencode-update-failed', r.ok);
-    return r;
-  });
 }

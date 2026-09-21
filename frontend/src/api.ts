@@ -739,9 +739,49 @@ export const updateStudioConfig = (patch: Record<string, unknown>) =>
     body: JSON.stringify(patch),
   });
 export const getStudioVersion = () => api<StudioVersionInfo>('/api/opencode-studio/version');
-export const runStudioUpdate = () =>
-  api<{ ok: boolean; updatedTo?: string; error?: string }>('/api/opencode-studio/update', {
+
+// ── Component updates (opencode + code-server) ────────────────
+export type ApplyState =
+  | 'idle'
+  | 'downloading'
+  | 'verifying'
+  | 'installing'
+  | 'restarting'
+  | 'verifying-boot'
+  | 'ok'
+  | 'failed'
+  | 'rollback';
+
+export interface ComponentStatus {
+  id: 'opencode' | 'code-server';
+  current: string | null;
+  latest: string | null;
+  /** null = registry unreachable */
+  upToDate: boolean | null;
+  updateRunning: boolean;
+  applyState: ApplyState;
+  error?: string;
+  /** true = a failed update was auto-rolled back to the previous version; false = the rollback itself also failed; absent = no rollback was attempted */
+  rolledBack?: boolean;
+  /** opencode: major gate; code-server: arch gate */
+  channelUnlocked?: boolean;
+}
+
+export interface UpdatesStatus {
+  components: ComponentStatus[];
+  checkedAt: string;
+  lastError?: string;
+}
+
+export const getUpdates = () => api<UpdatesStatus>('/api/updates');
+export const checkUpdates = () => api<UpdatesStatus>('/api/updates/check', { method: 'POST' });
+export const applyUpdates = (accountPassword: string, component: 'opencode' | 'code-server' | 'all') =>
+  api<{ ok: boolean }>('/api/updates/apply', {
     method: 'POST',
+    body: JSON.stringify({ accountPassword, component }),
+    // skipAuthRedirect so a wrong sudo password surfaces inline instead of
+    // logging the whole session out (same contract as providers unlock).
+    skipAuthRedirect: true,
   });
 
 // ── Agent delegation (run a roster subagent on a project's workspace) ────

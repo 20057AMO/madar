@@ -13,6 +13,8 @@ import {
   Trash2,
   HardDrive,
   RefreshCw,
+  DownloadCloud,
+  CheckCircle2,
 } from 'lucide-preact';
 import { useAuth } from '../auth';
 import {
@@ -31,22 +33,56 @@ import {
   deleteWebhook,
   testWebhook,
   getStorageMetrics,
+  getUpdates,
+  checkUpdates,
+  applyUpdates,
   WEBHOOK_EVENTS,
   type BackupFile,
   type Webhook,
   type WebhookEvent,
   type WebhookInput,
   type StorageMetrics,
+  type ApplyState,
+  type UpdatesStatus,
 } from '../api';
 import { PwMeter } from '../components/PwMeter';
 import { ReAuthModal } from '../components/ReAuthModal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { fmtBytes } from '../lib/size';
-import { type Msg, AuditLog } from './settings-shared';
+import { type Msg, AuditLog, UPDATE_RUNNING_STATES } from './settings-shared';
 
 const APP_VERSION = 'BETA';
 
-type SensitiveAction = 'save-lock' | 'disable-lock' | 'export' | 'import';
+type SensitiveAction = 'save-lock' | 'disable-lock' | 'export' | 'import' | 'apply-update';
+
+type UpdateTarget = { component: 'opencode' | 'code-server' | 'all'; label: string; toVersion: string };
+
+const APPLY_LABELS: Record<ApplyState, string> = {
+  idle: 'Idle',
+  downloading: 'Downloading',
+  verifying: 'Verifying',
+  installing: 'Installing',
+  restarting: 'Restarting',
+  'verifying-boot': 'Verifying boot',
+  ok: 'Updated',
+  failed: 'Failed',
+  rollback: 'Rolling back',
+};
+
+function ApplyProgress({ state }: { state: ApplyState }) {
+  const idx = UPDATE_RUNNING_STATES.indexOf(state);
+  if (idx === -1) return null;
+  return (
+    <div class="upd-track" role="status">
+      <div class="upd-steps">
+        {UPDATE_RUNNING_STATES.map((s, i) => (
+          <span key={s} class={`upd-step${i < idx ? ' done' : i === idx ? ' current' : ''}`} title={APPLY_LABELS[s]} />
+        ))}
+      </div>
+      <span class="dim" style="font-size:0.68rem; white-space:nowrap">{APPLY_LABELS[state]}…</span>
+    </div>
+  );
+}
 
 interface WhRowProps {
   w: Webhook;
@@ -140,7 +176,7 @@ function WhRow({ w, onChanged, onDelete }: WhRowProps) {
           </label>
         )}
       </div>
-      {msg && <div class={msg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top:6px">{msg.text}</div>}
+      {msg && <div class={msg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top:6px" role={msg.type === 'ok' ? 'status' : 'alert'}>{msg.text}</div>}
     </div>
   );
 }
@@ -214,6 +250,75 @@ export function Settings() {
     }
   };
 
+  // ── Updates (opencode + code-server) ──
+  const [updates, setUpdates] = useState<UpdatesStatus | null>(null);
+  const [updatesMsg, setUpdatesMsg] = useState<Msg>(null);
+  const [updatesChecking, setUpdatesChecking] = useState(false);
+  const [updatesCheckError, setUpdatesCheckError] = useState<string | null>(null);
+  const [updateConfirm, setUpdateConfirm] = useState<UpdateTarget | null>(null);
+  const [applyInFlight, setApplyInFlight] = useState(false);
+  const pendingUpdateComponent = useRef<'opencode' | 'code-server' | 'all'>('opencode');
+  const updatesPanelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getUpdates()
+      .then((r) => {
+        if (cancelled) return;
+        setUpdatesCheckError(null);
+        setUpdates(r);
+        // Reached this page mid-apply (reload, or a fresh tab during a run):
+        // resume progress polling instead of freezing on one stale step.
+        if (r.components.some((c) => c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState))) {
+          setApplyInFlight(true);
+        }
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setUpdatesCheckError(err.message || 'Failed to load update status');
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const retryLoadUpdates = async () => {
+    setUpdatesCheckError(null);
+    try {
+      const r = await getUpdates();
+      setUpdates(r);
+      if (r.components.some((c) => c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState))) {
+        setApplyInFlight(true);
+      }
+    } catch (err: any) {
+      setUpdatesCheckError(err.message || 'Failed to load update status');
+    }
+  };
+
+  // Poll while an apply runs in the background (202 → server continues).
+  useEffect(() => {
+    if (!applyInFlight) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await getUpdates();
+        if (!alive) return;
+        setUpdates(r);
+        const stillRunning = r.components.some((c) => c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState));
+        if (!stillRunning) {
+          setApplyInFlight(false);
+          const failed = r.components.some((c) => c.applyState === 'failed' || c.applyState === 'rollback');
+          setUpdatesMsg(failed
+            ? { type: 'err', text: 'An update did not finish cleanly — see the component status below.' }
+            : { type: 'ok', text: 'Update finished — the new version is live.' });
+        }
+      } catch {
+        // transient network error — keep polling; the server continues.
+      }
+    };
+    const t = setInterval(tick, 2500);
+    tick();
+    return () => { alive = false; clearInterval(t); };
+  }, [applyInFlight]);
+
   const whRefresh = async (okText?: string) => {
     try {
       const r = await listWebhooks();
@@ -252,6 +357,45 @@ export function Settings() {
     } finally {
       setWhDeleting(false);
     }
+  };
+
+  const doCheckUpdates = async () => {
+    if (updatesChecking || applyInFlight) return;
+    setUpdatesChecking(true);
+    setUpdatesMsg(null);
+    try {
+      const r = await checkUpdates();
+      setUpdatesCheckError(null);
+      setUpdates(r);
+    } catch (err: any) {
+      setUpdatesMsg({ type: 'err', text: err.message || 'Failed to check updates' });
+    } finally {
+      setUpdatesChecking(false);
+    }
+  };
+
+  const beginUpdate = (component: 'opencode' | 'code-server' | 'all') => {
+    // 'all' must never sweep already-current components: the backend's
+    // code-server preflight rejects a not-newer target and marks the whole
+    // apply failed. Resolve 'all' down to the single stale component when
+    // only one needs updating.
+    let target = component;
+    if (component === 'all') {
+      const stale = updates?.components.filter((c) => c.upToDate === false && c.channelUnlocked !== false);
+      if (stale && stale.length === 1) target = stale[0].id;
+    }
+    const label = target === 'all' ? 'all components' : target === 'opencode' ? 'opencode' : 'VS Code';
+    const comp = updates?.components.find((c) => c.id === target);
+    setUpdatesMsg(null);
+    setUpdateConfirm({ component: target, label, toVersion: comp?.latest || 'latest' });
+  };
+
+  const confirmUpdate = () => {
+    if (!updateConfirm) return;
+    pendingUpdateComponent.current = updateConfirm.component;
+    setUpdatesMsg(null);
+    setUpdateConfirm(null);
+    setPendingAction('apply-update');
   };
 
   // ── Unified identity confirmation ──
@@ -347,6 +491,18 @@ export function Settings() {
       setPendingAction(null);
       if (pendingAction === 'save-lock' || pendingAction === 'disable-lock') {
         setLockMsg({ type: 'err', text: msg });
+      } else if (pendingAction === 'apply-update') {
+        setUpdatesMsg({ type: 'err', text: msg });
+        // The panel may be stale (e.g. 409 — another update already running):
+        // resync it so progress and disabled buttons reflect the real state.
+        getUpdates()
+          .then((r) => {
+            setUpdates(r);
+            if (r.components.some((c) => c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState))) {
+              setApplyInFlight(true);
+            }
+          })
+          .catch(() => {});
       } else {
         setBackupMsg({ type: 'err', text: msg });
       }
@@ -404,6 +560,23 @@ export function Settings() {
           pendingImportRef.current = null;
           break;
         }
+        case 'apply-update': {
+          await applyUpdates(accountPassword, pendingUpdateComponent.current);
+          setApplyInFlight(true);
+          const label = pendingUpdateComponent.current === 'all' ? 'All components' : pendingUpdateComponent.current === 'opencode' ? 'opencode' : 'VS Code';
+          setUpdatesMsg({ type: 'ok', text: `${label} update started — progress is tracked below.` });
+          // The trigger button is now disabled, so ReAuthModal's focus-return
+          // to it would land nowhere — move focus into the Updates panel
+          // (first enabled control, else the panel box) after the dialog closes.
+          setTimeout(() => {
+            const panel = updatesPanelRef.current;
+            if (!panel) return;
+            const btn = panel.querySelector<HTMLElement>('button:not([disabled])');
+            if (btn) btn.focus();
+            else panel.focus();
+          }, 50);
+          break;
+        }
       }
       setPendingAction(null);
       getAuditLog(AUDIT_PAGE, 0)
@@ -422,11 +595,16 @@ export function Settings() {
     if (pendingAction === 'disable-lock') return 'Disable Providers lock';
     if (pendingAction === 'save-lock') return lockEnabled ? 'Change Providers password' : 'Enable Providers lock';
     if (pendingAction === 'import') return 'Import backup';
+    if (pendingAction === 'apply-update') return 'Authorize update';
     return 'Export backup';
   };
 
   const reauthDescription = () => {
     if (pendingAction === 'disable-lock') return 'This removes the second password — anyone using this session will be able to open Providers.';
+    if (pendingAction === 'apply-update') {
+      const label = pendingUpdateComponent.current === 'all' ? 'all components' : pendingUpdateComponent.current === 'opencode' ? 'opencode' : 'VS Code';
+      return `Updating ${label}. Enter your account password to authorize.`;
+    }
     return 'Enter your account password to authorize this action.';
   };
 
@@ -649,6 +827,7 @@ export function Settings() {
             <span class="icon-wrap"><Download width={13} height={13} /></span> Export backup
           </button>
           <form onSubmit={beginImport} style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <label for="import-file" class="sr-only">Backup file to import (.json)</label>
             <input id="import-file" type="file" accept=".json,application/json" class="modern-file" />
             <button class="btn-ghost sm" type="submit">
               <span class="icon-wrap"><Upload width={13} height={13} /></span> Import
@@ -667,6 +846,148 @@ export function Settings() {
           <div class="settings-hint">No activity recorded yet.</div>
         ) : (
           <AuditLog entries={audit} total={auditTotal} loadingMore={auditLoadingMore} onLoadMore={loadMoreAudit} />
+        )}
+      </div>
+
+      {/* Updates (opencode + code-server) */}
+      <div class="panel settings-section" ref={updatesPanelRef} tabIndex={-1}>
+        <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span><span class="icon-wrap"><DownloadCloud width={14} height={14} /></span> Updates</span>
+          <button class="btn-ghost sm" onClick={doCheckUpdates} disabled={updatesChecking || applyInFlight}>
+            {updatesChecking ? <Loader2 width={13} height={13} class="icon spin" /> : <RefreshCw width={13} height={13} class="icon" />}
+            Check now
+          </button>
+        </h2>
+        <p class="settings-hint">
+          Update opencode or VS Code (code-server) in place. Updating a component only restarts it (~seconds) — your
+          sessions reconnect automatically. Rebuilding the image (<code>docker compose build</code>) returns to the baked
+          build version.
+          {updates && (
+            <span style="display:block;margin-top:4px">
+              Last checked: <span class="mono">{new Date(updates.checkedAt).toLocaleTimeString()}</span>
+            </span>
+          )}
+        </p>
+
+        {updatesMsg && (
+          <div class={updatesMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px" role={updatesMsg.type === 'ok' ? 'status' : 'alert'}>
+            {updatesMsg.text}
+          </div>
+        )}
+
+        {updates?.lastError && (
+          <div class="upd-msg-err" style="margin-bottom:8px" role="alert">{updates.lastError}</div>
+        )}
+
+        {updates === null ? (
+          updatesCheckError ? (
+            <div style="margin-bottom:8px">
+              <div class="upd-msg-err" role="alert" style="margin-bottom:8px">{updatesCheckError}</div>
+              <button class="btn-ghost sm" onClick={retryLoadUpdates}>
+                <RefreshCw width={13} height={13} class="icon" /> Try again
+              </button>
+            </div>
+          ) : (
+            <div class="dim" role="status">Checking for updates…</div>
+          )
+        ) : updates.components.length === 0 ? (
+          <div class="dim">No components reported by the server.</div>
+        ) : (
+          <>
+            {updates.components.map((c) => {
+              const running = c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState);
+              const locked = c.upToDate === false && c.channelUnlocked === false;
+              const lockReason = c.id === 'opencode'
+                ? 'A newer major version requires a Madar update — this channel is gated.'
+                : 'No stable build ships for this platform — this channel is gated.';
+              const canUpdate = c.upToDate === false && !running && !applyInFlight && !locked;
+              const updateTitle =
+                c.upToDate === null
+                  ? 'Registry unreachable — version unknown'
+                  : locked
+                    ? lockReason
+                    : running || applyInFlight
+                      ? 'An update is already running'
+                      : c.upToDate === true
+                        ? 'Already up to date'
+                        : 'Update this component';
+              return (
+                <div class="settings-row" style="flex-wrap:wrap;" key={c.id}>
+                  <span class="upd-name">
+                    <span class={`upd-dot ${c.upToDate === true ? 'good' : c.upToDate === false ? 'warn' : 'unknown'}`} />
+                    {c.id === 'opencode' ? 'opencode' : 'VS Code'}
+                  </span>
+                  <span class="upd-version" title="Current version">v{c.current || '—'}</span>
+                  <span class="dim" aria-hidden="true">→</span>
+                  <span class="upd-version" title="Latest version">{c.latest ? `v${c.latest}` : '—'}</span>
+                  {c.upToDate === true && (
+                    <span class="badge-ok"><CheckCircle2 width={11} height={11} /> Up to date</span>
+                  )}
+                  {c.upToDate === false && (
+                    <span class="upd-pill-warn">Update available</span>
+                  )}
+                  {c.upToDate === null && (
+                    <span class="badge-off">Unknown — registry unreachable</span>
+                  )}
+                  <div style="flex:1" />
+                  <button class="btn-primary sm" onClick={() => beginUpdate(c.id)} disabled={!canUpdate} title={updateTitle}>
+                    Update
+                  </button>
+                  {running && UPDATE_RUNNING_STATES.includes(c.applyState) && (
+                    <ApplyProgress state={c.applyState} />
+                  )}
+                  {running && !UPDATE_RUNNING_STATES.includes(c.applyState) && (
+                    <div class="upd-track"><span class="dim" style="font-size:0.7rem">Updating…</span></div>
+                  )}
+                  {!running && c.applyState === 'ok' && (
+                    <div class="upd-msg-ok" role="status"><CheckCircle2 width={12} height={12} /> New version is live.</div>
+                  )}
+                  {!running && c.applyState === 'failed' && (
+                    <div class="upd-msg-err" role="alert">
+                      {c.rolledBack === true
+                        ? `Update failed — automatically rolled back to ${c.current ? `v${c.current}` : 'the previous version'}.`
+                        : c.rolledBack === false
+                          ? 'Update failed — rollback also failed. Manual intervention required.'
+                          : c.error || 'Update failed — see server logs.'}
+                      {c.rolledBack !== undefined && c.error && (
+                        <span style="display:block;font-size:0.72rem;opacity:.9;margin-top:3px">{c.error}</span>
+                      )}
+                    </div>
+                  )}
+                  {!running && !['rollback', 'ok', 'failed'].includes(c.applyState) && locked && (
+                    <div class="upd-msg-warn" role="status">{lockReason}</div>
+                  )}
+                  {!running && c.error && c.applyState !== 'failed' && (
+                    <div class="upd-msg-err" role="alert">{c.error}</div>
+                  )}
+                </div>
+              );
+            })}
+
+            {(() => {
+              const allAvailable = updates.components.some((c) => c.upToDate === false);
+              const allRunning = updates.components.some((c) => c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState));
+              const allLocked = updates.components.some((c) => c.upToDate === false && c.channelUnlocked === false);
+              const canAll = allAvailable && !allRunning && !allLocked && !applyInFlight;
+              const allTitle = !allAvailable
+                ? 'Nothing to update'
+                : allRunning
+                  ? 'An update is already running'
+                  : allLocked
+                    ? 'A component channel is locked'
+                    : 'Apply every available update';
+              return (
+                <div class="settings-row" style="flex-wrap:wrap; border-bottom:none;">
+                  <span class="upd-name"><DownloadCloud width={13} height={13} class="icon" style="opacity:.6" /> All components</span>
+                  <span class="dim" style="font-size:0.72rem">Apply every available update</span>
+                  <div style="flex:1" />
+                  <button class="btn-primary sm" onClick={() => beginUpdate('all')} disabled={!canAll} title={allTitle}>
+                    Update all
+                  </button>
+                </div>
+              );
+            })()}
+          </>
         )}
       </div>
 
@@ -693,6 +1014,20 @@ export function Settings() {
         loading={whDeleting}
         onConfirm={whConfirmDelete}
         onCancel={() => setWhDelete(null)}
+      />
+
+      {/* Update confirm modal — names the exact component + target version */}
+      <ConfirmModal
+        open={!!updateConfirm}
+        title={updateConfirm && updateConfirm.component === 'all'
+          ? 'Update all components?'
+          : updateConfirm
+            ? `Update ${updateConfirm.label} to ${updateConfirm.toVersion}?`
+            : 'Update?'}
+        message="The component restarts for a few seconds; your sessions reconnect automatically."
+        confirmLabel="Update"
+        onConfirm={confirmUpdate}
+        onCancel={() => setUpdateConfirm(null)}
       />
 
       {/* Combined identity confirmation */}

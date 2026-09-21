@@ -36,6 +36,19 @@ services:
       # Crash-detector sweep cadence (min 5s; lower = faster detection, more
       # docker inspect calls per second).
       WSD_ALERT_SWEEP_MS: ${WSD_ALERT_SWEEP_MS:-10000}
+      # Component-update machinery (code-server + opencode): optional base-URL
+      # mirrors for GitHub/npm plus the download-size and boot-verify ceilings.
+      # Empty bases = official endpoints; defaults are size 400MB / timeout 30s.
+      WSD_UPDATE_GITHUB_BASE: ${WSD_UPDATE_GITHUB_BASE:-}
+      WSD_UPDATE_DOWNLOAD_BASE: ${WSD_UPDATE_DOWNLOAD_BASE:-}
+      WSD_UPDATE_NPM_REGISTRY: ${WSD_UPDATE_NPM_REGISTRY:-}
+      WSD_UPDATES_MAX_BYTES: ${WSD_UPDATES_MAX_BYTES:-419430400}
+      WSD_UPDATE_BOOT_TIMEOUT_MS: ${WSD_UPDATE_BOOT_TIMEOUT_MS:-30000}
+      # Empty defaults on purpose: rateCeil treats a blank value as unset and falls
+      # through to the WSD_TESTING-aware budgets (prod: check 6 / apply 2 per min;
+      # WSD_TESTING=1: check 60 / apply 20). A positive .env value still wins.
+      WSD_RATE_UPDATE_CHECK_MAX: ${WSD_RATE_UPDATE_CHECK_MAX:-}
+      WSD_RATE_UPDATE_APPLY_MAX: ${WSD_RATE_UPDATE_APPLY_MAX:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./workspaces:/workspaces

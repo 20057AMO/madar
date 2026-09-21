@@ -137,6 +137,9 @@ code-server مدمج في واجهة الويب، وOpenCode Web UI، كلاهم
 ### 📸 نسخ احتياطي تلقائي — Scheduled Snapshots
 نسخ احتياطي مجدول لكل مشروع (ساعة/3/6/12/24/7 أيام) مع الاحتفاظ بآخر N نسخة.
 
+### 🔄 تحديثات موحّدة — Unified Runtime Updates
+تحديث opencode و VS Code (code-server) من داخل اللوحة (Settings → Updates) — للمدير فقط مع تأكيد كلمة المرور، إعادة تشغيل المكوّن المستهدف فقط لبضع ثوانٍ مع إعادة اتصال تلقائية، وrollback تلقائي عند فشل الإقلاع.
+
 ---
 
 ## أبرز نقاط API — Key API Endpoints
@@ -162,6 +165,46 @@ code-server مدمج في واجهة الويب، وOpenCode Web UI، كلاهم
 | `WS /ws/projects/:slug/status` | تحديثات الحالة عبر WebSocket |
 | `WS /ws/projects/:slug/terminal` | طرفية عبر WebSocket |
 | `WS /ws/chat-team` | دردشة الفريق |
+| `GET /api/updates` | حالة تحديثات المكوّنات (مدير فقط) |
+| `POST /api/updates/check` | فحص فوري للتحديثات |
+| `POST /api/updates/apply` | تطبيق تحديث مكوّن — يتطلب كلمة مرور الحساب |
+
+---
+
+## التحديثات الموحّدة — Unified Updates
+
+> التحديث داخل الحاوية (in-place) للمكوّنين الرئيسيين — opencode و VS Code (code-server) — من لوحة Settings → Updates. إداري فقط (admin)، مع تأكيد هوية بكلمة مرور الحساب.
+
+### كيف يعمل — How It Works
+
+- **opencode** (npm): يُجلب أحدث إصدار من سجل npm (`WSD_UPDATE_NPM_REGISTRY`)، يُثبَّت عبر `npm install -g opencode-ai@<latest>` ثم تُعاد تشغيل العملية عبر حلقة الإشراف في `entrypoint.sh` (PID في `$DATA_DIR/opencode-web.pid`). إذا لم يقلع الإصدار الجديد، يُعاد تلقائيًا إلى النسخة السابقة (`rollbackOpencodeTo`).
+- **code-server** (deb): يُفحص الإصدار الحالي (`code-server --version`)، ويُجلب أحدث إصدار من GitHub API (مع `digest` SHA-256 من استجابة الـ API)، ثم يُنزَّل ملف `.deb` مع تحقق من المجموع الاختباري (أو `dpkg-deb --info` عند غيابه) وسقف حجم، ويُثبَّت عبر `dpkg -i`، وتُعاد تشغيل العملية عبر حلقة الإشراف (PID في `$DATA_DIR/code-server.pid`) مع **boot-verify** (إصدار + منفذ + PID). **Rollback تلقائي**: يُنزَّل ملف `.deb` الحالي مسبقًا (المساحة المطلوبة ≈ 2× حجم الحزمة + هامش 10%) ويُعاد تثبيته إذا فشل الإقلاع.
+- زر Studio القديم (`POST /api/opencode-studio/update`) ما زال يعمل ويُشغّل نفس آلية opencode.
+
+### الصلاحيات — Who Can Update
+
+- `GET /api/updates` و `POST /api/updates/check` — **admin فقط** (قراءة/فحص).
+- `POST /api/updates/apply` — **admin فقط** + كلمة مرور الحساب عبر `ReAuthModal` (نفس نمط sudo) + حارس القوة الغاشمة للحساب + حد معدل تطبيق 2/دقيقة لكل IP (الفحص الفوري: 6/دقيقة).
+- الاستجابة: `202` فور بدء التطبيق في الخلفية (fire-and-forget)، `409` عند وجود تحديث آخر يعمل، `400` لمكوّن/كلمة مرور ناقصة، `401` لكلمة مرور خاطئة.
+- `الكل (all)` يشغّل opencode أولًا ثم code-server — فشل opencode يوقف الدفعة قبل إنفاق النطاق على code-server.
+
+### ماذا يحدث أثناء التحديث — During an Update
+
+- يُعاد تشغيل **المكوّن المستهدف فقط** لبضع ثوانٍ (npm لـ opencode أسرع؛ code-server تنزيل ~230 MB + تثبيت + تحقق إقلاع) — الجلسات تعيد الاتصال تلقائيًا.
+- شارة إشعار في الشريط الجانبي للمدير (فحص كل 15 دقيقة + عند عودة التبويب للظهور) — خضراء أثناء التطبيق، صفراء عند توفر تحديث.
+- **إعادة بناء الصورة** (`docker compose build`) تعيد النسخة المبنية في الصورة (opencode `1.18.22` / code-server `4.96.4`) — التحديث داخل الحاوية لا يعدّل الصورة.
+
+### متغيرات البيئة — Environment Variables
+
+| المتغير | الافتراضي | الوصف |
+|---------|-----------|-------|
+| `WSD_UPDATE_GITHUB_BASE` | `https://api.github.com` | قاعدة GitHub API لفحص إصدارات code-server |
+| `WSD_UPDATE_DOWNLOAD_BASE` | `https://github.com/coder/code-server/releases` | قاعدة تنزيل ملفات `.deb` |
+| `WSD_UPDATE_NPM_REGISTRY` | `https://registry.npmjs.org` | سجل npm لـ opencode (ميرور/بروكسي) |
+| `WSD_UPDATES_MAX_BYTES` | `419430400` (400 MB) | سقف حجم ملف `.deb` الواحد |
+| `WSD_UPDATE_BOOT_TIMEOUT_MS` | `30000` (30 ثانية) | مهلة تحقق الإقلاع قبل rollback |
+| `WSD_RATE_UPDATE_CHECK_MAX` | `6` | حد الفحص الفوري لكل IP/دقيقة |
+| `WSD_RATE_UPDATE_APPLY_MAX` | `2` | حد التطبيق لكل IP/دقيقة |
 
 ---
 

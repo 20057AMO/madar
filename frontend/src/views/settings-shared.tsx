@@ -1,4 +1,4 @@
-import type { AuditEntry } from '../api';
+import type { AuditEntry, ApplyState } from '../api';
 
 export const AUDIT_LABELS: Record<string, string> = {
   setup: 'Account created',
@@ -40,11 +40,27 @@ export const AUDIT_LABELS: Record<string, string> = {
   'opencode-studio': 'Opencode Studio edited',
   'opencode-update': 'Opencode updated',
   'opencode-update-failed': 'Opencode update failed',
+  'opencode-update-rollback': 'Opencode update rolled back',
+  'code-server-update': 'VS Code updated',
+  'code-server-update-failed': 'VS Code update failed',
+  'code-server-update-rollback': 'VS Code update rolled back',
+  'updates-check': 'Updates checked',
   'agent-run': 'Agent run completed',
   'agent-run-failed': 'Agent run failed',
 };
 
 export type Msg = { type: 'ok' | 'err'; text: string } | null;
+
+/** Apply states that mean an update is actively running (used by the
+ *  Updates panel AND the sidebar notification dot — must stay in sync). */
+export const UPDATE_RUNNING_STATES: ApplyState[] = [
+  'downloading',
+  'verifying',
+  'installing',
+  'restarting',
+  'verifying-boot',
+  'rollback',
+];
 
 export function fmtDate(iso?: string): string {
   if (!iso) return '—';
