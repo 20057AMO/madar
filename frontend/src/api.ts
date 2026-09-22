@@ -53,6 +53,18 @@ export interface CrashInfo {
 export const crashTitle = (c: CrashInfo): string =>
   `Crashed ${new Date(c.at).toLocaleString()} — ${c.reason}${c.exitCode != null ? ` (exit ${c.exitCode})` : ''}${c.restarted ? ` — was auto-restarted ×${c.restarted}` : ''}`;
 
+/** Localized short crash summary for the project banner. `t` resolves
+ *  `project.crashAt` / `project.crashTitleReasons.<reason>` / `project.crashWasRestarted`. */
+export const crashSummary = (
+  c: CrashInfo,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string => {
+  const reason = t(`project.crashTitleReasons.${c.reason}`);
+  const exit = c.exitCode != null ? ` (exit ${c.exitCode})` : '';
+  const restarts = c.restarted ? ` — ${t('project.crashWasRestarted', { n: c.restarted })}` : '';
+  return `${t('project.crashAt', { time: new Date(c.at).toLocaleString() })} — ${reason}${exit}${restarts}`;
+};
+
 /** Per-project disk usage from GET /api/storage. */
 export interface ProjectStorage {
   slug: string;
@@ -769,12 +781,18 @@ export interface ComponentStatus {
 
 export interface UpdatesStatus {
   components: ComponentStatus[];
-  checkedAt: string;
-  lastError?: string;
+  checkedAt: string | null;
+}
+
+export interface UpdatesLog {
+  log: string;
+  truncated: boolean;
+  bytes: number;
 }
 
 export const getUpdates = () => api<UpdatesStatus>('/api/updates');
 export const checkUpdates = () => api<UpdatesStatus>('/api/updates/check', { method: 'POST' });
+export const getUpdatesLog = () => api<UpdatesLog>('/api/updates/log');
 export const applyUpdates = (accountPassword: string, component: 'opencode' | 'code-server' | 'all') =>
   api<{ ok: boolean }>('/api/updates/apply', {
     method: 'POST',
@@ -1471,6 +1489,8 @@ export interface ChatChannel {
   createdBy?: string;
   createdAt: string;
   lastMessageAt?: string;
+  /** Preview of the newest message (rail subtitle) — from the channels list. */
+  lastMessage?: { text: string; timestamp: string } | null;
   unread?: number;
   firstUnreadId?: string;
   /** Send permission for manual channels: 'everyone' (default) or 'admins'. */

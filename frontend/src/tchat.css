@@ -1,5 +1,5 @@
-/* Team chat (Team Chat view) — kept separate from index.css (user-owned global
-   styles) and namespaced `tchat-` so it never collides with the AI-chat panel. */
+/* Team chat (Team Chat view) — WhatsApp-style layout in Madar's dark visual
+   identity. Namespaced `tchat-` so it never collides with the AI-chat panel. */
 .chat-view {
   display: flex;
   height: calc(100vh - 60px);
@@ -17,16 +17,13 @@
   background: var(--bg);
 }
 .tchat-rail {
-  width: 270px;
+  width: 300px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border);
   background: var(--panel);
   min-height: 0;
 }
-/* nav wrapper keeps the rail's column flow so the head/actions/list stack
-   exactly as they did before the landmark was introduced */
 .tchat-rail-nav {
   display: flex;
   flex-direction: column;
@@ -45,7 +42,7 @@
   align-items: center;
   gap: 7px;
   font-weight: 600;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
 }
 .tchat-online {
   font-size: 0.68rem;
@@ -67,143 +64,128 @@
   padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
+
+/* ── WhatsApp-style channel row ─────────────────────────────── */
 .tchat-channel-item {
   display: flex;
   align-items: center;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 .tchat-channel-item:hover,
 .tchat-channel-item:focus-within { background: var(--panel-2); }
 .tchat-channel-item.active { background: var(--panel-2); }
-.tchat-channel-item.active .tchat-channel-row { border-color: var(--border-2); }
 .tchat-channel-row {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 8px 9px;
+  gap: 10px;
+  padding: 9px 10px;
   cursor: pointer;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  border: none;
+  border-radius: 10px;
+  min-height: 56px;
 }
 .tchat-channel-row:hover { background: var(--panel-2); }
 .tchat-channel-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-.tchat-channel-row.active { background: var(--panel-2); border-color: var(--border-2); }
-.tchat-channel-row.unread .tchat-channel-name { font-weight: 700; }
+.tchat-channel-row.active { background: var(--panel-2); }
+.tchat-channel-row.unread .tchat-channel-name { font-weight: 700; color: var(--text); }
 
-/* ── Global search panel (rail) ─────────────────────────────── */
-.tchat-global-search {
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
-  display: flex;
-  flex-direction: column;
-}
-.tchat-global-search .input {
-  background: var(--bg);
-  border: none;
-  border-radius: 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.78rem;
-  padding: 8px 12px;
-}
-.tchat-global-search .input:focus { outline: none; border-bottom-color: var(--accent); }
-.tchat-global-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 0.68rem;
-  color: var(--text-2);
-}
-.tchat-global-results {
-  max-height: 320px;
-  overflow-y: auto;
-}
-.tchat-global-empty {
-  padding: 10px 12px;
-  font-size: 0.72rem;
-  color: var(--text-2);
-}
-.tchat-global-channel {
-  display: flex;
-  flex-direction: column;
-}
-.tchat-global-channel-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 0.68rem;
-  color: var(--text-2);
-  font-weight: 600;
-  border-top: 1px solid var(--border);
-  background: var(--bg);
-}
-.tchat-global-channel:first-child .tchat-global-channel-header { border-top: none; }
-.tchat-global-channel-icon {
-  display: inline-flex;
-  color: var(--text-3);
+/* Round avatar (direct) / glyph tile (channel/project) with online ring */
+.tchat-channel-avatar {
+  position: relative;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-.tchat-global-channel-name {
+.tchat-channel-avatar-glyph {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tchat-online-dot {
+  display: none;
+  position: absolute;
+  bottom: 0;
+  inset-inline-end: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--green);
+  border: 2px solid var(--panel);
+}
+.tchat-channel-avatar.online .tchat-online-dot { display: block; }
+
+.tchat-channel-meta {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tchat-global-channel-count {
-  background: var(--panel-2);
-  color: var(--text-3);
-  font-size: 0.6rem;
-  font-weight: 700;
-  min-width: 16px;
-  text-align: center;
-  padding: 1px 4px;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-.tchat-global-hit {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 6px 10px 6px 28px;
-  font-size: 0.72rem;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border);
+  gap: 2px;
 }
-.tchat-global-hit:last-child { border-bottom: none; }
-.tchat-global-hit:hover { background: var(--panel-2); }
-.tchat-global-hit:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-.tchat-global-hit-author {
-  color: var(--text-2);
-  font-size: 0.66rem;
-  font-weight: 500;
+.tchat-channel-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
-.tchat-global-hit-text {
-  color: var(--text);
+.tchat-channel-name {
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-mark.tchat-search-hit {
-  background: color-mix(in srgb, var(--yellow) 30%, transparent);
-  color: var(--text);
-  border-radius: 2px;
-  padding: 0 1px;
+.tchat-channel-time {
+  font-size: 0.62rem;
+  color: var(--text-3);
+  flex-shrink: 0;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.tchat-channel-row.unread .tchat-channel-time {
+  color: var(--accent);
+  font-weight: 600;
+}
+.tchat-channel-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tchat-channel-preview {
+  font-size: 0.72rem;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tchat-channel-preview.unread { color: var(--text-2); font-weight: 500; }
+.tchat-channel-bottom .tchat-unread-badge { flex-shrink: 0; }
+.tchat-unread-badge {
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.62rem;
+  font-weight: 700;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 10px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
-/* ── Message highlight flash (jump-to / pinned scroll) ──────── */
-.tchat-msg-highlight {
-  animation: tchat-flash 1s ease-out;
-}
-@keyframes tchat-flash {
-  0% { background: color-mix(in srgb, var(--accent) 22%, transparent); }
-  100% { background: transparent; }
-}
+/* Legacy icon chip still used in the header */
 .tchat-channel-icon {
   width: 26px;
   height: 26px;
@@ -215,53 +197,16 @@ mark.tchat-search-hit {
   color: var(--text-2);
   flex-shrink: 0;
 }
-.tchat-channel-row.active .tchat-channel-icon { color: var(--text); }
-.tchat-channel-meta {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.tchat-channel-name {
-  font-size: 0.8rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.tchat-channel-sub {
-  font-size: 0.67rem;
-  color: var(--text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.tchat-channel-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-}
-.tchat-channel-time { font-size: 0.62rem; color: #8b9098; }
-.tchat-unread-badge {
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 0.62rem;
-  font-weight: 700;
-  min-width: 18px;
-  padding: 1px 5px;
-  border-radius: 10px;
-  text-align: center;
-}
 .tchat-delete-btn {
   background: transparent;
   border: none;
   color: var(--text-2);
   cursor: pointer;
-  margin-right: 6px;
+  margin-inline-start: 2px;
   opacity: 0;
   border-radius: 6px;
-  min-width: 24px;
-  min-height: 24px;
+  min-width: 26px;
+  min-height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -273,6 +218,7 @@ mark.tchat-search-hit {
 .tchat-delete-btn:focus-visible { opacity: 1; }
 .tchat-empty-rail { padding: 18px 14px; color: var(--text-2); font-size: 0.75rem; }
 
+/* ── Main column ────────────────────────────────────────────── */
 .tchat-main {
   flex: 1;
   display: flex;
@@ -286,18 +232,36 @@ mark.tchat-search-hit {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  min-height: 56px;
 }
-.tchat-head-title { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tchat-head-avatar {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.tchat-head-status-dot {
+  position: absolute;
+  bottom: 0;
+  inset-inline-end: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-3);
+  border: 2px solid var(--panel);
+}
+.tchat-head-status-dot.on { background: var(--green); }
+.tchat-head-title { font-size: 0.92rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tchat-head-sub { font-size: 0.68rem; color: var(--text-2); }
+.tchat-head-typing { color: var(--green); }
 .tchat-member-avatars { display: flex; align-items: center; }
-.tchat-member-avatars > * { margin-left: -6px; border: 2px solid var(--panel); }
-.tchat-member-avatars > *:first-child { margin-left: 0; }
+.tchat-member-avatars > * { margin-inline-start: -6px; border: 2px solid var(--panel); }
+.tchat-member-avatars > *:first-child { margin-inline-start: 0; }
 .tchat-presence-avatars { display: inline-flex; align-items: center; }
-.tchat-presence-avatars > * { margin-left: -6px; border: 2px solid var(--panel); }
-.tchat-presence-avatars > *:first-child { margin-left: 0; }
+.tchat-presence-avatars > * { margin-inline-start: -6px; border: 2px solid var(--panel); }
+.tchat-presence-avatars > *:first-child { margin-inline-start: 0; }
 .tchat-presence-avatar {
   background: none;
   border: none;
@@ -334,7 +298,7 @@ mark.tchat-search-hit {
 .tchat-settings-popover {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
+  inset-inline-end: 0;
   z-index: 50;
   min-width: 230px;
   background: var(--panel);
@@ -365,12 +329,9 @@ mark.tchat-search-hit {
   color: var(--text);
   cursor: pointer;
   font-family: inherit;
-  text-align: left;
+  text-align: start;
 }
-.tchat-settings-option svg {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
+.tchat-settings-option svg { flex-shrink: 0; margin-top: 2px; }
 .tchat-settings-option:hover { background: var(--panel-2); }
 .tchat-settings-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .tchat-settings-option:disabled { opacity: 1; cursor: default; }
@@ -378,6 +339,7 @@ mark.tchat-search-hit {
 .tchat-settings-option-name { font-size: 0.78rem; font-weight: 500; display: block; }
 .tchat-settings-option-sub { font-size: 0.66rem; color: var(--text-2); display: block; margin-top: 1px; }
 
+/* ── Pinned header ──────────────────────────────────────────── */
 .tchat-pinned-header {
   display: flex;
   align-items: center;
@@ -392,51 +354,174 @@ mark.tchat-search-hit {
 .tchat-pinned-header:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .tchat-pinned-header em { color: var(--text); font-style: normal; }
 
+/* ── Search ─────────────────────────────────────────────────── */
 .tchat-searchbox { border-bottom: 1px solid var(--border); background: var(--panel); }
 .tchat-searchbox .input { background: var(--bg); }
 .tchat-search-results {
-  max-height: 200px;
+  max-height: 220px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
 }
-.tchat-search-result { padding: 7px 12px; font-size: 0.74rem; border-bottom: 1px solid var(--border); cursor: default; }
+.tchat-search-result {
+  padding: 7px 12px;
+  font-size: 0.74rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 32px;
+}
+.tchat-search-result:last-child { border-bottom: none; }
 .tchat-search-result:hover { background: var(--panel-2); }
+.tchat-search-result:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-search-hit-text { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+mark.tchat-search-hit {
+  background: color-mix(in srgb, var(--yellow) 30%, transparent);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
 
+/* Global search panel (rail) */
+.tchat-global-search {
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+}
+.tchat-global-search .input {
+  background: var(--bg);
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.78rem;
+  padding: 8px 12px;
+}
+.tchat-global-search .input:focus { outline: none; border-bottom-color: var(--accent); }
+.tchat-global-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.68rem;
+  color: var(--text-2);
+}
+.tchat-global-results { max-height: 320px; overflow-y: auto; }
+.tchat-global-empty { padding: 10px 12px; font-size: 0.72rem; color: var(--text-2); }
+.tchat-global-channel { display: flex; flex-direction: column; }
+.tchat-global-channel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 0.68rem;
+  color: var(--text-2);
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.tchat-global-channel:first-child .tchat-global-channel-header { border-top: none; }
+.tchat-global-channel-icon { display: inline-flex; color: var(--text-3); flex-shrink: 0; }
+.tchat-global-channel-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tchat-global-channel-count {
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-size: 0.6rem;
+  font-weight: 700;
+  min-width: 16px;
+  text-align: center;
+  padding: 1px 4px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.tchat-global-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px 6px 28px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.tchat-global-hit:last-child { border-bottom: none; }
+.tchat-global-hit:hover { background: var(--panel-2); }
+.tchat-global-hit:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-global-hit-author { color: var(--text-2); font-size: 0.66rem; font-weight: 500; }
+.tchat-global-hit-text {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Messages list & WhatsApp bubbles ───────────────────────── */
 .tchat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 16px 18px 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 3px;
 }
 .tchat-msg {
   display: flex;
   gap: 8px;
-  max-width: 80%;
+  max-width: 78%;
   align-self: flex-start;
   font-size: 0.85rem;
   line-height: 1.45;
+  border-radius: 14px;
 }
 .tchat-msg.mine {
   align-self: flex-end;
   flex-direction: row-reverse;
 }
+.tchat-msg-avatar { align-self: flex-end; padding-bottom: 2px; }
 .tchat-msg-bubble {
   position: relative;
-  padding: 8px 12px 22px 12px;
-  border-radius: 12px 12px 12px 2px;
+  padding: 6px 9px 18px;
+  border-radius: 12px;
   background: var(--panel);
   border: 1px solid var(--border);
   min-width: 0;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+  --tail-inset: 10px;
 }
+/* Outgoing: slightly lighter fill, no border — reads as "mine" at a glance */
 .tchat-msg.mine .tchat-msg-bubble {
   background: var(--panel-2);
-  border-color: var(--border-2);
-  border-radius: 12px 12px 2px 12px;
-  padding: 8px 12px 22px 12px;
+  border-color: transparent;
 }
-.tchat-msg-text { word-break: break-word; overflow-wrap: break-word; }
+.tchat-msg-bubble::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  inset-inline-start: calc(-1 * var(--tail-inset) + 2px);
+  width: 12px;
+  height: 13px;
+  background: inherit;
+  border: inherit;
+  border-width: 0 0 1px 1px;
+  border-image: none;
+  border-bottom-left-radius: 14px 8px;
+  clip-path: inset(0 0 0 0);
+  z-index: 0;
+}
+.tchat-msg.mine .tchat-msg-bubble::before {
+  inset-inline-start: auto;
+  inset-inline-end: calc(-1 * var(--tail-inset) + 2px);
+  border-width: 0 1px 1px 0;
+  border-bottom-right-radius: 14px 8px;
+}
+.tchat-msg.grouped .tchat-msg-bubble::before { display: none; }
+.tchat-msg-text { word-break: break-word; overflow-wrap: break-word; position: relative; z-index: 1; }
 /* Team-chat-only markdown overrides (scoped under .tchat-msg-text.md so the
    global .md rules in index.css — Agent/Project Chat — stay untouched) */
 .tchat-msg-text.md pre { background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: visible; }
@@ -452,24 +537,65 @@ mark.tchat-search-hit {
 .tchat-msg-text.md .tchat-md-h.h4,
 .tchat-msg-text.md .tchat-md-h.h5,
 .tchat-msg-text.md .tchat-md-h.h6 { font-size: 0.98em; }
+.tchat-msg-author { font-weight: 600; font-size: 0.75rem; color: var(--accent); margin-bottom: 2px; }
 .tchat-msg-reply {
   font-size: 0.68rem;
   color: var(--text-2);
-  border-left: 2px solid var(--text-3);
-  padding-left: 7px;
+  border-inline-start: 2px solid var(--accent);
+  padding-inline-start: 7px;
   margin-bottom: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  padding-block: 2px;
+  padding-inline-end: 6px;
 }
-.tchat-msg-reply-from { color: var(--accent); font-weight: 600; margin-right: 5px; }
-.tchat-msg-side { display: flex; flex-direction: column; gap: 2px; opacity: 0; align-self: center; }
+.tchat-msg-reply-from { color: var(--accent); font-weight: 600; margin-inline-end: 5px; }
+.tchat-msg-reply-deleted { font-style: italic; }
+.tchat-msg-reply-deleted .tchat-msg-reply-from { font-style: italic; }
+
+/* Meta row: time + ticks live INSIDE the bubble (reserved space) */
+.tchat-msg-meta {
+  position: absolute;
+  bottom: 4px;
+  inset-inline-end: 9px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.62rem;
+  color: var(--text-3);
+  pointer-events: none;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.tchat-msg-time { font-size: 0.62rem; color: var(--text-3); }
+.tchat-msg-edited { font-size: 0.6rem; font-style: italic; }
+.tchat-msg-status {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-3);
+  font-size: 0.6rem;
+}
+.tchat-msg-status.read { color: var(--blue); }
+
+/* Side toolbar: WhatsApp-style hover — ⋮ only */
+.tchat-msg-side {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: 0;
+  align-self: flex-end;
+  padding-bottom: 6px;
+}
 @media (hover: hover) {
   .tchat-msg:hover .tchat-msg-side { opacity: 1; }
 }
 .tchat-msg:focus-within .tchat-msg-side { opacity: 1; }
 @media (hover: none) and (pointer: coarse) {
-  .tchat-msg-side { opacity: 0.7; }
+  .tchat-msg-side { opacity: 0.85; }
 }
 .tchat-msg-action {
   background: transparent;
@@ -477,32 +603,60 @@ mark.tchat-search-hit {
   color: var(--text-3);
   cursor: pointer;
   padding: 6px;
-  border-radius: 4px;
-  min-width: 24px;
-  min-height: 24px;
+  border-radius: 6px;
+  min-width: 26px;
+  min-height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .tchat-msg-action:hover { color: var(--text); background: var(--panel-2); }
-.tchat-msg-time {
-  position: absolute;
-  bottom: 4px;
-  right: 8px;
-  font-size: 0.6rem;
-  color: var(--text-2);
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
+.tchat-msg-action:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-msg-action-danger:hover { color: var(--red); background: rgba(248,81,73,0.12); }
 
-/* Message edit / delete */
-.tchat-msg-edited {
-  font-size: 0.6rem;
-  color: var(--text-2);
-  font-style: italic;
+/* Quick-reaction hover strip under the bubble (desktop hover only) */
+.tchat-quick-reactions {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  inset-inline-start: 6px;
+  z-index: 30;
+  display: flex;
+  gap: 2px;
+  padding: 3px 5px;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
 }
+.tchat-msg.mine .tchat-quick-reactions {
+  inset-inline-start: auto;
+  inset-inline-end: 6px;
+}
+@media (hover: hover) {
+  .tchat-msg:hover .tchat-quick-reactions { opacity: 1; pointer-events: auto; }
+}
+.tchat-msg:focus-within .tchat-quick-reactions { opacity: 1; pointer-events: auto; }
+.tchat-quick-reaction {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.tchat-quick-reaction:hover { background: var(--panel-2); transform: scale(1.18); }
+.tchat-quick-reaction:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* Message edit */
 .tchat-edit-box { width: 100%; }
 .tchat-edit-textarea {
   width: 100%;
@@ -525,24 +679,50 @@ mark.tchat-search-hit {
   margin-top: 6px;
   justify-content: flex-end;
 }
-.tchat-msg-action-danger:hover { color: var(--red); background: rgba(248,81,73,0.12); }
-.tchat-msg-reply-deleted {
-  font-size: 0.68rem;
-  color: var(--text-2);
-  font-style: italic;
-}
-.tchat-msg-reply-deleted .tchat-msg-reply-from { font-style: italic; }
 
-.tchat-msg-status {
-  display: inline-flex;
+/* ── Day separator + new-messages divider ───────────────────── */
+.tchat-day-sep {
+  width: 100%;
+  display: flex;
   align-items: center;
+  justify-content: center;
+  margin: 10px 0 6px;
+}
+.tchat-day-sep span {
+  background: var(--panel);
+  border: 1px solid var(--border);
   color: var(--text-2);
-  font-size: 0.6rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
-.tchat-msg-status.read {
-  color: var(--accent);
+.tchat-new-divider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 4px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: var(--red);
 }
-.tchat-attachment { margin-top: 6px; }
+.tchat-new-divider::before,
+.tchat-new-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--red) 45%, transparent);
+}
+.tchat-msg-highlight { animation: tchat-flash 1s ease-out; }
+@keyframes tchat-flash {
+  0% { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  100% { background: transparent; }
+}
+
+/* ── Attachments ────────────────────────────────────────────── */
+.tchat-attachment { margin-top: 6px; position: relative; z-index: 1; }
 .tchat-attachment-img {
   max-width: min(320px, 100%);
   max-height: 260px;
@@ -552,195 +732,6 @@ mark.tchat-search-hit {
   object-fit: cover;
 }
 .tchat-empty-msg { align-self: center; color: var(--text-2); font-size: 0.78rem; padding: 30px 0; }
-.tchat-typing {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.68rem;
-  color: var(--text-2);
-  padding: 4px 16px;
-}
-
-.tchat-composer {
-  border-top: 1px solid var(--border);
-  padding: 10px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: var(--panel);
-}
-.tchat-composer-reply {
-  font-size: 0.7rem;
-  color: var(--text-2);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--panel-2);
-  padding: 6px 10px;
-  border-radius: 8px;
-}
-.tchat-composer-att { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; }
-.tchat-x {
-  background: transparent;
-  border: none;
-  color: var(--text-3);
-  cursor: pointer;
-  padding: 2px;
-  border-radius: 4px;
-  min-width: 24px;
-  min-height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.tchat-x:hover { color: var(--text); }
-.tchat-textarea {
-  flex: 1;
-  resize: none;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 10px;
-  padding: 9px 11px;
-  font-size: 0.8rem;
-  font-family: inherit;
-}
-.tchat-textarea:focus { border-color: var(--text-3); }
-.tchat-textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.tchat-readonly { padding: 14px 16px; color: var(--text-2); font-size: 0.75rem; border-top: 1px solid var(--border); background: var(--panel); }
-
-/* Composer icon buttons meet a usable touch target (WCAG 2.5.8) */
-.tchat-composer .btn {
-  min-width: 44px;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.tchat-main-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--text-2);
-}
-
-.tchat-user-picker { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
-.tchat-user-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 9px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 0.8rem;
-}
-.tchat-user-row:hover { background: var(--panel-2); }
-.tchat-user-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-
-/* Voice Note Player */
-.vn-player {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--panel-2);
-  border: 1px solid var(--border-2);
-  border-radius: 12px;
-  padding: 6px 10px;
-  max-width: 280px;
-}
-.vn-play-btn {
-  background: var(--accent);
-  color: var(--bg);
-  border: none;
-  border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.vn-progress-container {
-  flex: 1;
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.vn-progress-bar {
-  width: 100%;
-  cursor: pointer;
-  accent-color: var(--accent);
-  height: 4px;
-  z-index: 2;
-}
-.vn-progress-fill {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 4px;
-  background: var(--accent);
-  opacity: 0.4;
-  z-index: 1;
-  pointer-events: none;
-}
-.vn-time {
-  font-size: 0.65rem;
-  color: var(--text-2);
-  min-width: 55px;
-  text-align: right;
-}
-.vn-speed-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  font-size: 0.65rem;
-  line-height: 1;
-  border-radius: 4px;
-  padding: 4px 8px;
-  min-height: 24px;
-  cursor: pointer;
-}
-.vn-speed-btn:hover { background: var(--panel); color: var(--text); }
-.vn-player-loading { font-size: 0.7rem; color: var(--text-3); padding: 6px 10px; }
-
-/* Recording UI */
-.tchat-recording-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.75rem;
-  color: var(--red);
-  font-weight: 600;
-  padding: 4px 8px;
-  background: rgba(248,81,73,0.1);
-  border-radius: 6px;
-}
-.tchat-recording-pulse {
-  width: 6px;
-  height: 6px;
-  background: var(--red);
-  border-radius: 50%;
-  animation: vn-pulse 1s infinite;
-}
-@keyframes vn-pulse {
-  0% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(1.2); }
-  100% { opacity: 1; transform: scale(1); }
-}
-.btn-recording {
-  background: var(--red) !important;
-  color: white !important;
-  animation: vn-pulse 1s infinite;
-}
-
-/* ── Attachment grid (2+ images) ─────────────────────────────── */
 .tchat-attachment-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -767,16 +758,9 @@ mark.tchat-search-hit {
   display: block;
 }
 .tchat-grid-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 8px; }
-.tchat-img-btn {
-  display: block;
-  padding: 0;
-  border: none;
-  background: none;
-  cursor: pointer;
-}
+.tchat-img-btn { display: block; padding: 0; border: none; background: none; cursor: pointer; }
 .tchat-img-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 8px; }
 
-/* ── File attachment cards (non-image, non-voice) ────────────── */
 .tchat-attachment-file {
   display: flex;
   align-items: center;
@@ -784,7 +768,7 @@ mark.tchat-search-hit {
   max-width: min(320px, 100%);
   font-size: 0.72rem;
   padding: 6px 10px;
-  background: var(--panel-2);
+  background: var(--bg-2);
   border-radius: 8px;
   border: 1px solid var(--border);
 }
@@ -829,14 +813,6 @@ mark.tchat-search-hit {
   margin-top: 4px;
   min-height: 24px;
 }
-.tchat-preview-loading {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.66rem;
-  color: var(--text-3);
-  flex-shrink: 0;
-}
 .tchat-preview-too-big { font-size: 0.66rem; flex-shrink: 0; }
 .tchat-file-preview {
   margin: 6px 0 2px;
@@ -858,7 +834,640 @@ mark.tchat-search-hit {
 }
 .tchat-file-preview:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
-/* ── Image lightbox ──────────────────────────────────────────── */
+/* ── Reactions ──────────────────────────────────────────────── */
+.tchat-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  position: relative;
+  z-index: 1;
+}
+.tchat-reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-family: inherit;
+  line-height: 1.5;
+  cursor: pointer;
+  min-height: 24px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.tchat-reaction-chip:hover { background: var(--panel-2); border-color: var(--border-2); color: var(--text); }
+.tchat-reaction-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.tchat-reaction-chip.mine {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text);
+}
+.tchat-reaction-chip.mine:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-2));
+  border-color: var(--accent);
+}
+.tchat-reaction-emoji { font-size: 0.85rem; line-height: 1; }
+.tchat-reaction-count { font-weight: 600; font-size: 0.68rem; }
+.tchat-reaction-chip.mine .tchat-reaction-count { color: var(--accent); }
+.tchat-reaction-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.tchat-msg:hover .tchat-reaction-add,
+.tchat-msg:focus-within .tchat-reaction-add,
+.tchat-reaction-add:focus-visible { opacity: 1; }
+@media (hover: none) and (pointer: coarse) {
+  .tchat-reaction-add { opacity: 0.7; }
+}
+.tchat-reaction-add:hover { color: var(--text); background: var(--panel-2); }
+.tchat-reaction-add:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+/* Bubble-anchored full reaction picker */
+.tchat-emoji-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  inset-inline-start: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(6, 32px);
+  gap: 2px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.tchat-msg.mine .tchat-emoji-picker { inset-inline-start: auto; inset-inline-end: 0; }
+.tchat-emoji-option {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 1.05rem;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.tchat-emoji-option:hover { background: var(--panel-2); }
+.tchat-emoji-option:active { transform: scale(0.92); }
+.tchat-emoji-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* ── WhatsApp-style context menu (right-click / long-press / ⋮) ── */
+.tchat-ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  background: rgba(0, 0, 0, 0.25);
+}
+.tchat-ctx-menu {
+  position: fixed;
+  z-index: 211;
+  min-width: 210px;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: tchat-ctx-in 0.12s ease-out;
+}
+@keyframes tchat-ctx-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.tchat-ctx-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.tchat-ctx-reaction {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease, background 0.12s ease;
+}
+.tchat-ctx-reaction:hover { background: var(--panel-2); transform: scale(1.2); }
+.tchat-ctx-reaction:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: start;
+  min-height: 34px;
+}
+.tchat-ctx-item svg { flex-shrink: 0; color: var(--text-2); }
+.tchat-ctx-item:hover { background: var(--panel-2); }
+.tchat-ctx-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-ctx-item.danger { color: var(--red); }
+.tchat-ctx-item.danger svg { color: var(--red); }
+.tchat-ctx-item.danger:hover { background: rgba(248, 81, 73, 0.1); }
+
+/* ── Composer: WhatsApp pill ────────────────────────────────── */
+.tchat-composer {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel);
+  position: relative;
+}
+.tchat-composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.tchat-composer-pill {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 22px;
+  padding: 3px 6px;
+}
+.tchat-composer-pill:focus-within { border-color: var(--text-3); }
+.tchat-pill-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.tchat-pill-btn:hover { color: var(--text); background: var(--panel-2); }
+.tchat-pill-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tchat-pill-btn.danger:hover { color: var(--red); background: rgba(248, 81, 73, 0.12); }
+.tchat-textarea {
+  flex: 1;
+  resize: none;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 4px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  line-height: 1.45;
+  min-height: 36px;
+  max-height: 120px;
+}
+.tchat-textarea:focus { outline: none; }
+.tchat-textarea:focus-visible { outline: none; }
+.tchat-textarea::placeholder { color: var(--text-3); }
+
+/* Circular send/mic button — swaps with content (WhatsApp behavior) */
+.tchat-send-fab {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--bg);
+  cursor: pointer;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+.tchat-send-fab:hover { opacity: 0.88; }
+.tchat-send-fab:active { transform: scale(0.94); }
+.tchat-send-fab:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.tchat-send-fab:disabled { opacity: 0.6; cursor: default; }
+.tchat-send-fab.mic {
+  background: var(--panel-2);
+  color: var(--text-2);
+  border: 1px solid var(--border-2);
+}
+.tchat-send-fab.mic:hover { color: var(--text); }
+.tchat-stop-square {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+/* Inline recording UI (replaces the textarea while recording) */
+.tchat-recording-inline {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  min-height: 36px;
+  color: var(--red);
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+.tchat-recording-time {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+}
+.tchat-recording-pulse {
+  width: 8px;
+  height: 8px;
+  background: var(--red);
+  border-radius: 50%;
+  animation: vn-pulse 1s infinite;
+  flex-shrink: 0;
+}
+@keyframes vn-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Typing emoji panel (composer) */
+.tchat-emoji-panel-wrap {
+  position: absolute;
+  bottom: calc(100% - 2px);
+  inset-inline-start: 12px;
+  z-index: 60;
+}
+.tchat-emoji-panel {
+  width: min(340px, calc(100vw - 40px));
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 10px;
+  animation: tchat-ctx-in 0.12s ease-out;
+}
+.tchat-emoji-section + .tchat-emoji-section { margin-top: 8px; }
+.tchat-emoji-section-title {
+  font-size: 0.64rem;
+  color: var(--text-3);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.tchat-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+  gap: 2px;
+}
+.tchat-emoji-cell {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 1.15rem;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, transform 0.1s ease;
+}
+.tchat-emoji-cell:hover { background: var(--panel-2); }
+.tchat-emoji-cell:active { transform: scale(0.9); }
+.tchat-emoji-cell:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+.tchat-composer-reply {
+  font-size: 0.7rem;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-2);
+  padding: 6px 10px;
+  border-radius: 10px;
+  border-inline-start: 2px solid var(--accent);
+}
+.tchat-composer-att { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; flex-wrap: wrap; }
+.tchat-x {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tchat-x:hover { color: var(--text); }
+.tchat-readonly { padding: 14px 16px; color: var(--text-2); font-size: 0.75rem; border-top: 1px solid var(--border); background: var(--panel); }
+
+/* Composer icon buttons meet a usable touch target (WCAG 2.5.8) */
+.tchat-composer .btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.tchat-main-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+
+.tchat-user-picker { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.tchat-user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.tchat-user-row:hover { background: var(--panel-2); }
+.tchat-user-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* ── Voice Note Player ──────────────────────────────────────── */
+.vn-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px 10px;
+  max-width: 280px;
+}
+.vn-play-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.vn-progress-container { flex: 1; position: relative; display: flex; align-items: center; }
+.vn-progress-bar { width: 100%; cursor: pointer; accent-color: var(--accent); height: 4px; z-index: 2; }
+.vn-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 4px;
+  background: var(--accent);
+  opacity: 0.4;
+  z-index: 1;
+  pointer-events: none;
+}
+.vn-time { font-size: 0.65rem; color: var(--text-2); min-width: 55px; text-align: right; }
+.vn-speed-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 0.65rem;
+  line-height: 1;
+  border-radius: 4px;
+  padding: 4px 8px;
+  min-height: 24px;
+  cursor: pointer;
+}
+.vn-speed-btn:hover { background: var(--panel); color: var(--text); }
+.vn-player-loading { font-size: 0.7rem; color: var(--text-3); padding: 6px 10px; }
+
+/* ── Jump-to-bottom FAB with missed counter ─────────────────── */
+.tchat-main,
+.tchat-messages { position: relative; }
+.tchat-jump-bottom {
+  position: absolute;
+  inset-inline-end: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 5;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  color: var(--text-2);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.tchat-jump-bottom:hover { background: var(--panel-2); color: var(--text); border-color: var(--text-3); }
+.tchat-jump-bottom:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.tchat-jump-badge {
+  position: absolute;
+  top: -6px;
+  inset-inline-end: -2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.6rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Load-earlier row ───────────────────────────────────────── */
+.tchat-history-start {
+  align-self: center;
+  font-size: 0.66rem;
+  color: var(--text-3);
+  padding: 6px 16px 2px;
+}
+.tchat-load-earlier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: center;
+  padding: 8px 16px;
+  font-size: 0.72rem;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tchat-load-earlier:hover { background: var(--panel-2); color: var(--text); }
+.tchat-load-earlier:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* ── Rail hamburger ─────────────────────────────────────────── */
+.tchat-burger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.tchat-burger svg { width: 20px; height: 20px; }
+.tchat-burger:hover { background: var(--panel-2); color: var(--text); }
+.tchat-burger:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* ── Connection dot ─────────────────────────────────────────── */
+.tchat-conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.tchat-conn-open { background: var(--green); box-shadow: 0 0 6px rgba(63, 185, 80, 0.6); }
+.tchat-conn-reconnecting { background: var(--yellow); }
+.tchat-conn-offline { background: var(--red); }
+
+/* ── Typing indicator ───────────────────────────────────────── */
+.tchat-typing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.7rem;
+  color: var(--text-2);
+  padding: 2px 20px 4px;
+  min-height: 20px;
+}
+.tchat-typing-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.tchat-typing-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: tchat-dot 1.2s infinite ease-in-out;
+}
+.tchat-typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.tchat-typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes tchat-dot {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* ── Empty states ───────────────────────────────────────────── */
+.tchat-empty-msg,
+.tchat-empty-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--text-2);
+}
+.tchat-empty-msg { flex: 1; padding: 40px 20px; font-size: 0.8rem; }
+.tchat-empty-rail { align-self: stretch; padding: 30px 16px; font-size: 0.75rem; }
+.tchat-empty-msg > .icon,
+.tchat-empty-rail > .icon,
+.tchat-empty-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--text-3);
+  opacity: 0.55;
+}
+.tchat-empty-btn {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.tchat-empty-btn:hover { border-color: var(--text-3); background: var(--panel-2); }
+.tchat-empty-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* ── Composer char counter ──────────────────────────────────── */
+.tchat-char-counter {
+  align-self: flex-end;
+  font-size: 0.66rem;
+  line-height: 1.2;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.tchat-char-counter.warn { color: var(--yellow); }
+.tchat-char-counter.danger { color: var(--red); }
+
+/* ── Image lightbox ─────────────────────────────────────────── */
 .lightbox-overlay {
   position: fixed;
   inset: 0;
@@ -958,132 +1567,21 @@ mark.tchat-search-hit {
 .lightbox-close { top: 14px; right: 14px; }
 .lightbox-prev { left: 14px; top: 50%; transform: translateY(-50%); }
 .lightbox-next { right: 14px; top: 50%; transform: translateY(-50%); }
-@media (max-width: 640px) {
-  .lightbox-prev { left: 8px; }
-  .lightbox-next { right: 8px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lightbox-close, .lightbox-nav { transition: none; }
-}
 
-/* ── Reactions ──────────────────────────────────────────────── */
-.tchat-reactions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-top: 6px;
-}
-.tchat-reaction-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-  color: var(--text-2);
-  font-size: 0.72rem;
-  font-family: inherit;
-  line-height: 1.5;
-  cursor: pointer;
-  min-height: 24px;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-.tchat-reaction-chip:hover {
-  background: var(--panel-2);
-  border-color: var(--border-2);
-  color: var(--text);
-}
-.tchat-reaction-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.tchat-reaction-chip.mine {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  color: var(--text);
-}
-.tchat-reaction-chip.mine:hover {
-  background: color-mix(in srgb, var(--accent) 22%, var(--bg-2));
-  border-color: var(--accent);
-}
-.tchat-reaction-emoji { font-size: 0.85rem; line-height: 1; }
-.tchat-reaction-count { font-weight: 600; font-size: 0.68rem; }
-.tchat-reaction-chip.mine .tchat-reaction-count { color: var(--accent); }
-.tchat-reaction-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
-}
-.tchat-msg:hover .tchat-reaction-add,
-.tchat-msg:focus-within .tchat-reaction-add,
-.tchat-reaction-add:focus-visible { opacity: 1; }
-@media (hover: none) and (pointer: coarse) {
-  .tchat-reaction-add { opacity: 0.7; }
-}
-.tchat-reaction-add:hover { color: var(--text); background: var(--panel-2); }
-.tchat-reaction-add:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-/* Popover anchors to the message bubble (`position: relative`) and floats above it */
-.tchat-emoji-picker {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  z-index: 40;
-  display: grid;
-  grid-template-columns: repeat(6, 32px);
-  gap: 2px;
-  padding: 6px;
-  background: var(--panel);
-  border: 1px solid var(--border-2);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-.tchat-msg.mine .tchat-emoji-picker { left: auto; right: 0; }
-.tchat-emoji-option {
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  font-size: 1.05rem;
-  cursor: pointer;
-  padding: 0;
-  transition: background 0.12s ease, transform 0.12s ease;
-}
-.tchat-emoji-option:hover { background: var(--panel-2); }
-.tchat-emoji-option:active { transform: scale(0.92); }
-.tchat-emoji-option:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+/* ── Grouping: consecutive messages from the same author ────── */
+.tchat-msg.grouped .tchat-msg-avatar,
+.tchat-msg.grouped .tchat-msg-author { display: none; }
 
 /* ── Responsive layout & mobile structure ───────────────────── */
-/* Dynamic viewport height — falls back to vh in engines without dvh.
-   Desktop (≥641px) keeps the old 60px `.main` padding offset so the chat
-   never overflows under the page header. */
 @media (min-width: 641px) {
   .chat-view,
-  .tchat-view {
-    height: calc(100vh - 60px);
-  }
+  .tchat-view { height: calc(100vh - 60px); }
   @supports (height: 100dvh) {
     .chat-view,
-    .tchat-view {
-      height: calc(100dvh - 60px);
-    }
+    .tchat-view { height: calc(100dvh - 60px); }
   }
 }
-/* Logical border so the rail edge flips with the document direction */
-.tchat-rail {
-  border-inline-end: 1px solid var(--border);
-}
+.tchat-rail { border-inline-end: 1px solid var(--border); }
 
 /* Drawer: the rail leaves the flow ≤1023px and pins flush to the viewport */
 .tchat-backdrop { display: none; }
@@ -1093,7 +1591,7 @@ mark.tchat-search-hit {
     inset-block-start: 0;
     inset-inline-start: 0;
     bottom: 0;
-    width: min(300px, 85vw);
+    width: min(320px, 85vw);
     z-index: 95;
     transform: translateX(-110%);
     transition: transform 0.25s ease;
@@ -1121,43 +1619,42 @@ mark.tchat-search-hit {
   .tchat-rail.open,
   .tchat-rail.open:dir(rtl) { transform: none; }
 }
-/* Desktop: static in-flow rail (previous behavior) */
+/* Desktop: static in-flow rail */
 @media (min-width: 1024px) {
   .tchat-rail,
   .tchat-rail:dir(rtl) {
     position: static;
     transform: none;
-    width: 270px;
+    width: 300px;
   }
   .tchat-burger { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .tchat-rail { transition: none; }
+  .tchat-ctx-menu,
+  .tchat-emoji-panel { animation: none; }
 }
 
 /* ── Phone tweaks (≤640px) ──────────────────────────────────── */
 @media (max-width: 640px) {
   .chat-view,
   .tchat-view {
-    /* 55px = mobile topbar, 68px = .main mobile padding (18+50) */
     height: calc(100vh - 55px - 68px);
   }
   @supports (height: 100dvh) {
     .chat-view,
-    .tchat-view {
-      height: calc(100dvh - 55px - 68px);
-    }
+    .tchat-view { height: calc(100dvh - 55px - 68px); }
   }
-  /* The rail-collapse chevron is meaningless on phones (the drawer has no
-     pinned-open state) — hide it so it doesn't render as a dead control. */
   .tchat-collapse-btn { display: none; }
-  .tchat-msg { max-width: 88%; }
+  .tchat-msg { max-width: 86%; }
+  .tchat-messages { padding: 12px 10px 8px; }
   .tchat-attachment-img,
   .tchat-attachment-grid { max-width: 100%; }
-  .tchat-composer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .tchat-composer { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .tchat-day-sep { margin: 8px 0 4px; }
 }
 
-/* ── Touch targets — coarse pointers only (screens without hover) ── */
+/* ── Touch targets — coarse pointers only ───────────────────── */
 @media (hover: none) and (pointer: coarse) {
   .tchat-msg-action { min-width: 44px; min-height: 44px; }
   .tchat-reaction-add { width: 44px; height: 44px; opacity: 1; }
@@ -1165,163 +1662,19 @@ mark.tchat-search-hit {
   .tchat-emoji-picker { grid-template-columns: repeat(6, 44px); }
   .tchat-burger { width: 44px; height: 44px; }
   .vn-speed-btn { min-width: 44px; min-height: 44px; }
-  .tchat-delete-btn { opacity: 1; min-width: 44px; min-height: 44px; }
-  .tchat-channel-row { min-height: 48px; }
-  .tchat-msg-side { opacity: 1; }
+  .tchat-delete-btn { opacity: 1; min-width: 40px; min-height: 40px; }
+  .tchat-channel-row { min-height: 56px; }
+  .tchat-msg-side { opacity: 0.85; }
+  .tchat-quick-reactions { display: none; } /* context menu via long-press instead */
+  .tchat-pill-btn { min-width: 40px; min-height: 40px; }
+  .tchat-send-fab { width: 46px; height: 46px; }
   .lightbox-nav { width: 44px; height: 44px; }
 }
-
-/* ── Day separator (centered, faint rule either side) ───────── */
-.tchat-day-sep {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 4px 0;
-  font-size: 0.62rem;
-  font-weight: 600;
-  color: var(--text-3);
+@media (max-width: 640px) {
+  .lightbox-prev { left: 8px; }
+  .lightbox-next { right: 8px; }
 }
-.tchat-day-sep::before,
-.tchat-day-sep::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-close, .lightbox-nav { transition: none; }
+  .tchat-msg-highlight { animation: none; }
 }
-
-/* Consecutive messages from the same author: drop avatar/author,
-   tighten the column gap so the run reads as one block */
-.tchat-msg.grouped { margin-top: -6px; }
-.tchat-msg.grouped .tchat-msg-avatar,
-.tchat-msg.grouped .tchat-msg-author { display: none; }
-
-/* ── Jump-to-bottom FAB ─────────────────────────────────────── */
-.tchat-main,
-.tchat-messages { position: relative; }
-.tchat-jump-bottom {
-  position: absolute;
-  inset-inline-end: 16px;
-  bottom: max(16px, env(safe-area-inset-bottom));
-  z-index: 5;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--panel);
-  border: 1px solid var(--border-2);
-  color: var(--text-2);
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.tchat-jump-bottom:hover { background: var(--panel-2); color: var(--text); border-color: var(--text-3); }
-.tchat-jump-bottom:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-
-/* ── Load-earlier row (centered, spinner stays inline) ──────── */
-.tchat-history-start {
-  align-self: center;
-  font-size: 0.66rem;
-  color: var(--text-3);
-  padding: 6px 16px 2px;
-}
-.tchat-load-earlier {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  align-self: center;
-  padding: 8px 16px;
-  font-size: 0.72rem;
-  color: var(--text-2);
-  background: transparent;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.tchat-load-earlier:hover { background: var(--panel-2); color: var(--text); }
-.tchat-load-earlier:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-
-/* ── Rail hamburger (drawer reopen on tablet; hidden on desktop) ── */
-.tchat-burger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: transparent;
-  border: none;
-  color: var(--text-2);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.12s, color 0.12s;
-}
-.tchat-burger svg { width: 20px; height: 20px; }
-.tchat-burger:hover { background: var(--panel-2); color: var(--text); }
-.tchat-burger:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-
-/* ── Connection dot ─────────────────────────────────────────── */
-.tchat-conn-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-3);
-  flex-shrink: 0;
-}
-.tchat-conn-open { background: var(--green); box-shadow: 0 0 6px rgba(63, 185, 80, 0.6); }
-.tchat-conn-reconnecting { background: var(--yellow); }
-.tchat-conn-offline { background: var(--red); }
-
-/* ── Empty states (large muted icon + text + action) ────────── */
-.tchat-empty-msg,
-.tchat-empty-rail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  text-align: center;
-  color: var(--text-2);
-}
-.tchat-empty-msg { flex: 1; padding: 40px 20px; font-size: 0.8rem; }
-.tchat-empty-rail { align-self: stretch; padding: 30px 16px; font-size: 0.75rem; }
-.tchat-empty-msg > .icon,
-.tchat-empty-rail > .icon,
-.tchat-empty-icon {
-  width: 40px;
-  height: 40px;
-  color: var(--text-3);
-  opacity: 0.55;
-}
-.tchat-empty-btn {
-  margin-top: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 6px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--border-2);
-  background: var(--panel);
-  color: var(--text);
-  font-size: 0.78rem;
-  cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
-}
-.tchat-empty-btn:hover { border-color: var(--text-3); background: var(--panel-2); }
-.tchat-empty-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-
-/* ── Composer char counter (small muted; caller renders from 4800) ── */
-.tchat-char-counter {
-  align-self: flex-end;
-  font-size: 0.66rem;
-  line-height: 1.2;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-.tchat-char-counter.warn { color: var(--yellow); }
-.tchat-char-counter.danger { color: var(--red); }

@@ -30,6 +30,7 @@ import {
   assertSafeDebName,
   assertAllowedUpdateBase,
   applyStateMachine,
+  freshApplyState,
   type ApplyEvent,
   type ApplyState,
 } from './updates-core';
@@ -544,7 +545,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
     updateInFlight = true;
     const startedAt = new Date().toISOString();
     let state: CodeServerUpdateState = {
-      ...getCodeServerUpdateState(),
+      ...freshApplyState(getCodeServerUpdateState()),
       startedAt,
       updatedAt: startedAt,
     };
@@ -598,10 +599,6 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
 
     (async () => {
       try {
-        if (state.applyState === 'ok' || state.applyState === 'failed') {
-          state.applyState = applyStateMachine(state.applyState, 'reset');
-          await persistState(state);
-        }
         await step('start'); // → downloading
 
         const current = await probeCurrentVersion(true);

@@ -19,21 +19,26 @@ import {
 } from '../api';
 import { Avatar } from '../components/Avatar';
 import { ReAuthModal } from '../components/ReAuthModal';
+import { useI18n } from '../i18n';
 
-const ROLE_CONFIG: Record<UserRole, { label: string; color: string; hint: string }> = {
-  admin: { label: 'Admin', color: '#f59e0b', hint: 'Full access — users, settings, providers and all projects.' },
+const ROLE_CONFIG: Record<UserRole, { labelAr: string; labelEn: string; color: string; hintAr: string; hintEn: string }> = {
+  admin: { labelAr: 'مدير', labelEn: 'Admin', color: '#f59e0b', hintAr: 'وصول كامل — المستخدمون والإعدادات والمزوّدون وكل المشاريع.', hintEn: 'Full access — users, settings, providers and all projects.' },
   editor: {
-    label: 'Editor',
+    labelAr: 'محرر',
+    labelEn: 'Editor',
     color: '#3b82f6',
-    hint: 'Global editor — writes to every project; cannot manage users, settings, providers, or delete others’ projects.',
+    hintAr: 'محرر عام — يكتب في كل مشروع؛ لا يدير المستخدمين أو الإعدادات أو المزوّدين أو يحذف مشاريع الآخرين.',
+    hintEn: 'Global editor — writes to every project; cannot manage users, settings, providers, or delete others’ projects.',
   },
-  viewer: { label: 'Viewer', color: '#6b7280', hint: 'Read-only on the projects they are added to.' },
+  viewer: { labelAr: 'عارض', labelEn: 'Viewer', color: '#6b7280', hintAr: 'قراءة فقط على المشاريع المُضاف إليها.', hintEn: 'Read-only on the projects they are added to.' },
 };
 
 const ROLE_ORDER: Record<UserRole, number> = { admin: 3, editor: 2, viewer: 1 };
 
 export function Team() {
   const { user: currentUser } = useAuth();
+  const { t2, lang } = useI18n();
+  const ar = lang === 'ar';
   const isAdmin = currentUser?.role === 'admin';
   const [, setLocation] = useHashLocation();
   const [users, setUsers] = useState<TeamUserWithMemberships[]>([]);
@@ -59,7 +64,7 @@ export function Team() {
       const data = await getTeamMemberships();
       setUsers(data.users);
     } catch (err: any) {
-      setError(err.message || 'Failed to load users');
+      setError(err.message || t2('فشل تحميل المستخدمين', 'Failed to load users'));
     } finally {
       setLoading(false);
     }
@@ -77,7 +82,7 @@ export function Team() {
       setShowAdd(false);
       await loadUsers();
     } catch (err: any) {
-      setError(err.message || 'Failed to create user');
+      setError(err.message || t2('فشل إنشاء المستخدم', 'Failed to create user'));
     } finally {
       setCreating(false);
     }
@@ -102,7 +107,7 @@ export function Team() {
       setError('');
       await loadUsers();
     } catch (err: any) {
-      setRoleError(err.message || 'Failed to update role');
+      setRoleError(err.message || t2('فشل تحديث الدور', 'Failed to update role'));
     } finally {
       setRoleSaving(false);
     }
@@ -115,7 +120,7 @@ export function Team() {
       setConfirmDelete(null);
       await loadUsers();
     } catch (err: any) {
-      setError(err.message || 'Failed to delete user');
+      setError(err.message || t2('فشل حذف المستخدم', 'Failed to delete user'));
     }
   }
 
@@ -140,8 +145,8 @@ export function Team() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Users size={24} />
-          <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Team</h1>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{users.length} user(s)</span>
+          <h1 style={{ margin: 0, fontSize: '1.5rem' }}>{t2('الفريق', 'Team')}</h1>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t2(`${users.length} مستخدم`, `${users.length} user(s)`)}</span>
         </div>
         {isAdmin && (
           <button
@@ -150,7 +155,7 @@ export function Team() {
             style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
           >
             <UserPlus size={16} />
-            Add User
+            {t2('إضافة مستخدم', 'Add User')}
           </button>
         )}
       </div>
@@ -177,18 +182,18 @@ export function Team() {
           padding: '1.25rem',
           marginBottom: '1rem',
         }}>
-          <h3 style={{ margin: '0 0 1rem' }}>Add New User</h3>
+          <h3 style={{ margin: '0 0 1rem' }}>{t2('إضافة مستخدم جديد', 'Add New User')}</h3>
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <input
               type="text"
-              placeholder="Username"
+              placeholder={t2('اسم المستخدم', 'Username')}
               value={newUsername}
               onInput={(e) => setNewUsername((e.target as HTMLInputElement).value)}
               style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
             />
             <input
               type="password"
-              placeholder="Password (min 6 characters)"
+              placeholder={t2('كلمة المرور (6 أحرف على الأقل)', 'Password (min 6 characters)')}
               value={newPassword}
               onInput={(e) => setNewPassword((e.target as HTMLInputElement).value)}
               style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
@@ -214,21 +219,21 @@ export function Team() {
                       fontWeight: newRole === r ? 600 : 400,
                     }}
                   >
-                    {cfg.label}
+                    {ar ? cfg.labelAr : cfg.labelEn}
                   </button>
                 );
               })}
             </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{ROLE_CONFIG[newRole].hint}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{ar ? ROLE_CONFIG[newRole].hintAr : ROLE_CONFIG[newRole].hintEn}</div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
                 class="btn btn-primary"
                 onClick={handleCreate}
                 disabled={creating || !newUsername.trim() || newPassword.trim().length < 6}
               >
-                {creating ? <Loader2 class="icon spin" size={14} /> : 'Create'}
+                {creating ? <Loader2 class="icon spin" size={14} /> : t2('إنشاء', 'Create')}
               </button>
-              <button class="btn" onClick={() => setShowAdd(false)}>Cancel</button>
+              <button class="btn" onClick={() => setShowAdd(false)}>{t2('إلغاء', 'Cancel')}</button>
             </div>
           </div>
         </div>
@@ -255,14 +260,14 @@ export function Team() {
               onClick={() => setLocation(`/user/${u.id}`)}
               role="button"
               tabIndex={0}
-              title={`View ${u.profile?.displayName || u.username}'s profile`}
+              title={t2(`عرض ملف ${u.profile?.displayName || u.username}`, `View ${u.profile?.displayName || u.username}'s profile`)}
               onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLocation(`/user/${u.id}`); } }}
             >
               <Avatar name={u.profile?.displayName || u.username} avatar={avatarUrl(u.id, u.profile?.avatarExt)} size={36} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{u.profile?.displayName || u.username}</span>
-                  {isMe && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>(you)</span>}
+                  {isMe && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({t2('أنت', 'you')})</span>}
                   <span style={{
                     fontSize: '0.6875rem',
                     padding: '0.125rem 0.375rem',
@@ -271,21 +276,21 @@ export function Team() {
                     color: cfg.color,
                     fontWeight: 600,
                   }}>
-                    {cfg.label}{u.role === 'editor' ? ' · global' : ''}
+                    {ar ? cfg.labelAr : cfg.labelEn}{u.role === 'editor' ? (ar ? ' · عام' : ' · global') : ''}
                   </span>
                 </div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>
-                  {cfg.hint}
+                  {ar ? cfg.hintAr : cfg.hintEn}
                 </div>
                 <div style={{ fontSize: '0.6875rem', color: 'rgba(255,255,255,0.3)', marginTop: '0.125rem' }}>
-                  Joined {new Date(u.createdAt).toLocaleDateString()}
+                  {t2('انضم في', 'Joined')} {new Date(u.createdAt).toLocaleDateString(ar ? 'ar' : undefined)}
                 </div>
                 {u.memberships && u.memberships.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', marginTop: '0.5rem' }}>
                     {u.memberships.map((m) => (
                       <span
                         key={m.slug}
-                        title={m.isOwner ? `Owner of ${m.name}` : `${m.role} on ${m.name}`}
+                        title={m.isOwner ? t2(`مالك ${m.name}`, `Owner of ${m.name}`) : t2(`${m.role} على ${m.name}`, `${m.role} on ${m.name}`)}
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -313,7 +318,7 @@ export function Team() {
                           fontWeight: 600,
                           textTransform: 'capitalize',
                         }}>
-                          {m.isOwner ? 'owner' : m.role}
+                          {m.isOwner ? (ar ? 'مالك' : 'owner') : m.role}
                         </span>
                       </span>
                     ))}
@@ -335,15 +340,15 @@ export function Team() {
                       fontSize: '0.8125rem',
                     }}
                   >
-                    <option value="admin">Admin</option>
-                    <option value="editor">Editor (Global)</option>
-                    <option value="viewer">Viewer</option>
+                    <option value="admin">{t2('مدير', 'Admin')}</option>
+                    <option value="editor">{t2('محرر (عام)', 'Editor (Global)')}</option>
+                    <option value="viewer">{t2('عارض', 'Viewer')}</option>
                   </select>
                   <button
                     class="btn-icon"
                     onClick={(e: Event) => { e.stopPropagation(); setConfirmDelete(u); }}
-                    title="Remove user"
-                    aria-label={`Remove user ${u.username}`}
+                    title={t2('إزالة المستخدم', 'Remove user')}
+                    aria-label={t2(`إزالة المستخدم ${u.username}`, `Remove user ${u.username}`)}
                     style={{ color: '#ef4444' }}
                   >
                     <Trash2 size={16} />
@@ -378,20 +383,19 @@ export function Team() {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
               <AlertTriangle size={20} color="#ef4444" />
-              <h3 style={{ margin: 0 }}>Remove User</h3>
+              <h3 style={{ margin: 0 }}>{t2('إزالة المستخدم', 'Remove User')}</h3>
             </div>
             <p style={{ margin: '0 0 1rem', color: 'var(--text-secondary)' }}>
-              Are you sure you want to remove <strong>{confirmDelete.username}</strong>?
-              They will be logged out immediately.
+              {t2('هل تريد إزالة', 'Are you sure you want to remove')} <strong>{confirmDelete.username}</strong>{t2('؟ سيُسجَّل خروجه فوراً.', '? They will be logged out immediately.')}
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <button class="btn" onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button class="btn" onClick={() => setConfirmDelete(null)}>{t2('إلغاء', 'Cancel')}</button>
               <button
                 class="btn"
                 style={{ background: '#ef4444', color: '#fff' }}
                 onClick={() => handleDelete(confirmDelete.id)}
               >
-                Remove
+                {t2('إزالة', 'Remove')}
               </button>
             </div>
           </div>
@@ -402,13 +406,13 @@ export function Team() {
         username={pendingRole ? (pendingRole.user.profile?.displayName || pendingRole.user.username) : currentUser?.username}
         loading={roleSaving}
         error={roleError}
-        title={pendingRole ? `Change role of ${pendingRole.user.profile?.displayName || pendingRole.user.username}` : 'Change role'}
+        title={pendingRole ? t2(`تغيير دور ${pendingRole.user.profile?.displayName || pendingRole.user.username}`, `Change role of ${pendingRole.user.profile?.displayName || pendingRole.user.username}`) : t2('تغيير الدور', 'Change role')}
         description={
           pendingRole
-            ? `Set ${pendingRole.user.profile?.displayName || pendingRole.user.username} as ${ROLE_CONFIG[pendingRole.role].label}? Enter your account password to confirm.`
-            : 'Enter your account password to confirm.'
+            ? t2(`تعيين ${pendingRole.user.profile?.displayName || pendingRole.user.username} كـ${ar ? ROLE_CONFIG[pendingRole.role].labelAr : ROLE_CONFIG[pendingRole.role].labelEn}؟ أدخل كلمة مرور حسابك للتأكيد.`, `Set ${pendingRole.user.profile?.displayName || pendingRole.user.username} as ${ROLE_CONFIG[pendingRole.role].labelEn}? Enter your account password to confirm.`)
+            : t2('أدخل كلمة مرور حسابك للتأكيد.', 'Enter your account password to confirm.')
         }
-        confirmLabel="Change role"
+        confirmLabel={t2('تغيير الدور', 'Change role')}
         onConfirm={handleRoleChangeConfirmed}
         onCancel={() => { setPendingRole(null); setRoleError(null); }}
       />

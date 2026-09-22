@@ -5,9 +5,9 @@ import {
   opencodeConfigDir,
   probeOpencodeVersion,
   fetchLatestVersion,
-  isUpdateRunning,
   SUPPORTED_MAJORS,
 } from './opencode-api';
+import { isUpdateInProgress } from './component-updates';
 // HttpError lives in docker-manager (historical); importing it here creates
 // no cycle — this module is only consumed by index.ts.
 import { HttpError } from './docker-manager';
@@ -257,6 +257,6 @@ export async function getVersionInfo(): Promise<StudioVersionInfo> {
     upToDate,
     channelUnlocked: reg.channelUnlocked,
     supportedMajors: [...SUPPORTED_MAJORS],
-    updateRunning: isUpdateRunning(),
+    updateRunning: isUpdateInProgress(),
   };
 }

@@ -572,7 +572,7 @@ export function performOpencodeUpdate(): Promise<UpdateResult> {
                   resolve(
                     done({
                       ok: false,
-                      error: `Updated opencode ${reg.latest} did not boot within ${bootTimeoutMs()}s — restart the container to apply`,
+                      error: `Updated opencode ${reg.latest} did not boot within ${Math.round(bootTimeoutMs() / 1000)}s — restart the container to apply`,
                     }),
                   );
                   return;
@@ -625,7 +625,7 @@ export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Pro
               resolve(
                 done({
                   ok: false,
-                  error: `Rolled-back opencode ${currentVersion} did not boot within ${bootTimeoutMs()}s — restart the container to apply`,
+                  error: `Rolled-back opencode ${currentVersion} did not boot within ${Math.round(bootTimeoutMs() / 1000)}s — restart the container to apply`,
                 }),
               );
               return;

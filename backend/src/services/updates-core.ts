@@ -389,3 +389,19 @@ export function applyStateMachine(current: ApplyState, event: ApplyEvent): Apply
   }
   throw new Error(`Invalid transition: '${current}' + '${event}'`);
 }
+
+/* ── Fresh apply-state seeding ─────────────────────────────────────────── */
+
+export interface ApplyStateSnapshot {
+  applyState: ApplyState;
+  currentVersion?: string;
+  targetVersion?: string;
+  error?: string;
+  rolledBack?: boolean;
+  startedAt?: string;
+  updatedAt?: string;
+}
+
+export function freshApplyState(prev: ApplyStateSnapshot): { applyState: ApplyState } {
+  return { applyState: applyStateMachine(prev.applyState, 'reset') };
+}

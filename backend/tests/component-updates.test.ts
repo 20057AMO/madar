@@ -46,6 +46,11 @@
  *  7. Single-flight: second apply during a running one → 409
  *  8. opencode npm status: channelUnlocked true when supported / false on 99.x
  *  9. Rate budgets under WSD_TESTING=1: 7-check burst + no 429 anywhere in the run
+ * 10. GET /api/updates/log payload: missing/empty → {log:'',truncated:false,bytes:0},
+ *     seeded multi-line log → markers present + bytes>0, >16 KB file → truncated:true
+ *     with the tail marker kept and the head marker gone (seeded files cleaned after)
+ * 11. GET /api/updates/log access matrix: 401 anon / 403 viewer / 403 editor / 200 admin
+ *     with the exact {log, truncated, bytes} body
  *
  * Downgrade gate: `POST /api/updates/apply` now carries a SYNCHRONOUS gate (a
  * fresh registry compare inside the request flow, before the background run) —
@@ -619,8 +624,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     assert.strictEqual(anon.status, 401, `anon expected 401, got ${anon.status}`);
 
     const j = await piGet(authHeaders());
-    assert.equal(typeof j.checkedAt, 'string', 'checkedAt is a fresh ISO stamp');
-    assert.ok(new Date(j.checkedAt).getTime() > 0, 'checkedAt parses');
+    assert.equal(j.checkedAt, null, 'checkedAt is null until a manual check persists it');
     assert.ok(Array.isArray(j.components), 'components array');
     assert.equal(j.components.length, 2, 'exactly two components');
     const ids = j.components.map((c: any) => c.id).sort();
@@ -875,6 +879,79 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     for (const c of j.components) {
       assert.equal(c.updateRunning, false, `${c.id} not mid-run at the end`);
     }
+  });
+
+  test('10. GET /api/updates/log payload: empty default, seeded markers, 16 KB truncation keeps the tail', async () => {
+    assert.ok(tempAdmin);
+    const h = tempAdmin!.headers;
+    const LOG = '/app/data/updates/update.log';
+
+    // missing/empty log → the honest empty result (readUpdateLog never throws)
+    await clearUpdatesState();
+    let r = await req('GET', '/updates/log', undefined, h);
+    assert.equal(r.status, 200, `log GET status ${r.status}`);
+    assert.deepEqual(await r.json(), { log: '', truncated: false, bytes: 0 });
+
+    // seeded multi-line log → both markers present, bytes > 0, not truncated
+    const headMarker = 'MADAR_LOG_HEAD';
+    const tailMarker = 'MADAR_LOG_TAIL';
+    const seedHost = path.join(hostTmp, 'seed-update.log');
+    fs.writeFileSync(seedHost, `${headMarker} first line\n2026-01-01T00:00:00.000Z [opencode] step\n${tailMarker} last line\n`);
+    await dockerExec(['sh', '-c', 'mkdir -p /app/data/updates && rm -f /app/data/updates/update.log']);
+    await dockerCp(seedHost, `${CONTAINER}:${LOG}`);
+    await dockerExec(['sh', '-c', `chmod 600 ${LOG}`]);
+    r = await req('GET', '/updates/log', undefined, h);
+    assert.equal(r.status, 200, `seeded log GET status ${r.status}`);
+    const seeded: any = await r.json();
+    assert.equal(seeded.truncated, false, 'small seeded log not truncated');
+    assert.ok(seeded.bytes > 0, `seeded log bytes > 0 (${seeded.bytes})`);
+    assert.ok(seeded.log.includes(headMarker), 'seeded log carries the head marker');
+    assert.ok(seeded.log.includes(tailMarker), 'seeded log carries the tail marker');
+
+    // >16 KB file → truncated:true, log ≤ 16 KB, tail marker survives while the
+    // head (first line) is out of the read window
+    const bigHead = 'MADAR_BIG_HEAD';
+    const bigTail = 'MADAR_BIG_TAIL';
+    const bigLines: string[] = [];
+    bigLines.push(`${bigHead} ${'h'.repeat(88)}`);
+    for (let i = 1; i < 299; i += 1) bigLines.push(`line ${String(i).padStart(3, '0')} ${'x'.repeat(88)}`);
+    bigLines.push(`${bigTail} ${'t'.repeat(88)}`);
+    const bigHost = path.join(hostTmp, 'big-update.log');
+    fs.writeFileSync(bigHost, bigLines.join('\n') + '\n');
+    await dockerExec(['sh', '-c', `rm -f ${LOG}`]);
+    await dockerCp(bigHost, `${CONTAINER}:${LOG}`);
+    await dockerExec(['sh', '-c', `chmod 600 ${LOG}`]);
+    r = await req('GET', '/updates/log', undefined, h);
+    assert.equal(r.status, 200, `big log GET status ${r.status}`);
+    const big: any = await r.json();
+    assert.equal(big.truncated, true, 'over-16KB log is flagged truncated');
+    assert.ok(big.bytes <= 16 * 1024, `truncated log bytes within the 16 KB cap (${big.bytes})`);
+    assert.ok(big.log.includes(bigTail), 'truncated log keeps the tail marker');
+    assert.equal(big.log.includes(bigHead), false, 'truncated log dropped the head marker');
+
+    // restore determinism: the seeded files must not leak into later cases / after()
+    await clearUpdatesState();
+  });
+
+  test('11. GET /api/updates/log access matrix: 401 anon / 403 viewer+editor / 200 admin exact body', async () => {
+    const anon = await req('GET', '/updates/log');
+    assert.equal(anon.status, 401, `anon log GET 401, got ${anon.status}`);
+
+    const viewer = jwt.sign({ id: 'upd-viewer', username: 'upd-viewer', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
+    const editor = jwt.sign({ id: 'upd-editor', username: 'upd-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
+    const asViewer = await req('GET', '/updates/log', undefined, { Authorization: `Bearer ${viewer}` });
+    assert.equal(asViewer.status, 403, `viewer log GET 403, got ${asViewer.status}`);
+    const asEditor = await req('GET', '/updates/log', undefined, { Authorization: `Bearer ${editor}` });
+    assert.equal(asEditor.status, 403, `editor log GET 403, got ${asEditor.status}`);
+
+    assert.ok(tempAdmin);
+    const r = await req('GET', '/updates/log', undefined, tempAdmin!.headers);
+    assert.equal(r.status, 200, `admin log GET 200, got ${r.status}`);
+    const body: any = await r.json();
+    assert.deepEqual(Object.keys(body).sort(), ['bytes', 'log', 'truncated'], 'log body is exactly {log, truncated, bytes}');
+    assert.equal(typeof body.log, 'string');
+    assert.equal(typeof body.truncated, 'boolean');
+    assert.equal(typeof body.bytes, 'number');
   });
 
   after(async () => {

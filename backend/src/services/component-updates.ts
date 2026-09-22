@@ -43,8 +43,7 @@ export interface ComponentStatus {
 
 export interface UpdatesStatus {
   components: ComponentStatus[];
-  checkedAt: string;
-  lastError?: string;
+  checkedAt: string | null;
 }
 
 interface Actor {
@@ -86,6 +85,31 @@ function appendLog(line: string): void {
     });
   } catch {
     /* update logging is best-effort */
+  }
+}
+
+function lastCheckFile(): string {
+  return path.join(updatesDir(), 'last-check.json');
+}
+
+function readLastCheck(): string | null {
+  try {
+    const j = JSON.parse(fs.readFileSync(lastCheckFile(), 'utf8'));
+    if (j && typeof j === 'object' && typeof (j as { at?: unknown }).at === 'string') {
+      return (j as { at: string }).at;
+    }
+  } catch {
+    /* never checked */
+  }
+  return null;
+}
+
+function writeLastCheck(at: string): void {
+  try {
+    fs.mkdirSync(updatesDir(), { recursive: true });
+    fs.writeFileSync(lastCheckFile(), JSON.stringify({ at }), { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    /* last-check persistence is best-effort */
   }
 }
 
@@ -135,7 +159,7 @@ async function persistOpencodeState(state: OpencodeUpdateState): Promise<void> {
 // ── Status ──────────────────────────────────────────────────────
 
 export async function getUpdatesStatus(): Promise<UpdatesStatus> {
-  const checkedAt = new Date().toISOString();
+  const checkedAt = readLastCheck();
   const [openCodeCur, openCodeReg, csCur, csRel] = await Promise.all([
     probeOpencodeVersion(),
     fetchLatestVersion(),
@@ -180,20 +204,21 @@ export async function getUpdatesStatus(): Promise<UpdatesStatus> {
 /**
  * Synchronous pre-apply downgrade gate (runs in the request flow BEFORE the
  * background apply / 202): rejects when the REGISTRY's latest is not strictly
- * newer than the installed version. Reads the registry with caches bypassed
- * (`force`) so a stale cached `latest` — e.g. a newer release cached seconds
- * ago while the registry now serves an older tag — can never sneak past the
- * gate. `latest === null` (registry unreachable/parse failure) → 503
- * `registry_unreachable`: we cannot verify, so we refuse to guess. An unknown
- * installed version (probe failure) → allow: the backend apply declines with
- * its own honest "no rollback baseline" error. `all` is exempt — every
- * component gates itself inside its own apply.
+ * newer than the installed version. Reads the version probe and the registry
+ * with caches bypassed (`force`) in BOTH branches so a stale cached `latest`
+ * — e.g. a newer release cached seconds ago while the registry now serves an
+ * older tag — can never sneak past the gate. `latest === null` (registry
+ * unreachable/parse failure) → 503 `registry_unreachable`: we cannot verify,
+ * so we refuse to guess. An unknown installed version (probe failure) →
+ * allow: the backend apply declines with its own honest "no rollback
+ * baseline" error. `all` is exempt — every component gates itself inside its
+ * own apply.
  */
 export async function downgradeVerdict(
   component: 'opencode' | 'code-server',
 ): Promise<{ status: number; error: string } | null> {
   if (component === 'opencode') {
-    const [info, reg] = await Promise.all([probeOpencodeVersion(), fetchLatestVersion()]);
+    const [info, reg] = await Promise.all([probeOpencodeVersion(true), fetchLatestVersion(true)]);
     const current = info.version === 'unknown' ? null : info.version;
     const latest = reg.latest;
     if (latest === null) {
@@ -234,9 +259,55 @@ export async function downgradeVerdict(
 export async function checkNow(actor?: Actor): Promise<UpdatesStatus> {
   codeServer.clearCaches();
   clearLatestVersionCache();
+  writeLastCheck(new Date().toISOString());
   const status = await getUpdatesStatus();
   recordAudit('updates-check', true, actor?.ip, actor?.userId);
   return status;
+}
+
+export interface UpdateLogResult {
+  log: string;
+  truncated: boolean;
+  bytes: number;
+}
+
+const UPDATE_LOG_MAX_BYTES = 16 * 1024;
+const UPDATE_LOG_MAX_LINES = 200;
+
+export function readUpdateLog(): UpdateLogResult {
+  try {
+    const file = path.join(updatesDir(), 'update.log');
+    const total = fs.statSync(file).size;
+    if (total === 0) return { log: '', truncated: false, bytes: 0 };
+    let text: string;
+    let truncated = false;
+    if (total > UPDATE_LOG_MAX_BYTES) {
+      truncated = true;
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buf = Buffer.alloc(UPDATE_LOG_MAX_BYTES);
+        const n = fs.readSync(fd, buf, 0, UPDATE_LOG_MAX_BYTES, total - UPDATE_LOG_MAX_BYTES);
+        text = buf.subarray(0, n).toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+      const nl = text.indexOf('\n');
+      if (nl !== -1) text = text.slice(nl + 1);
+    } else {
+      text = fs.readFileSync(file, 'utf8');
+    }
+    const lines = text.split('\n');
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    if (lines.length > UPDATE_LOG_MAX_LINES) {
+      truncated = true;
+      text = lines.slice(-UPDATE_LOG_MAX_LINES).join('\n');
+    } else {
+      text = lines.join('\n');
+    }
+    return { log: text, truncated, bytes: Buffer.byteLength(text, 'utf8') };
+  } catch {
+    return { log: '', truncated: false, bytes: 0 };
+  }
 }
 
 // ── Apply orchestration ─────────────────────────────────────────

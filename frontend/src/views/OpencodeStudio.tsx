@@ -5,6 +5,7 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { ReAuthModal } from '../components/ReAuthModal';
 import { useAuth } from '../auth';
 import { StudioGuide } from './studio-guide';
+import { useI18n } from '../i18n';
 import {
   listStudioAgents,
   getStudioAgent,
@@ -81,6 +82,7 @@ const TAB_ORDER: readonly Tab[] = ['agents', 'skills', 'commands', 'config', 'gu
 
 export function OpencodeStudio() {
   const [, setLocation] = useHashLocation();
+  const { t, t2 } = useI18n();
   const [tab, setTab] = useState<Tab>('agents');
 
   const tabsRef = useRef<HTMLSpanElement | null>(null);
@@ -212,7 +214,7 @@ export function OpencodeStudio() {
   const save = async () => {
     const name = draftName.trim();
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
-      flash('err', 'Name must be kebab-case: lowercase letters, digits, dashes');
+      flash('err', t2('يجب أن يكون الاسم بصيغة kebab-case: أحرف صغيرة وأرقام وشرطات', 'Name must be kebab-case: lowercase letters, digits, dashes'));
       return;
     }
     setBusy(true);
@@ -263,7 +265,7 @@ export function OpencodeStudio() {
     try {
       const merged = await updateStudioConfig(patch);
       setConfigText(JSON.stringify(merged, null, 2));
-      flash('ok', 'Configuration saved');
+      flash('ok', t2('حُفظ الإعداد', 'Configuration saved'));
     } catch (err: any) {
       flash('err', err.message);
     } finally {
@@ -284,9 +286,9 @@ export function OpencodeStudio() {
     try {
       await applyUpdates(accountPassword, 'opencode');
       setPendingUpdate(false);
-      flash('ok', 'opencode update started — progress is tracked in Settings → Updates.');
+      flash('ok', t2('بدأ تحديث opencode — تابع التقدم من Settings ← التحديثات.', 'opencode update started — progress is tracked in Settings → Updates.'));
     } catch (err: any) {
-      const msg = err.message || 'Update failed.';
+      const msg = err.message || t2('فشل التحديث.', 'Update failed.');
       // Wrong sudo password / rate limit → keep the dialog open for retry;
       // anything else is terminal — close it and surface the error inline.
       const retryable = err.status === 401 || err.status === 429 || (err.status === 400 && /password/i.test(msg));
@@ -313,22 +315,22 @@ export function OpencodeStudio() {
 
   return (
     <div class="opencode-page">
-      <h1 class="sr-only">Opencode Studio</h1>
+      <h1 class="sr-only">{t2('استوديو Opencode', 'Opencode Studio')}</h1>
       <div class="opencode-toolbar">
-        <button class="btn-ghost sm" onClick={() => setLocation('/')}><ArrowLeft width={13} height={13} class="icon" /> Dashboard</button>
-        <span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px" ref={tabsRef} role="tablist" aria-label="Studio sections" onKeyDown={onTabsKeyDown}>
-          <button type="button" role="tab" id="ptab-agents" aria-selected={tab === 'agents'} tabIndex={tab === 'agents' ? 0 : -1} aria-controls="studio-pane-agents" data-tab="agents" class={`btn-ghost sm${tab === 'agents' ? ' active' : ''}`} onClick={() => setTab('agents')}><Bot width={13} height={13} class="icon" /> Subagents</button>
-          <button type="button" role="tab" id="ptab-skills" aria-selected={tab === 'skills'} tabIndex={tab === 'skills' ? 0 : -1} aria-controls="studio-pane-skills" data-tab="skills" class={`btn-ghost sm${tab === 'skills' ? ' active' : ''}`} onClick={() => setTab('skills')}><Sparkles width={13} height={13} class="icon" /> Skills</button>
-          <button type="button" role="tab" id="ptab-commands" aria-selected={tab === 'commands'} tabIndex={tab === 'commands' ? 0 : -1} aria-controls="studio-pane-commands" data-tab="commands" class={`btn-ghost sm${tab === 'commands' ? ' active' : ''}`} onClick={() => setTab('commands')}><Terminal width={13} height={13} class="icon" /> Commands</button>
-          <button type="button" role="tab" id="ptab-config" aria-selected={tab === 'config'} tabIndex={tab === 'config' ? 0 : -1} aria-controls="studio-pane-config" data-tab="config" class={`btn-ghost sm${tab === 'config' ? ' active' : ''}`} onClick={() => setTab('config')}><SlidersHorizontal width={13} height={13} class="icon" /> Config</button>
-          <button type="button" role="tab" id="ptab-guide" aria-selected={tab === 'guide'} tabIndex={tab === 'guide' ? 0 : -1} aria-controls="studio-pane-guide" data-tab="guide" class={`btn-ghost sm${tab === 'guide' ? ' active' : ''}`} onClick={() => setTab('guide')}><BookOpen width={13} height={13} class="icon" /> Guide</button>
+        <button class="btn-ghost sm" onClick={() => setLocation('/')}><ArrowLeft width={13} height={13} class="icon" /> {t('nav.dashboard')}</button>
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-inline-start:8px" ref={tabsRef} role="tablist" aria-label={t2('أقسام الاستوديو', 'Studio sections')} onKeyDown={onTabsKeyDown}>
+          <button type="button" role="tab" id="ptab-agents" aria-selected={tab === 'agents'} tabIndex={tab === 'agents' ? 0 : -1} aria-controls="studio-pane-agents" data-tab="agents" class={`btn-ghost sm${tab === 'agents' ? ' active' : ''}`} onClick={() => setTab('agents')}><Bot width={13} height={13} class="icon" /> {t2('الوكلاء الفرعيون', 'Subagents')}</button>
+          <button type="button" role="tab" id="ptab-skills" aria-selected={tab === 'skills'} tabIndex={tab === 'skills' ? 0 : -1} aria-controls="studio-pane-skills" data-tab="skills" class={`btn-ghost sm${tab === 'skills' ? ' active' : ''}`} onClick={() => setTab('skills')}><Sparkles width={13} height={13} class="icon" /> {t2('المهارات', 'Skills')}</button>
+          <button type="button" role="tab" id="ptab-commands" aria-selected={tab === 'commands'} tabIndex={tab === 'commands' ? 0 : -1} aria-controls="studio-pane-commands" data-tab="commands" class={`btn-ghost sm${tab === 'commands' ? ' active' : ''}`} onClick={() => setTab('commands')}><Terminal width={13} height={13} class="icon" /> {t2('الأوامر', 'Commands')}</button>
+          <button type="button" role="tab" id="ptab-config" aria-selected={tab === 'config'} tabIndex={tab === 'config' ? 0 : -1} aria-controls="studio-pane-config" data-tab="config" class={`btn-ghost sm${tab === 'config' ? ' active' : ''}`} onClick={() => setTab('config')}><SlidersHorizontal width={13} height={13} class="icon" /> {t2('الإعداد', 'Config')}</button>
+          <button type="button" role="tab" id="ptab-guide" aria-selected={tab === 'guide'} tabIndex={tab === 'guide' ? 0 : -1} aria-controls="studio-pane-guide" data-tab="guide" class={`btn-ghost sm${tab === 'guide' ? ' active' : ''}`} onClick={() => setTab('guide')}><BookOpen width={13} height={13} class="icon" /> {t2('الدليل', 'Guide')}</button>
         </span>
         <span style="flex:1" />
         {tab !== 'config' && tab !== 'guide' && (
-          <button class="btn-primary sm" onClick={newItem}><Plus width={13} height={13} class="icon" /> New</button>
+          <button class="btn-primary sm" onClick={newItem}><Plus width={13} height={13} class="icon" /> {t2('جديد', 'New')}</button>
         )}
         {ver && (
-          <span class="mono" style="font-size:0.68rem;color:var(--text-3);margin-left:12px;display:inline-flex;align-items:center;gap:6px">
+          <span class="mono" style="font-size:0.68rem;color:var(--text-3);margin-inline-start:12px;display:inline-flex;align-items:center;gap:6px">
             opencode v{ver.current}
             {ver.updateRunning ? (
               <RefreshCw width={12} height={12} class="icon spin" />
@@ -341,11 +343,11 @@ export function OpencodeStudio() {
                 ) : (
                   <ArrowUpCircle width={12} height={12} class="icon" />
                 )}
-                {updating ? ' Authorizing…' : ` Update to ${ver.latest}`}
+                {updating ? t2(' جارٍ الاعتماد…', ' Authorizing…') : t2(` تحديث إلى ${ver.latest}`, ` Update to ${ver.latest}`)}
               </button>
             ) : ver.upToDate === false ? (
-              <span title={`v${ver.latest} is a newer major than this Madar build supports (${ver.supportedMajors.join(', ')}). Update Madar first.`}>
-                <Lock width={12} height={12} /> {ver.latest} needs a Madar update
+              <span title={t2(`v${ver.latest} إصدار رئيسي أحدث مما يدعمه هذا البناء من Madar (${ver.supportedMajors.join(', ')}). حدّث Madar أولاً.`, `v${ver.latest} is a newer major than this Madar build supports (${ver.supportedMajors.join(', ')}). Update Madar first.`)}>
+                <Lock width={12} height={12} /> {t2(`${ver.latest} يحتاج تحديث Madar`, `${ver.latest} needs a Madar update`)}
               </span>
             ) : null}
           </span>
@@ -374,10 +376,9 @@ export function OpencodeStudio() {
       ) : tab === 'config' ? (
         <div class="studio-editor" style="padding:16px;display:flex;flex-direction:column;gap:10px;overflow:auto">
           <p style="font-size:0.75rem;color:var(--text-3);margin:0">
-            Global opencode.json — applies to every project and interface.
-            The $schema key is managed by Madar.
+            {t2('ملف opencode.json العام — يسري على كل مشروع وواجهة. مفتاح $schema يديره Madar.', 'Global opencode.json — applies to every project and interface. The $schema key is managed by Madar.')}
           </p>
-          <label class="sr-only" htmlFor="studio-config">Global opencode.json — applies to every project</label>
+          <label class="sr-only" htmlFor="studio-config">{t2('ملف opencode.json العام — يسري على كل مشروع', 'Global opencode.json — applies to every project')}</label>
           <textarea
             id="studio-config"
             class="modern-input mono"
@@ -388,31 +389,31 @@ export function OpencodeStudio() {
           />
           <div>
             <button class="btn-primary sm" onClick={saveConfig} disabled={busy}>
-              <Save width={13} height={13} class="icon" /> Save config
+              <Save width={13} height={13} class="icon" /> {t2('حفظ الإعداد', 'Save config')}
             </button>
           </div>
         </div>
       ) : (
         <div class="studio-body" style="display:flex;gap:14px;padding:14px 16px;overflow:hidden;flex:1">
           {/* List column */}
-          <div class="studio-list" style="width:260px;overflow:auto;border-right:1px solid var(--border,#333);padding-right:10px">
+          <div class="studio-list" style="width:260px;overflow:auto;border-inline-end:1px solid var(--border,#333);padding-inline-end:10px">
             <div style="position:relative;margin-bottom:8px">
               <Search width={12} height={12} class="icon" style="position:absolute;top:7px;inset-inline-start:8px;opacity:.45" />
-              <label class="sr-only" htmlFor="studio-filter">Filter items</label>
+              <label class="sr-only" htmlFor="studio-filter">{t2('تصفية العناصر', 'Filter items')}</label>
               <input
                 id="studio-filter"
                 class="modern-input"
                 style="width:100%;font-size:0.72rem;padding:5px 8px 5px 24px;box-sizing:border-box"
-                placeholder="Filter…"
+                placeholder={t2('تصفية…', 'Filter…')}
                 value={query}
                 onInput={(e: any) => setQuery(e.target.value)}
               />
             </div>
             {loading ? (
-              <p style="color:var(--text-3);font-size:0.75rem">Loading…</p>
+              <p style="color:var(--text-3);font-size:0.75rem">{t('common.loading')}</p>
             ) : filtered.length === 0 ? (
               <p style="color:var(--text-3);font-size:0.75rem">
-                {items.length === 0 ? 'Nothing yet — create one with New.' : 'No matches.'}
+                {items.length === 0 ? t2('لا شيء بعد — أنشئ عنصراً بزر «جديد».', 'Nothing yet — create one with New.') : t2('لا نتائج.', 'No matches.')}
               </p>
             ) : (
               filtered.map((it) => (
@@ -429,7 +430,7 @@ export function OpencodeStudio() {
                     aria-current={selected === it.name ? 'true' : undefined}
                     aria-expanded={selected === it.name ? 'true' : undefined}
                     onClick={() => openItem(it.name)}
-                    style="flex:1;min-width:0;text-align:left;background:transparent;border:0;padding:8px 0;cursor:pointer;color:inherit;font:inherit"
+                    style="flex:1;min-width:0;text-align:start;background:transparent;border:0;padding:8px 0;cursor:pointer;color:inherit;font:inherit"
                   >
                     <span style="display:flex;justify-content:space-between;align-items:center;gap:6px">
                       <strong style="font-size:0.78rem">{it.name}</strong>
@@ -439,7 +440,7 @@ export function OpencodeStudio() {
                         </span>
                       )}
                       {tab === 'commands' && it.agent && (
-                        <span title="Bound agent" style="font-size:0.62rem;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.08)">
+                        <span title={t2('الوكيل المرتبط', 'Bound agent')} style="font-size:0.62rem;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.08)">
                           @{it.agent}
                         </span>
                       )}
@@ -456,14 +457,14 @@ export function OpencodeStudio() {
                       copied === it.name ? (
                         <span style="display:inline-flex;align-items:center;padding:4px;opacity:.8;color:var(--ok,#4ade80)" role="status">
                           <Check width={13} height={13} class="icon" aria-hidden="true" />
-                          <span class="sr-only">Copied</span>
+                          <span class="sr-only">{t2('نُسخ', 'Copied')}</span>
                         </span>
                       ) : (
                         <button
                           type="button"
                           class="studio-action"
-                          aria-label={`Copy description of ${it.name}`}
-                          title="Copy description — paste into chat to summon this specialist by name"
+                          aria-label={t2(`نسخ وصف ${it.name}`, `Copy description of ${it.name}`)}
+                          title={t2('انسخ الوصف — ألصقه في المحادثة لاستدعاء هذا المختص بالاسم', 'Copy description — paste into chat to summon this specialist by name')}
                           onClick={(e: Event) => {
                             e.stopPropagation();
                             navigator.clipboard.writeText(it.description).then(() => {
@@ -480,8 +481,8 @@ export function OpencodeStudio() {
                     <button
                       type="button"
                       class="studio-action"
-                      aria-label={`Delete ${it.name}`}
-                      title="Delete"
+                      aria-label={t2(`حذف ${it.name}`, `Delete ${it.name}`)}
+                      title={t2('حذف', 'Delete')}
                       onClick={(e: Event) => {
                         e.stopPropagation();
                         setConfirmDelete(it.name);
@@ -509,12 +510,12 @@ export function OpencodeStudio() {
                       <Bot width={30} height={30} class="icon" />
                     )}
                   </div>
-                Select an item or press New to create one.
+                {t2('اختر عنصراً أو اضغط «جديد» للإنشاء.', 'Select an item or press New to create one.')}
                 </div>
             ) : (
               <>
                 <div style="display:flex;gap:8px;align-items:center">
-                  <label class="sr-only" htmlFor="studio-item-name">Item name (kebab-case)</label>
+                  <label class="sr-only" htmlFor="studio-item-name">{t2('اسم العنصر (kebab-case)', 'Item name (kebab-case)')}</label>
                   <input
                     id="studio-item-name"
                     class="modern-input mono"
@@ -527,16 +528,16 @@ export function OpencodeStudio() {
                   />
                   <span style="flex:1" />
                   <button class="btn-primary sm" onClick={save} disabled={busy || !dirty && selected !== '__new__'}>
-                    <Save width={13} height={13} class="icon" /> Save
+                    <Save width={13} height={13} class="icon" /> {t('common.save')}
                   </button>
                 </div>
                 {descriptionMissingTrigger(content) && (
                   <div role="status" style="display:flex;gap:6px;align-items:center;font-size:0.7rem;color:#fbbf24;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);padding:6px 10px;border-radius:8px">
                     <AlertTriangle width={13} height={13} class="icon" />
-                    Description lacks a trigger phrase ("Use when…") — opencode may never select this item automatically.
+                    {t2('الوصف يفتقر لعبارة إطلاق ("استخدم عندما…") — قد لا يختار opencode هذا العنصر تلقائياً أبداً.', 'Description lacks a trigger phrase ("Use when…") — opencode may never select this item automatically.')}
                   </div>
                 )}
-                <label class="sr-only" htmlFor="agent-content">Agent content (frontmatter + body)</label>
+                <label class="sr-only" htmlFor="agent-content">{t2('محتوى الوكيل (الترويسة + المتن)', 'Agent content (frontmatter + body)')}</label>
                 <textarea
                   id="agent-content"
                   class="modern-input mono"
@@ -561,13 +562,13 @@ export function OpencodeStudio() {
         loading={busy}
         title={
           tab === 'skills'
-            ? `Delete skill '${confirmDelete}'?`
+            ? t2(`حذف المهارة '${confirmDelete}'؟`, `Delete skill '${confirmDelete}'?`)
             : tab === 'commands'
-              ? `Delete command '/${confirmDelete}'?`
-              : `Delete subagent '${confirmDelete}'?`
+              ? t2(`حذف الأمر '/${confirmDelete}'؟`, `Delete command '/${confirmDelete}'?`)
+              : t2(`حذف الوكيل الفرعي '${confirmDelete}'؟`, `Delete subagent '${confirmDelete}'?`)
         }
-        message="Removed from the global opencode config. Existing sessions keep working; new ones will not see it."
-        confirmLabel="Delete"
+        message={t2('سيُزال من إعداد opencode العام. الجلسات القائمة تكمل عملها والجديدة لن تراه.', 'Removed from the global opencode config. Existing sessions keep working; new ones will not see it.')}
+        confirmLabel={t('common.delete')}
         onConfirm={() => remove(confirmDelete!)}
         onCancel={() => setConfirmDelete(null)}
       />
@@ -579,9 +580,9 @@ export function OpencodeStudio() {
         username={user?.username}
         loading={reauthLoading}
         error={reauthError}
-        title="Authorize opencode update"
-        description="Updating opencode in place. Enter your account password to authorize."
-        confirmLabel="Update"
+        title={t2('اعتماد تحديث opencode', 'Authorize opencode update')}
+        description={t2('تحديث opencode في مكانه. أدخل كلمة مرور حسابك للاعتماد.', 'Updating opencode in place. Enter your account password to authorize.')}
+        confirmLabel={t2('تحديث', 'Update')}
         onConfirm={executeUpdate}
         onCancel={() => { setPendingUpdate(false); setReauthError(null); setUpdating(false); }}
       />

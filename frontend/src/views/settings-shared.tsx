@@ -1,6 +1,58 @@
 import type { AuditEntry, ApplyState } from '../api';
+import { useI18n } from '../i18n';
 
-export const AUDIT_LABELS: Record<string, string> = {
+/** AR label map for audit events (keyed by backend event name). */
+export const AUDIT_LABELS_AR: Record<string, string> = {
+  setup: 'تم إنشاء الحساب',
+  login: 'تسجيل دخول',
+  'login-failed': 'فشل تسجيل الدخول',
+  'logout-all': 'خروج من كل الأجهزة',
+  'logout-all-failed': 'فشل الخروج من كل الأجهزة',
+  'password-change': 'تغيير كلمة المرور',
+  'password-change-failed': 'فشل تغيير كلمة المرور',
+  'providers-lock-change': 'تحديث قفل المزوّدين',
+  'providers-lock-change-failed': 'فشل تحديث قفل المزوّدين',
+  'providers-unlock': 'فتح صفحة المزوّدين',
+  'providers-unlock-failed': 'فشلت محاولة فتح المزوّدين',
+  'providers-relock': 'قُفل المزوّدون على كل الأجهزة',
+  '2fa-enabled': 'تفعيل التحقق بخطوتين',
+  '2fa-enabled-failed': 'فشل تفعيل التحقق بخطوتين',
+  '2fa-disabled': 'تعطيل التحقق بخطوتين',
+  '2fa-disabled-failed': 'فشل تعطيل التحقق بخطوتين',
+  'login-2fa-failed': 'حُجب الدخول — رمز المصادق غير صحيح',
+  'backup-export': 'تصدير نسخة احتياطية',
+  'backup-import': 'استيراد نسخة احتياطية',
+  'user-created': 'إنشاء مستخدم',
+  'user-role-changed': 'تغيير دور مستخدم',
+  'user-deleted': 'إزالة مستخدم',
+  'snapshot-save': 'التقاط لقطة',
+  'snapshot-config-change': 'تغيير جدولة اللقطات',
+  'snapshot-download': 'تنزيل لقطة',
+  'snapshot-delete': 'حذف لقطة',
+  'snapshot-restore': 'استعادة لقطة إلى مشروع',
+  'project-tags': 'تحديث بيانات المشروع',
+  'serve-start': 'بدء الموقع الثابت',
+  'serve-start-failed': 'فشل بدء الموقع الثابت',
+  'serve-stop': 'إيقاف الموقع الثابت',
+  'project-files-deleted': 'حذف ملفات المشروع',
+  'canvas-save': 'حفظ لوحة التخطيط',
+  'chat-channel-settings': 'تغيير صلاحيات الإرسال في القناة',
+  'chat-channel-settings-failed': 'فشل تغيير صلاحيات القناة',
+  'workspace-janitor': 'أرشفة مساحات العمل اليتيمة',
+  'opencode-studio': 'تحرير Opencode Studio',
+  'opencode-update': 'تحديث Opencode',
+  'opencode-update-failed': 'فشل تحديث Opencode',
+  'opencode-update-rollback': 'تراجع تحديث Opencode',
+  'code-server-update': 'تحديث VS Code',
+  'code-server-update-failed': 'فشل تحديث VS Code',
+  'code-server-update-rollback': 'تراجع تحديث VS Code',
+  'updates-check': 'التحقق من التحديثات',
+  'agent-run': 'اكتمال تشغيل الوكيل',
+  'agent-run-failed': 'فشل تشغيل الوكيل',
+};
+
+/** EN label map for audit events. */
+export const AUDIT_LABELS_EN: Record<string, string> = {
   setup: 'Account created',
   login: 'Sign in',
   'login-failed': 'Sign in failed',
@@ -62,10 +114,10 @@ export const UPDATE_RUNNING_STATES: ApplyState[] = [
   'rollback',
 ];
 
-export function fmtDate(iso?: string): string {
+export function fmtDate(iso?: string, lang?: string): string {
   if (!iso) return '—';
   try {
-    return new Date(iso).toLocaleString();
+    return new Date(iso).toLocaleString(lang === 'ar' ? 'ar' : undefined);
   } catch {
     return iso;
   }
@@ -82,17 +134,19 @@ export function AuditLog({
   loadingMore: boolean;
   onLoadMore: () => void;
 }) {
+  const { t, lang } = useI18n();
+  const labels = lang === 'ar' ? AUDIT_LABELS_AR : AUDIT_LABELS_EN;
   return (
     <div class="audit-list">
       {entries.map((e, i) => {
-        const label = AUDIT_LABELS[e.event] || e.event;
+        const label = labels[e.event] || e.event;
         const failed = !e.ok || e.event.endsWith('-failed');
         return (
           <div class="audit-row" key={`${e.ts}-${i}`}>
-            <span class={failed ? 'audit-dot bad' : 'audit-dot good'} title={failed ? 'Failed' : 'Success'} />
+            <span class={failed ? 'audit-dot bad' : 'audit-dot good'} title={t(failed ? 'audit.failed' : 'audit.success')} />
             <span class="audit-label">{label}</span>
-            {e.ip && <span class="audit-ip" title="Source IP">{e.ip}</span>}
-            <span class="audit-time">{fmtDate(e.ts)}</span>
+            {e.ip && <span class="audit-ip" title={t('audit.sourceIp')}>{e.ip}</span>}
+            <span class="audit-time">{fmtDate(e.ts, lang)}</span>
           </div>
         );
       })}
@@ -103,7 +157,7 @@ export function AuditLog({
           onClick={onLoadMore}
           disabled={loadingMore}
         >
-          {loadingMore ? 'Loading…' : `Show more (${total - entries.length} remaining)`}
+          {loadingMore ? t('common.loading') : t('audit.showMore', { n: total - entries.length })}
         </button>
       )}
     </div>

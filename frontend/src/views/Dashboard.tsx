@@ -16,6 +16,8 @@ import {
 import { CrashBadge } from '../components/CrashBadge';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { VSCodeIcon, OpencodeIcon } from '../components/brand-icons';
+import { useI18n } from '../i18n';
+import { useToast } from '../components/ToastProvider';
 import {
   listProjects,
   startProject,
@@ -47,6 +49,8 @@ function formatMemBytes(bytes: number): string {
 
 export function Dashboard() {
   const [, setLocation] = useHashLocation();
+  const { t, t2 } = useI18n();
+  const toast = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -169,9 +173,10 @@ export function Dashboard() {
     setLoadError(null);
     try {
       const { project } = await importProjectSnapshot(file);
+      toast.success(t2('تم استيراد المشروع.', 'Project imported.'));
       setLocation(`/project/${project.slug}`);
     } catch (err: any) {
-      setLoadError(err?.message || 'Restore failed');
+      toast.error(err?.message || t('errors.generic'));
     } finally {
       if (e.target) e.target.value = '';
       setImporting(false);
@@ -189,7 +194,7 @@ export function Dashboard() {
       }
     }
     if (errors.length > 0) {
-      setLoadError(`Failed starting ${errors.length} project(s):\n${errors.join('\n')}`);
+      toast.error(`${t('dashboard.startFailed', { n: errors.length })}\n${errors.join('\n')}`);
     }
     setQaBusy(null);
   };
@@ -207,7 +212,7 @@ export function Dashboard() {
       }
     }
     if (errors.length > 0) {
-      setLoadError(`Failed stopping ${errors.length} project(s):\n${errors.join('\n')}`);
+      toast.error(`${t('dashboard.stopFailed', { n: errors.length })}\n${errors.join('\n')}`);
     } else {
       setStopAllSuccess(true);
       setTimeout(() => setStopAllSuccess(false), 3000);
@@ -228,7 +233,7 @@ export function Dashboard() {
       if (action === 'start') await startProject(slug);
       else await stopProject(slug);
     } catch (err: any) {
-      setLoadError(err.message);
+      toast.error(err.message || t('errors.generic'));
     } finally {
       setActing(null);
     }
@@ -257,7 +262,7 @@ export function Dashboard() {
       <div class="view">
         <div class="dash-loading">
           <Loader2 width={28} height={28} class="icon spin" />
-          <span role="status">Loading…</span>
+          <span role="status">{t('common.loading')}</span>
         </div>
       </div>
     );
@@ -271,25 +276,25 @@ export function Dashboard() {
     <div class="view">
       <div class="hero">
         <span class="hero-badge">BETA</span>
-        <h1 class="hero-title">Dashboard</h1>
-        <p class="hero-sub">Your development environment at a glance.</p>
+        <h1 class="hero-title">{t('dashboard.title')}</h1>
+        <p class="hero-sub">{t('dashboard.subtitle')}</p>
       </div>
 
       {loadError && <div class="login-error dash-error" role="alert">{loadError}</div>}
-      {stopAllSuccess && <div class="dash-success" role="status">All projects stopped.</div>}
+      {stopAllSuccess && <div class="dash-success" role="status">{t('dashboard.allStopped')}</div>}
 
       {/* ── Quick Actions ─────────────────────────────────── */}
       <div class="dash-qa-section">
         <div class="dash-qa-grid">
           <button class="qa-tile" onClick={handleNewProject}>
             <Plus width={18} height={18} class="icon" />
-            <span>New Project</span>
+            <span>{t('dashboard.newProject')}</span>
           </button>
           <button class="qa-tile" onClick={() => restoreInputRef.current?.click()} disabled={importing}>
             {importing
               ? <Loader2 width={18} height={18} class="icon spin" />
               : <Upload width={18} height={18} class="icon" />}
-            <span>{importing ? 'Importing…' : 'Restore'}</span>
+            <span>{importing ? t('dashboard.importing') : t('dashboard.restore')}</span>
           </button>
           <input
             ref={restoreInputRef}
@@ -300,15 +305,15 @@ export function Dashboard() {
           />
           <button class="qa-tile" onClick={handleStartAll} disabled={!!qaBusy || stoppedCount === 0}>
             <Play width={18} height={18} class="icon" />
-            <span>Start All</span>
+            <span>{t('dashboard.startAll')}</span>
           </button>
           <button class="qa-tile" onClick={handleStopAll} disabled={!!qaBusy || runningCount === 0}>
             <Square width={18} height={18} class="icon" />
-            <span>Stop All</span>
+            <span>{t('dashboard.stopAll')}</span>
           </button>
           <button class="qa-tile" onClick={() => setLocation('/ide')}>
             <VSCodeIcon width={18} height={18} />
-            <span>VS Code</span>
+            <span>{t('nav.vscode')}</span>
           </button>
           <button class="qa-tile" onClick={() => setLocation('/opencode')}>
             <OpencodeIcon width={18} height={18} />
@@ -316,11 +321,11 @@ export function Dashboard() {
           </button>
           <button class="qa-tile" onClick={() => setLocation('/terminals')}>
             <TerminalSquare width={18} height={18} class="icon" />
-            <span>Terminals</span>
+            <span>{t('dashboard.terminals')}</span>
           </button>
           <button class="qa-tile" onClick={() => setLocation('/planner')}>
             <LayoutDashboard width={18} height={18} class="icon" />
-            <span>Planner</span>
+            <span>{t('nav.planner')}</span>
           </button>
         </div>
       </div>
@@ -337,7 +342,7 @@ export function Dashboard() {
           <div class="dash-stat-icon"><FolderOpen width={18} height={18} class="icon" /></div>
           <div class="dash-stat-info">
             <span class="dash-stat-value">{projects.length}</span>
-            <span class="dash-stat-label">Total Projects</span>
+            <span class="dash-stat-label">{t('dashboard.totalProjects')}</span>
           </div>
         </div>
         <div
@@ -350,7 +355,7 @@ export function Dashboard() {
           <div class="dash-stat-icon"><Play width={18} height={18} class="icon" /></div>
           <div class="dash-stat-info">
             <span class="dash-stat-value">{running}</span>
-            <span class="dash-stat-label">Running</span>
+            <span class="dash-stat-label">{t('dashboard.running')}</span>
           </div>
         </div>
         <div
@@ -363,7 +368,7 @@ export function Dashboard() {
           <div class="dash-stat-icon"><Square width={18} height={18} class="icon" /></div>
           <div class="dash-stat-info">
             <span class="dash-stat-value">{stopped}</span>
-            <span class="dash-stat-label">Stopped</span>
+            <span class="dash-stat-label">{t('dashboard.stopped')}</span>
           </div>
         </div>
         {crashed > 0 && (
@@ -377,7 +382,7 @@ export function Dashboard() {
             <div class="dash-stat-icon"><TriangleAlert width={18} height={18} class="icon" /></div>
             <div class="dash-stat-info">
               <span class="dash-stat-value">{crashed}</span>
-              <span class="dash-stat-label">Crashed</span>
+              <span class="dash-stat-label">{t('dashboard.crashed')}</span>
             </div>
           </div>
         )}
@@ -385,16 +390,16 @@ export function Dashboard() {
 
       {/* ── Projects Preview ──────────────────────────────── */}
       <div class="section-head">
-        <h2>Projects</h2>
+        <h2>{t('nav.projects')}</h2>
         {projects.length > 0 && (
-          <a class="dash-view-all" href="#/projects">View all{projects.length > PROJECT_PREVIEW_LIMIT ? ` (${projects.length})` : ''}</a>
+          <a class="dash-view-all" href="#/projects">{t('dashboard.viewAll')}{projects.length > PROJECT_PREVIEW_LIMIT ? ` (${projects.length})` : ''}</a>
         )}
       </div>
       {previewProjects.length === 0 ? (
         <div class="dash-empty-state">
           <div class="big-icon"><FolderOpen width={30} height={30} class="icon" /></div>
-          No projects yet — create your first one.
-          <button class="btn-primary dash-empty-cta" onClick={handleNewProject}>+ New Project</button>
+          {t('dashboard.emptyTitle')}
+          <button class="btn-primary dash-empty-cta" onClick={handleNewProject}>+ {t('dashboard.newProject')}</button>
         </div>
       ) : (
         <div class="projects-grid">
@@ -414,8 +419,8 @@ export function Dashboard() {
               </div>
               <div class="project-desc">{p.description || '—'}</div>
               <div class="project-tags">
-                {p.tags && p.tags.map(t => (
-                  <span class="tag-chip" key={t}>{t}</span>
+                {p.tags && p.tags.map(tt => (
+                  <span class="tag-chip" key={tt}>{tt}</span>
                 ))}
               </div>
               <div class="project-meta">
@@ -427,19 +432,19 @@ export function Dashboard() {
                     <span class="meta-chip port" key={String(port)}>:{port}</span>
                   ))
                 }
-                {p.limits?.cpu && <span class="meta-chip" title="CPU limit">{fmtCpu(p.limits.cpu)}</span>}
-                {p.limits?.memory && <span class="meta-chip" title="Memory limit">RAM {fmtMem(p.limits.memory)}</span>}
+                {p.limits?.cpu && <span class="meta-chip" title={t('misc.cpuLimitChip')}>{fmtCpu(p.limits.cpu)}</span>}
+                {p.limits?.memory && <span class="meta-chip" title={t('misc.memLimitChip')}>RAM {fmtMem(p.limits.memory)}</span>}
                 {p.serve?.enabled && p.serve.port && (
-                  <span class="meta-chip serve" title="Static site"><Globe width={11} height={11} class="icon" /> site :{p.serve.port}</span>
+                  <span class="meta-chip serve" title={t('misc.staticSiteChip')}><Globe width={11} height={11} class="icon" /> {t('misc.siteChip')} :{p.serve.port}</span>
                 )}
                 {(!p.hostPorts || Object.keys(p.hostPorts).length === 0) && (!p.ports || p.ports.length === 0) && !p.limits?.cpu && !p.limits?.memory && !p.serve?.enabled && <span class="meta-chip">{p.slug}</span>}
               </div>
               <div class="card-footer">
                 <button class="btn-ghost sm" disabled={acting === p.slug} onClick={(e) => handleAction(e, p.slug, p.status === 'running' ? 'stop' : 'start')}>
-                  {acting === p.slug ? '…' : p.status === 'running' ? 'Stop' : 'Start'}
+                  {acting === p.slug ? '…' : p.status === 'running' ? t('common.stop') : t('common.start')}
                 </button>
                 <button class="btn-ghost sm" onClick={(e) => openProject(e, p)}>
-                  Open <ExternalLink width={13} height={13} class="icon" />
+                  {t('common.open')} <ExternalLink width={13} height={13} class="icon" />
                 </button>
               </div>
             </div>
@@ -450,32 +455,32 @@ export function Dashboard() {
       {/* ── System Footer ─────────────────────────────────── */}
       <div class="dash-system-footer">
         <div class="dash-system-item">
-          <span>Server</span>
+          <span>{t('dashboard.server')}</span>
           <span class="dash-system-val">{info?.version || '…'}</span>
         </div>
         {info && (
           <>
             <div class="dash-system-item">
-              <span>Host</span>
+              <span>{t('dashboard.host')}</span>
               <span class="dash-system-val">{info.hostCpu} CPU · {formatMemBytes(info.hostMemBytes)}</span>
             </div>
             <div class="dash-system-item">
-              <span>Up</span>
+              <span>{t('dashboard.up')}</span>
               <span class="dash-system-val">{formatUptime(info.uptime)}</span>
             </div>
             <div class="dash-system-item">
-              <span>Port</span>
+              <span>{t('dashboard.port')}</span>
               <span class="dash-system-val">:{info.basePort}</span>
             </div>
             {info.lanIp && (
               <div class="dash-system-item">
-                <span>LAN</span>
+                <span>{t('dashboard.lan')}</span>
                 <span class="dash-system-val">{info.lanIp}</span>
               </div>
             )}
             {info.tailscaleIp && (
               <div class="dash-system-item">
-                <span>Tailscale</span>
+                <span>{t('dashboard.tailscale')}</span>
                 <span class="dash-system-val">{info.tailscaleIp}</span>
               </div>
             )}
@@ -487,9 +492,9 @@ export function Dashboard() {
         open={stopAllOpen}
         danger
         loading={stopAllBusy}
-        title="Stop all projects?"
-        message="Stops every running project container."
-        confirmLabel="Stop All"
+        title={t('dashboard.stopAllTitle')}
+        message={t('dashboard.stopAllMessage')}
+        confirmLabel={t('dashboard.stopAllConfirm')}
         onConfirm={confirmStopAll}
         onCancel={() => { if (!stopAllBusy) setStopAllOpen(false); }}
       />

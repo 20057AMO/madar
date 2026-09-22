@@ -21,6 +21,7 @@ import {
   type ProjectStorage,
 } from '../api';
 import { Avatar } from '../components/Avatar';
+import { useI18n } from '../i18n';
 import { fmtCpu, fmtMem } from '../lib/limits';
 import { fmtBytes } from '../lib/size';
 import { lastTouched, lastTouchedLabel } from '../lib/time';
@@ -70,6 +71,7 @@ function ProjectStorageChip({ slug, bySlug }: { slug: string; bySlug: Map<string
 
 export function Projects() {
   const [, setLocation] = useHashLocation();
+  const { t } = useI18n();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -602,12 +604,12 @@ export function Projects() {
 
   return (
     <div class="view">
-      <div class="detail-tabs" style="margin-bottom:16px" ref={tabsRef} role="tablist" aria-label="Projects views" onKeyDown={onPageTabsKeyDown}>
+      <div class="detail-tabs" style="margin-bottom:16px" ref={tabsRef} role="tablist" aria-label={t('nav.projects')} onKeyDown={onPageTabsKeyDown}>
         <button class={`tab-btn ${pageTab === 'projects' ? 'active' : ''}`} type="button" id="ptab-projects" role="tab" aria-selected={pageTab === 'projects'} tabIndex={pageTab === 'projects' ? 0 : -1} aria-controls="pane-projects" data-tab="projects" onClick={() => setPageTab('projects')}>
-          Projects
+          {t('nav.projects')}
         </button>
         <button class={`tab-btn ${pageTab === 'trash' ? 'active' : ''}`} type="button" id="ptab-trash" role="tab" aria-selected={pageTab === 'trash'} tabIndex={pageTab === 'trash' ? 0 : -1} aria-controls="pane-trash" data-tab="trash" onClick={() => setPageTab('trash')}>
-          <Trash2 width={13} height={13} class="icon" /> Trash{trashCount != null ? ` (${trashCount})` : ''}
+          <Trash2 width={13} height={13} class="icon" /> {t('projects.trash')}{trashCount != null ? ` (${trashCount})` : ''}
         </button>
       </div>
 
@@ -615,15 +617,15 @@ export function Projects() {
       {pageTab === 'projects' && (<>
       <div class="proj-header">
         <div>
-          <h1 class="hero-title" style="font-size:1.5rem">Projects</h1>
-          <p class="hero-sub" style="margin:0">{projects.length} projects · {running} running · {stopped} stopped{crashed > 0 ? ` · ${crashed} crashed` : ''}</p>
+          <h1 class="hero-title" style="font-size:1.5rem">{t('nav.projects')}</h1>
+          <p class="hero-sub" style="margin:0">{t('projects.summary', { total: projects.length, running, stopped, crashed })}</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           <input ref={restoreInputRef} type="file" accept=".tar.gz,application/gzip" style="display:none" onChange={handleRestoreFile} />
           <button class="btn-ghost" onClick={() => restoreInputRef.current?.click()} disabled={importing}>
-            <Upload class="icon" /> {importing ? 'Restoring…' : 'Restore'}
+            <Upload class="icon" /> {importing ? t('dashboard.importing') : t('dashboard.restore')}
           </button>
-          <button class="btn-primary" onClick={() => setCreateOpen(true)}>+ New Project</button>
+          <button class="btn-primary" onClick={() => setCreateOpen(true)}>+ {t('dashboard.newProject')}</button>
         </div>
       </div>
 
@@ -633,29 +635,29 @@ export function Projects() {
         <div class="proj-search-row">
           <input
             class="modern-input proj-search"
-            placeholder="Search projects…"
+            placeholder={t('projects.searchPlaceholder')}
             value={search}
             onInput={(e: any) => { setSearch(e.target.value); setPage(0); }}
           />
-          <select class="modern-input chat-sel" value={filter} onChange={(e: any) => { setFilter(e.target.value); setPage(0); }} aria-label="Filter by status">
-            <option value="all">All</option>
-            <option value="running">Running</option>
-            <option value="stopped">Stopped</option>
-            <option value="crashed">Crashed</option>
+          <select class="modern-input chat-sel" value={filter} onChange={(e: any) => { setFilter(e.target.value); setPage(0); }} aria-label={t('projects.title')}>
+            <option value="all">{t('projects.allFilter')}</option>
+            <option value="running">{t('projects.running')}</option>
+            <option value="stopped">{t('projects.stopped')}</option>
+            <option value="crashed">{t('projects.crashed')}</option>
           </select>
-          <select class="modern-input chat-sel" value={sortKey} onChange={handleSortSelect} aria-label="Sort projects">
-            <option value="activity">Sort: Activity</option>
-            <option value="created">Sort: Date</option>
-            <option value="name">Sort: Name</option>
-            <option value="status">Sort: Status</option>
+          <select class="modern-input chat-sel" value={sortKey} onChange={handleSortSelect} aria-label={t('projects.sort')}>
+            <option value="activity">{t('projects.sortActivity')}</option>
+            <option value="created">{t('projects.sortDate')}</option>
+            <option value="name">{t('projects.sortName')}</option>
+            <option value="status">{t('projects.sortStatus')}</option>
           </select>
           <button class="btn-ghost sm" onClick={() => { setSortDir((d) => d === 'asc' ? 'desc' : 'asc'); setPage(0); }}>
-            {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
+            {sortDir === 'asc' ? `↑ ${t('projects.asc')}` : `↓ ${t('projects.desc')}`}
           </button>
         </div>
         <div class="proj-view-toggle">
-          <button class={`btn-ghost sm ${view === 'cards' ? 'active' : ''}`} onClick={() => setView('cards')}>▣ Cards</button>
-          <button class={`btn-ghost sm ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')}>☰ Table</button>
+          <button class={`btn-ghost sm ${view === 'cards' ? 'active' : ''}`} onClick={() => setView('cards')}>▣ {t('projects.cards')}</button>
+          <button class={`btn-ghost sm ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')}>☰ {t('projects.table')}</button>
         </div>
       </div>
 
@@ -665,7 +667,7 @@ export function Projects() {
             class={`tag-chip ${tagFilter === null ? 'active' : ''}`}
             onClick={() => { setTagFilter(null); setPage(0); }}
           >
-            All
+            {t('projects.allFilter')}
           </button>
           {allTags.map((t) => (
             <button
@@ -681,20 +683,20 @@ export function Projects() {
 
       {selected.size > 0 && (
         <div class="proj-bulk-bar">
-          <span>{selected.size} selected</span>
-          <button class="btn-ghost sm" onClick={() => bulkAction('start')}>▶ Start Selected</button>
-          <button class="btn-ghost sm" onClick={() => bulkAction('stop')}>⏹ Stop Selected</button>
-          <button class="btn-danger sm" onClick={() => bulkAction('delete')}>✕ Delete Selected</button>
-          <button class="btn-ghost sm" onClick={() => setSelected(new Set())}>Clear</button>
+          <span>{t('projects.selected', { n: selected.size })}</span>
+          <button class="btn-ghost sm" onClick={() => bulkAction('start')}>▶ {t('dashboard.startAll')}</button>
+          <button class="btn-ghost sm" onClick={() => bulkAction('stop')}>⏹ {t('dashboard.stopAll')}</button>
+          <button class="btn-danger sm" onClick={() => bulkAction('delete')}>✕ {t('common.delete')}</button>
+          <button class="btn-ghost sm" onClick={() => setSelected(new Set())}>{t('projects.clear')}</button>
         </div>
       )}
 
       {filtered.length === 0 ? (
         <div class="empty-state">
           <div class="big-icon"><FolderSearch width={30} height={30} class="icon" /></div>
-          {projects.length === 0 ? 'No projects yet. Create your first one!' : 'No projects match your search.'}
+          {projects.length === 0 ? t('projects.emptyAll') : t('projects.empty')}
           {projects.length === 0 && (
-            <button class="btn-primary" style="margin-top:12px" onClick={() => setCreateOpen(true)}>+ New Project</button>
+            <button class="btn-primary" style="margin-top:12px" onClick={() => setCreateOpen(true)}>+ {t('dashboard.newProject')}</button>
           )}
         </div>
       ) : view === 'cards' ? (
@@ -723,10 +725,10 @@ export function Projects() {
                   />
                 </label>
                 <h2>{p.name}</h2>
-                <span class={`status-badge ${p.status}`}>{p.status}</span>
+                <span class={`status-badge ${p.status}`}>{t(`status.${p.status}`)}</span>
                 {p.crash && <CrashBadge crash={p.crash} />}
                 {p.crash && (
-                  <button class="crash-dismiss" title="Dismiss crash alert" onClick={(e) => handleClearCrash(e, p.slug)}>
+                  <button class="crash-dismiss" title={t('project.dismiss')} onClick={(e) => handleClearCrash(e, p.slug)}>
                     <X width={11} height={11} class="icon" />
                   </button>
                 )}
@@ -742,7 +744,7 @@ export function Projects() {
                 <ProjectPeople p={p} />
                 <ProjectStorageChip slug={p.slug} bySlug={storageBySlug} />
                 {lastTouchedLabel(p) && (
-                  <span class="meta-chip activity" title="Last activity">
+                  <span class="meta-chip activity" title={t('projects.lastActivity')}>
                     <Clock width={11} height={11} class="icon" /> {lastTouchedLabel(p)}
                   </span>
                 )}
@@ -754,21 +756,21 @@ export function Projects() {
                     <span class="meta-chip port" key={String(port)}>:{port}</span>
                   ))
                 }
-                {p.limits?.cpu && <span class="meta-chip" title="CPU limit">{fmtCpu(p.limits.cpu)}</span>}
-                {p.limits?.memory && <span class="meta-chip" title="Memory limit">RAM {fmtMem(p.limits.memory)}</span>}
+                {p.limits?.cpu && <span class="meta-chip" title={t('misc.cpuLimitChip')}>{fmtCpu(p.limits.cpu)}</span>}
+                {p.limits?.memory && <span class="meta-chip" title={t('misc.memLimitChip')}>RAM {fmtMem(p.limits.memory)}</span>}
                 {p.serve?.enabled && p.serve.port && (
-                  <span class="meta-chip serve" title="Static site"><Globe width={11} height={11} class="icon" /> site :{p.serve.port}</span>
+                  <span class="meta-chip serve" title={t('misc.staticSiteChip')}><Globe width={11} height={11} class="icon" /> {t('misc.siteChip')} :{p.serve.port}</span>
                 )}
               </div>
               <div class="card-footer">
                 <button class="btn-ghost sm" onClick={(e) => handleAction(e, p.slug, p.status === 'running' ? 'stop' : 'start')}>
-                  {p.status === 'running' ? 'Stop' : 'Start'}
+                  {p.status === 'running' ? t('common.stop') : t('common.start')}
                 </button>
                 <button class="btn-ghost sm" onClick={(e) => openProjectCard(e, p)}>
-                  <ExternalLink width={13} height={13} class="icon" /> Preview
+                  <ExternalLink width={13} height={13} class="icon" /> {t('common.open')}
                 </button>
-                <button class="btn-ghost sm" title="Duplicate this project (copy files + notes)" onClick={(e) => openDuplicate(e, p)}>
-                  <Copy width={13} height={13} class="icon" /> Duplicate
+                <button class="btn-ghost sm" title={t('projects.duplicateTitle')} onClick={(e) => openDuplicate(e, p)}>
+                  <Copy width={13} height={13} class="icon" /> {t('projects.duplicate')}
                 </button>
               </div>
             </div>
@@ -780,7 +782,7 @@ export function Projects() {
             <thead>
               <tr>
                 <th class="proj-th-check">
-                  <input type="checkbox" ref={selectAllRef} checked={filtered.length > 0 && filtered.every((p) => selected.has(p.slug))} onChange={selectAll} aria-label="Select all projects" />
+                  <input type="checkbox" ref={selectAllRef} checked={filtered.length > 0 && filtered.every((p) => selected.has(p.slug))} onChange={selectAll} aria-label={t('pager.selectAll')} />
                 </th>
                 <th
                   class="proj-th-sortable"
@@ -789,12 +791,12 @@ export function Projects() {
                   onKeyDown={(e: KeyboardEvent) => {
                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('name'); }
                   }}
-                >Name{sortIcon('name')}</th>
-                <th>Status</th>
-                <th>Description</th>
-                <th>Ports</th>
-                <th>Team</th>
-                <th>Size</th>
+                >{t('projects.colName')}{sortIcon('name')}</th>
+                <th>{t('project.status')}</th>
+                <th>{t('project.description')}</th>
+                <th>{t('project.ports')}</th>
+                <th>{t('project.team')}</th>
+                <th>{t('projects.colSize')}</th>
                 <th
                   className="proj-th-sortable"
                   tabIndex={0}
@@ -802,7 +804,7 @@ export function Projects() {
                   onKeyDown={(e: KeyboardEvent) => {
                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('activity'); }
                   }}
-                >Activity{sortIcon('activity')}</th>
+                >{t('project.activity')}{sortIcon('activity')}</th>
                 <th
                   className="proj-th-sortable"
                   tabIndex={0}
@@ -810,8 +812,8 @@ export function Projects() {
                   onKeyDown={(e: KeyboardEvent) => {
                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort('created'); }
                   }}
-                >Created{sortIcon('created')}</th>
-                <th>Actions</th>
+                >{t('project.created')}{sortIcon('created')}</th>
+                <th>{t('projects.colActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -832,7 +834,7 @@ export function Projects() {
                     <input type="checkbox" checked={selected.has(p.slug)} onChange={() => toggleSelect(p.slug)} aria-label={`Select ${p.name}`} />
                   </td>
                   <td class="proj-td-name">{p.name}</td>
-                  <td><span class={`status-badge ${p.status}`}>{p.status}</span>{p.crash && <CrashBadge crash={p.crash} />}</td>
+                  <td><span class={`status-badge ${p.status}`}>{t(`status.${p.status}`)}</span>{p.crash && <CrashBadge crash={p.crash} />}</td>
                   <td class="proj-td-desc">{p.description || '—'}</td>
                   <td>{p.hostPorts && Object.keys(p.hostPorts).length > 0
                     ? Object.values(p.hostPorts).map((pub) => (
@@ -842,10 +844,10 @@ export function Projects() {
                       <span class="meta-chip port" key={String(port)}>:{port}</span>
                     ))
                   }
-                  {p.limits?.cpu && <span class="meta-chip" title="CPU limit">{fmtCpu(p.limits.cpu)}</span>}
-                  {p.limits?.memory && <span class="meta-chip" title="Memory limit">RAM {fmtMem(p.limits.memory)}</span>}
+                  {p.limits?.cpu && <span class="meta-chip" title={t('misc.cpuLimitChip')}>{fmtCpu(p.limits.cpu)}</span>}
+                  {p.limits?.memory && <span class="meta-chip" title={t('misc.memLimitChip')}>RAM {fmtMem(p.limits.memory)}</span>}
                   {p.serve?.enabled && p.serve.port && (
-                    <span class="meta-chip serve" title="Static site"><Globe width={11} height={11} class="icon" /> site :{p.serve.port}</span>
+                    <span class="meta-chip serve" title={t('misc.staticSiteChip')}><Globe width={11} height={11} class="icon" /> {t('misc.siteChip')} :{p.serve.port}</span>
                   )}
                   {p.tags && p.tags.length > 0 && <span class="dim" style="margin-left:4px;font-size:0.7rem">{p.tags.join(', ')}</span>}
                 </td>
@@ -861,10 +863,10 @@ export function Projects() {
                     <button class="btn-ghost sm" onClick={(e) => handleAction(e, p.slug, p.status === 'running' ? 'stop' : 'start')}>
                       {p.status === 'running' ? '⏹' : '▶'}
                     </button>
-                    <button class="btn-ghost sm" title="Preview project" onClick={(e) => openProjectCard(e, p)}>
+                    <button class="btn-ghost sm" title={t('common.open')} onClick={(e) => openProjectCard(e, p)}>
                       <FolderOpen width={12} height={12} class="icon" />
                     </button>
-                    <button class="btn-ghost sm" title="Duplicate project (copy files + notes)" onClick={(e) => openDuplicate(e, p)}>
+                    <button class="btn-ghost sm" title={t('projects.duplicateTitle')} onClick={(e) => openDuplicate(e, p)}>
                       <Copy width={12} height={12} class="icon" />
                     </button>
                   </td>
@@ -876,12 +878,12 @@ export function Projects() {
       )}
 
       {filtered.length > PAGE_SIZE && (
-        <div class="proj-pagination" aria-label="Projects pagination">
+        <div class="proj-pagination" aria-label={t('projects.sort')}>
           <button
             class="btn-ghost sm"
             onClick={() => setPage((p) => Math.max(0, p - 1))}
             disabled={clampedPage === 0}
-            aria-label="Previous page"
+            aria-label={t('pager.prev')}
           >
             ‹
           </button>
@@ -903,12 +905,16 @@ export function Projects() {
             class="btn-ghost sm"
             onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
             disabled={clampedPage === pageCount - 1}
-            aria-label="Next page"
+            aria-label={t('pager.next')}
           >
             ›
           </button>
           <span class="proj-page-info">
-            Showing {clampedPage * PAGE_SIZE + 1}–{Math.min(filtered.length, (clampedPage + 1) * PAGE_SIZE)} of {filtered.length}
+            {t('pager.showing', {
+              from: clampedPage * PAGE_SIZE + 1,
+              to: Math.min(filtered.length, (clampedPage + 1) * PAGE_SIZE),
+              total: filtered.length,
+            })}
           </span>
         </div>
       )}
@@ -916,11 +922,11 @@ export function Projects() {
       {createOpen && (
         <div class="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setCreateOpen(false); }}>
           <div class="create-card modal-dialog" style="max-width:500px;width:100%">
-            <div class="create-title">New Project</div>
+            <div class="create-title">{t('create.title')}</div>
             <form onSubmit={handleCreate}>
               <input
                 class="modern-input"
-                placeholder="Project name"
+                placeholder={t('create.name')}
                 value={name}
                 onInput={(e: any) => setName(e.target.value)}
                 autoFocus
@@ -928,14 +934,14 @@ export function Projects() {
               <input
                 class="modern-input"
                 style="margin-top:10px"
-                placeholder="Description (optional)"
+                placeholder={t('create.desc')}
                 value={description}
                 onInput={(e: any) => setDescription(e.target.value)}
               />
               <input
                 class="modern-input"
                 style="margin-top:10px"
-                placeholder="Ports (optional, defaults to 8000)"
+                placeholder={t('create.ports')}
                 value={ports}
                 onInput={(e: any) => setPorts(e.target.value)}
               />
@@ -943,23 +949,23 @@ export function Projects() {
                 <input
                   class="modern-input"
                   style="flex:1"
-                  placeholder="CPU limit (optional, e.g. 2 or 500m)"
+                  placeholder={t('create.cpu')}
                   value={createCpu}
                   onInput={(e: any) => setCreateCpu(e.target.value)}
                 />
                 <input
                   class="modern-input"
                   style="flex:1"
-                  placeholder="Memory limit (optional, e.g. 128Mi)"
+                  placeholder={t('create.mem')}
                   value={createMem}
                   onInput={(e: any) => setCreateMem(e.target.value)}
                 />
               </div>
               {createError && <div class="login-error" style="margin-top:10px">{createError}</div>}
               <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">
-                <button type="button" class="btn-ghost sm" onClick={() => setCreateOpen(false)}>Cancel</button>
+                <button type="button" class="btn-ghost sm" onClick={() => setCreateOpen(false)}>{t('common.cancel')}</button>
                 <button type="submit" class="btn-primary" disabled={creating || !name.trim()}>
-                  {creating ? 'Creating…' : 'Create'}
+                  {creating ? t('create.creating') : t('create.submit')}
                 </button>
               </div>
             </form>
@@ -970,14 +976,14 @@ export function Projects() {
       {dupSrc && (
         <div class="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget && !duplicating) setDupSrc(null); }}>
           <div class="create-card modal-dialog" style="max-width:500px;width:100%">
-            <div class="create-title">Duplicate “{dupSrc.name}”</div>
+            <div class="create-title">{t('create.dupTitle', { name: dupSrc.name })}</div>
             <p class="hero-sub" style="margin:0 0 12px">
-              Creates a new project with a copy of the workspace files and developer notes.
+              {t('create.dupDesc')}
             </p>
             <form onSubmit={handleDuplicate}>
               <input
                 class="modern-input"
-                placeholder="New project name"
+                placeholder={t('create.dupName')}
                 value={dupName}
                 onInput={(e: any) => setDupName(e.target.value)}
                 autoFocus
@@ -985,22 +991,22 @@ export function Projects() {
               <input
                 class="modern-input"
                 style="margin-top:10px"
-                placeholder="Description (optional)"
+                placeholder={t('create.desc')}
                 value={dupDesc}
                 onInput={(e: any) => setDupDesc(e.target.value)}
               />
               <input
                 class="modern-input"
                 style="margin-top:10px"
-                placeholder="Ports (optional, defaults to 8000)"
+                placeholder={t('create.ports')}
                 value={dupPorts}
                 onInput={(e: any) => setDupPorts(e.target.value)}
               />
               {dupError && <div class="login-error" style="margin-top:10px">{dupError}</div>}
               <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">
-                <button type="button" class="btn-ghost sm" onClick={() => setDupSrc(null)} disabled={duplicating}>Cancel</button>
+                <button type="button" class="btn-ghost sm" onClick={() => setDupSrc(null)} disabled={duplicating}>{t('common.cancel')}</button>
                 <button type="submit" class="btn-primary" disabled={duplicating || !dupName.trim()}>
-                  {duplicating ? 'Duplicating…' : 'Duplicate'}
+                  {duplicating ? t('projects.duplicating') : t('projects.duplicate')}
                 </button>
               </div>
             </form>
@@ -1012,8 +1018,9 @@ export function Projects() {
         open={!!confirmState}
         danger
         loading={confirmBusy}
-        title={`Delete ${confirmState?.slugs.length ?? 0} project(s)?`}        message="The container and its workspace files are permanently removed."
-        confirmLabel="Delete"
+        title={t('projects.deleteTitle', { n: confirmState?.slugs.length ?? 0 })}
+        message={t('projects.deleteMessage')}
+        confirmLabel={t('common.delete')}
         onConfirm={runConfirmed}
         onCancel={() => { if (!confirmBusy) setConfirm(null); }}
       />

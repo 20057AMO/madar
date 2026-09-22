@@ -1,6 +1,6 @@
 import { Component, type ComponentChildren } from 'preact';
 import { lazy, Suspense } from 'preact/compat';
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Router, Route } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
@@ -16,8 +16,14 @@ import {
   Menu,
   ShieldAlert,
   MessageCircle,
+  Languages,
+  Command,
+  Search,
 } from 'lucide-preact';
 import { AuthProvider, useAuth } from './auth';
+import { I18nProvider, useI18n } from './i18n';
+import { ToastProvider } from './components/ToastProvider';
+import { CommandPalette } from './components/CommandPalette';
 import { VSCodeIcon, OpencodeIcon } from './components/brand-icons';
 import { Login } from './views/Login';
 import { ConfirmModal } from './components/ConfirmModal';
@@ -107,7 +113,7 @@ const NavButton = ({
       }
     >
       <Icon width={16} height={16} class="icon" />
-      <span>{label}</span>
+      <span class="nav-btn-label">{label}</span>
     </button>
   );
 };
@@ -122,6 +128,7 @@ function navigate(href: string): void {
  * storage event on the unlock key.
  */
 function ProvidersUnlockBadge() {
+  const { t } = useI18n();
   const [mins, setMins] = useState<number | null>(null);
   const [askRelock, setAskRelock] = useState(false);
 
@@ -164,15 +171,15 @@ function ProvidersUnlockBadge() {
 
   return (
     <>
-      <button class="unlock-badge" title="Providers page is unlocked — click to re-lock" onClick={relock}>
+      <button class="unlock-badge" title={t('nav.providersUnlocked')} onClick={relock}>
         <Unlock width={11} height={11} />
         <span>Providers · {mins}m</span>
       </button>
       <ConfirmModal
         open={askRelock}
-        title="Re-lock Providers now?"
-        message="Every open tab loses access to the Providers page immediately."
-        confirmLabel="Lock now"
+        title={t('nav.relockNow')}
+        message={t('nav.relockMessage')}
+        confirmLabel={t('nav.lockNow')}
         onConfirm={runRelock}
         onCancel={() => setAskRelock(false)}
       />
@@ -181,6 +188,7 @@ function ProvidersUnlockBadge() {
 }
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t, lang, toggleLang } = useI18n();
   const { user, logout } = useAuth();
   const [ocPort, setOcPort] = useState(4096);
   const [updatesFlag, setUpdatesFlag] = useState<'none' | 'available' | 'applying'>('none');
@@ -245,33 +253,43 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         </div>
       </div>
       <nav class="sidebar-nav" onClick={onClose}>
-        <NavButton href="/" label="Dashboard" icon={LayoutDashboard} />
-        <NavButton href="/projects" label="Projects" icon={FolderOpen} />
-        <NavButton href="/chat" label="Team Chat" icon={MessageCircle} />
-        <NavButton href="/planner" label="Planner" icon={PencilRuler} />
-        <NavButton href="/agents" label="Agents" icon={Bot} />
+        <div class="nav-group-label">{t('nav.groupWorkspace')}</div>
+        <NavButton href="/" label={t('nav.dashboard')} icon={LayoutDashboard} />
+        <NavButton href="/projects" label={t('nav.projects')} icon={FolderOpen} />
+        <NavButton href="/planner" label={t('nav.planner')} icon={PencilRuler} />
+        <NavButton href="/agents" label={t('nav.agents')} icon={Bot} />
+        <NavButton href="/ide" label={t('nav.vscode')} icon={VSCodeIcon} />
+        <div class="nav-group-label">{t('nav.groupCollaborate')}</div>
+        <NavButton href="/chat" label={t('nav.teamChat')} icon={MessageCircle} />
         <NavButton label="opencode" icon={OpencodeIcon} newTabUrl={`${toolBase}:${ocPort}/`} />
-        {user?.role === 'admin' && <NavButton href="/opencode-studio" label="OC Studio" icon={OpencodeIcon} />}
-        {user?.role === 'admin' && <NavButton href="/providers" label="Providers" icon={KeyRound} />}
-        {user?.role === 'admin' && <NavButton href="/team" label="Team" icon={Users} />}
+        {user?.role === 'admin' && <NavButton href="/opencode-studio" label={t('nav.ocStudio')} icon={OpencodeIcon} />}
         {user?.role === 'admin' && (
-          <div class="nav-btn-wrap">
-            <NavButton
-              href="/settings"
-              label={updatesFlag === 'applying' ? 'Settings — update applying' : updatesFlag === 'available' ? 'Settings — updates available' : 'Settings'}
-              icon={SettingsIcon}
-            />
-            {updatesFlag !== 'none' && (
-              <span
-                class={`updates-dot ${updatesFlag === 'applying' ? 'good' : 'warn'}`}
-                title={updatesFlag === 'applying' ? 'An update is applying' : 'Updates available — open Settings'}
-                aria-hidden="true"
+          <>
+            <div class="nav-group-label">{t('nav.groupAdmin')}</div>
+            <NavButton href="/providers" label={t('nav.providers')} icon={KeyRound} />
+            <NavButton href="/team" label={t('nav.team')} icon={Users} />
+            <div class="nav-btn-wrap">
+              <NavButton
+                href="/settings"
+                label={updatesFlag === 'applying' ? t('nav.settingsUpdating') : updatesFlag === 'available' ? t('nav.settingsUpdates') : t('nav.settings')}
+                icon={SettingsIcon}
               />
-            )}
-          </div>
+              {updatesFlag !== 'none' && (
+                <span
+                  class={`updates-dot ${updatesFlag === 'applying' ? 'good' : 'warn'}`}
+                  title={updatesFlag === 'applying' ? t('nav.updatesApplying') : t('nav.updatesAvailable')}
+                  aria-hidden="true"
+                />
+              )}
+            </div>
+          </>
         )}
-        <NavButton href="/ide" label="VS Code" icon={VSCodeIcon} />
       </nav>
+      <button class="palette-hint-row" onClick={() => { onClose(); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })); }}>
+        <Search width={13} height={13} class="icon" />
+        <span>{t('palette.title')}</span>
+        <kbd class="palette-hint-kbd">Ctrl K</kbd>
+      </button>
       <div class="sidebar-footer">
         <ProvidersUnlockBadge />
         <div
@@ -282,17 +300,26 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           onKeyDown={(e: KeyboardEvent) => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/profile'); onClose(); }
           }}
-          title="Open profile"
+          title={t('nav.openProfile')}
         >
-          <span class="sidebar-profile-label">{user?.profile?.displayName || user?.username || 'Profile'}</span>
+          <span class="sidebar-profile-label">{user?.profile?.displayName || user?.username || t('common.profile')}</span>
           {user && <Avatar name={user.profile?.displayName || user.username} avatar={avatarUrl(user.id, user.profile?.avatarExt)} size={20} />}
         </div>
         <div class="sys-row">
           <span class="sys-dot ok" />
           <button
+            class="lang-btn"
+            title={t('lang.switchTo')}
+            aria-label={t('lang.switchTo')}
+            onClick={(e: Event) => { e.stopPropagation(); toggleLang(); }}
+          >
+            <Languages width={12} height={12} />
+            <span>{lang === 'ar' ? 'EN' : 'ع'}</span>
+          </button>
+          <button
             class="nav-icon-btn"
-            title="Sign out"
-            aria-label="Sign out"
+            title={t('common.signOut')}
+            aria-label={t('common.signOut')}
             onClick={(e: Event) => { e.stopPropagation(); logout(); window.location.hash = '/login'; }}
           >
             <LogOut width={15} height={15} class="icon" />
@@ -307,16 +334,32 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
 function Shell() {
   const [location] = useHashLocation();
   const { user, loading } = useAuth();
+  const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     setSidebarOpen(false);
   }, [location]);
 
+  // Global Ctrl+K / Cmd+K opens the command palette (authenticated only).
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  useEffect(() => {
+    if (!user) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [user, openPalette]);
+
   if (loading) {
     return (
       <div class="app-view" style="display:flex;align-items:center;justify-content:center;height:100vh;">
-        <div class="dim" style="font-size:0.85rem">Loading…</div>
+        <div class="dim" style="font-size:0.85rem">{t('common.loading')}</div>
       </div>
     );
   }
@@ -335,26 +378,34 @@ function Shell() {
   }
 
   if (location.startsWith('/opencode-studio') && user.role === 'admin') {
-    return <Suspense fallback={<div class="app-view" style="display:flex;align-items:center;justify-content:center;height:100vh;"><div class="dim" style="font-size:0.85rem">Loading…</div></div>}><OpencodeStudio /></Suspense>;
+    return <Suspense fallback={<div class="app-view" style="display:flex;align-items:center;justify-content:center;height:100vh;"><div class="dim" style="font-size:0.85rem">{t('common.loading')}</div></div>}><OpencodeStudio /></Suspense>;
   }
 
   if (location.startsWith('/agents')) {
-    return <Suspense fallback={<div class="app-view" style="display:flex;align-items:center;justify-content:center;height:100vh;"><div class="dim" style="font-size:0.85rem">Loading…</div></div>}><Agents /></Suspense>;
+    return <Suspense fallback={<div class="app-view" style="display:flex;align-items:center;justify-content:center;height:100vh;"><div class="dim" style="font-size:0.85rem">{t('common.loading')}</div></div>}><Agents /></Suspense>;
   }
 
   return (
     <div class="app-view">
-      <a class="skip-link" href="#main">Skip to content</a>
+      <a class="skip-link" href="#main">{t('common.skipToContent')}</a>
       <div class={`sidebar-backdrop${sidebarOpen ? ' open' : ''}`} onClick={() => setSidebarOpen(false)} />
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div class="mobile-topbar">
-        <button class="menu-btn" aria-label="Open menu" onClick={() => setSidebarOpen(true)}>
+        <button class="menu-btn" aria-label={t('nav.openMenu')} onClick={() => setSidebarOpen(true)}>
           <Menu width={20} height={20} />
         </button>
         <span class="mobile-topbar-brand">Madar</span>
+        <button
+          class="menu-btn palette-trigger"
+          aria-label={t('palette.title')}
+          title={`${t('palette.title')} (Ctrl+K)`}
+          onClick={() => setPaletteOpen(true)}
+        >
+          <Command width={16} height={16} />
+        </button>
       </div>
       <main class="main" id="main" tabindex={-1}>
-        <Suspense fallback={<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div class="dim" style="font-size:0.85rem">Loading…</div></div>}>
+        <Suspense fallback={<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div class="dim" style="font-size:0.85rem">{t('common.loading')}</div></div>}>
           <Route path="/" component={Dashboard} />
           <Route path="/projects" component={Projects} />
           <Route path="/chat" component={TeamChat} />
@@ -380,6 +431,7 @@ function Shell() {
           <Route path="/user/:id" component={UserProfile} />
         </Suspense>
       </main>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }
@@ -468,16 +520,20 @@ function OpencodeKeepAlive() {
 export function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
-        <Router hook={useHashLocation}>
-          <Shell />
-          <IdeKeepAlive />
-          <OpencodeKeepAlive />
-          <div class="watermark" aria-hidden="true">
-            <img src="/logo.png" alt="" />
-          </div>
-        </Router>
-      </AuthProvider>
+      <I18nProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <Router hook={useHashLocation}>
+              <Shell />
+              <IdeKeepAlive />
+              <OpencodeKeepAlive />
+              <div class="watermark" aria-hidden="true">
+                <img src="/logo.png" alt="" />
+              </div>
+            </Router>
+          </AuthProvider>
+        </ToastProvider>
+      </I18nProvider>
     </ErrorBoundary>
   );
 }

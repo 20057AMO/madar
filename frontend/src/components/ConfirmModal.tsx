@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { TriangleAlert, Loader2 } from 'lucide-preact';
+import { useI18n } from '../i18n';
 
 interface ConfirmModalProps {
   open: boolean;
@@ -26,13 +27,17 @@ export function ConfirmModal({
   open,
   title,
   message,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
+  confirmLabel,
+  cancelLabel,
   danger = false,
   loading = false,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const { t } = useI18n();
+  // Defaults localize automatically — explicit labels from callers win.
+  const okLabel = confirmLabel ?? t('common.confirm');
+  const dismissLabel = cancelLabel ?? t('common.cancel');
   const overlayRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const loadingRef = useRef(loading);
@@ -97,15 +102,15 @@ export function ConfirmModal({
         {message && <p class="settings-hint" id="confirm-msg" style="text-align:center">{message}</p>}
         <div style="display:flex; gap:8px; margin-top:14px; justify-content:center;">
           <button class="btn-ghost sm" type="button" ref={cancelRef} onClick={onCancel} disabled={loading}>
-            {cancelLabel}
+            {dismissLabel}
           </button>
           <button class={`${danger ? 'btn-danger' : 'btn-primary'} sm`} type="submit" disabled={loading}>
             {loading ? (
               <span style="display:inline-flex;align-items:center;gap:6px;">
-                <Loader2 width={14} height={14} class="icon spin" /> Working…
+                <Loader2 width={14} height={14} class="icon spin" /> {t('common.loading')}
               </span>
             ) : (
-              confirmLabel
+              okLabel
             )}
           </button>
         </div>

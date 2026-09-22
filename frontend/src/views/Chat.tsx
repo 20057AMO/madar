@@ -6,9 +6,10 @@
  * write path); the WebSocket delivers live messages/typing/read/pin/presence.
  */
 import { useEffect, useRef, useState, useMemo, useCallback } from 'preact/hooks';
-import { Fragment } from 'preact';
+import { Fragment, type ComponentChildren } from 'preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { useAuth } from '../auth';
+import { useI18n } from '../i18n';
 import {
   MessageCircle,
   Send,
@@ -41,6 +42,11 @@ import {
   ArrowDownToLine,
   Volume2,
   VolumeX,
+  Smile,
+  SmilePlus,
+  Copy,
+  MoreVertical,
+  MessageSquareReply,
 } from 'lucide-preact';
 import {
   listChatChannels,
@@ -124,6 +130,34 @@ function fmtBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function fmtTyping(names: string[], ar: boolean): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return ar ? `${names[0]} يكتب…` : `${names[0]} is typing…`;
+  if (names.length === 2) return ar ? `${names[0]} و ${names[1]} يكتبان…` : `${names[0]} and ${names[1]} are typing…`;
+  return ar ? 'عدة أشخاص يكتبون…' : 'Several people are typing…';
+}
+
+/** Short one-line preview for a message: text, or an attachment fallback. */
+function msgPreview(m: { text?: string; attachments?: { kind: string; name: string }[] }, attachmentLabel: string): string {
+  const text = (m.text || '').replace(/\s+/g, ' ').trim();
+  if (text) return text;
+  return m.attachments && m.attachments.length ? attachmentLabel : '';
+}
+
+/** Localized WhatsApp-style day-separator label (Today/أمس/…). */
+function formatDayLabelLocalized(key: string, lang: 'ar' | 'en'): string {
+  if (key === 'today') return lang === 'ar' ? 'اليوم' : 'Today';
+  if (key === 'yesterday') return lang === 'ar' ? 'أمس' : 'Yesterday';
+  return formatDayLabel(key);
+}
+
+/** Rail glyph for non-direct channels (direct channels render an avatar). */
+function channelGlyph(c: ChatChannel): ComponentChildren {
+  if (c.kind === 'project') return <FolderOpen width={18} height={18} />;
+  if (c.kind === 'channel') return <Hash width={18} height={18} />;
+  return <UserIcon width={18} height={18} />;
+}
+
 function reducedMotion(): boolean {
   return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
@@ -192,6 +226,7 @@ const FICO_BY_NAME: Record<string, any> = {
 
 /** Non-image attachment card: group icon + name + size + optional text preview. */
 function FileAttachmentCard({ attachment }: { attachment: ChatAttachment }) {
+  const { t, t2 } = useI18n();
   const group = attachmentGroup(attachment.name, attachment.kind);
   const iconName = attachmentIcon(group);
   const Fico = FICO_BY_NAME[iconName] || FileIcon;
@@ -226,17 +261,17 @@ function FileAttachmentCard({ attachment }: { attachment: ChatAttachment }) {
             aria-expanded={preview.state === 'ready'}
             aria-controls={`prev-${attachment.id}`}
           >
-            Preview
+            {t('common.more') === 'More actions' ? 'Preview' : 'معاينة'}
           </button>
         ) : pref === 'too-big' ? (
-          <span class="dim tchat-preview-too-big" title="File too large to preview">Too large</span>
+          <span class="dim tchat-preview-too-big" title={t2('الملف كبير جداً للمعاينة', 'File too large to preview')}>{t2('كبير جداً', 'Too large')}</span>
         ) : null}
       </div>
       {pref === 'ok' && (
         <div class="tchat-preview-status" role="status" aria-live="polite">
-          {preview.state === 'loading' && <>loading…</>}
+          {preview.state === 'loading' && <>{t2('جارٍ التحميل…', 'loading…')}</>}
           {preview.state === 'error' && (
-            <button class="tchat-preview-btn" onClick={togglePreview} aria-label="Retry preview">Error · Retry</button>
+            <button class="tchat-preview-btn" onClick={togglePreview} aria-label={t2('إعادة محاولة المعاينة', 'Retry preview')}>{t2('خطأ · إعادة', 'Error · Retry')}</button>
           )}
         </div>
       )}
@@ -246,7 +281,7 @@ function FileAttachmentCard({ attachment }: { attachment: ChatAttachment }) {
           class="tchat-file-preview"
           tabIndex={0}
           role="region"
-          aria-label="File preview"
+          aria-label={t2('معاينة الملف', 'File preview')}
         >{preview.text}</pre>
       )}
     </div>
@@ -298,19 +333,181 @@ function MessageAttachments({ message, onOpenLightbox }: {
 }
 
 function MessageStatus({ status }: { status?: TeamChatMessage['status'] }) {
+  const { t2 } = useI18n();
   if (!status) return null;
-  if (status === 'sent') return <Check width={12} height={12} class="tchat-msg-status" role="img" aria-label="Sent" />;
-  if (status === 'delivered') return <CheckCheck width={12} height={12} class="tchat-msg-status" role="img" aria-label="Delivered" />;
-  if (status === 'read') return <CheckCheck width={12} height={12} class="tchat-msg-status read" role="img" aria-label="Read" />;
+  if (status === 'sent') return <Check width={12} height={12} class="tchat-msg-status" role="img" aria-label={t2('أُرسلت', 'Sent')} />;
+  if (status === 'delivered') return <CheckCheck width={12} height={12} class="tchat-msg-status" role="img" aria-label={t2('وصلت', 'Delivered')} />;
+  if (status === 'read') return <CheckCheck width={12} height={12} class="tchat-msg-status read" role="img" aria-label={t2('قُرئت', 'Read')} />;
   return null;
 }
 
 const ALL_REACTIONS = ['👍','❤️','😂','🎉','👀','✅','🔥','🙏','👎','😮','💯','🚀'];
 
+/** Quick-reaction bar (WhatsApp hover strip) shown directly under the bubble. */
+function QuickReactions({ onPick }: { onPick: (emoji: string) => void }) {
+  const { t2 } = useI18n();
+  return (
+    <div class="tchat-quick-reactions" role="toolbar" aria-label={t2('تفاعلات سريعة', 'Quick reactions')}>
+      {ALL_REACTIONS.slice(0, 6).map((e) => (
+        <button key={e} class="tchat-quick-reaction" aria-label={e} onClick={() => onPick(e)}>{e}</button>
+      ))}
+    </div>
+  );
+}
+
+/** Per-message action menu — contextmenu / long-press / the ⋮ button all feed it. */
+function MessageContextMenu(props: {
+  message: TeamChatMessage;
+  mine: boolean;
+  canDeleteMsg: boolean;
+  canWrite: boolean;
+  anchorRect: { top: number; bottom: number; left: number; right: number };
+  onAction: (a: 'reply' | 'react' | 'pin' | 'copy' | 'edit' | 'delete', emoji?: string) => void;
+  onClose: () => void;
+}) {
+  const { t2 } = useI18n();
+  const { message, mine, canDeleteMsg, canWrite, anchorRect, onAction, onClose } = props;
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const r = el.getBoundingClientRect();
+    const rtl = document.documentElement.dir === 'rtl';
+    let top: number;
+    if (anchorRect.top - r.height - 8 > 0) {
+      top = anchorRect.top - r.height - 8; // above
+    } else if (anchorRect.bottom + r.height + 8 < vh) {
+      top = anchorRect.bottom + 8; // below
+    } else {
+      top = Math.max(8, Math.min(vh - r.height - 8, anchorRect.top));
+    }
+    const left = rtl
+      ? Math.max(8, Math.min(vw - r.width - 8, anchorRect.left))
+      : Math.max(8, Math.min(vw - r.width - 8, anchorRect.right - r.width));
+    setPos({ top, left });
+  }, [anchorRect]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    const timer = window.setTimeout(() => {
+      document.addEventListener('mousedown', onDown, true);
+      document.addEventListener('keydown', onKey, true);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [onClose]);
+
+  const items: { key: 'reply' | 'react' | 'pin' | 'copy' | 'edit' | 'delete'; label: string; icon: ComponentChildren; danger?: boolean; show: boolean }[] = [
+    { key: 'reply', label: t2('رد', 'Reply'), icon: <MessageSquareReply width={15} height={15} />, show: canWrite },
+    { key: 'react', label: t2('تفاعل', 'React'), icon: <SmilePlus width={15} height={15} />, show: canWrite },
+    { key: 'pin', label: message.pinned ? t2('إلغاء التثبيت', 'Unpin') : t2('تثبيت', 'Pin'), icon: <Pin width={15} height={15} />, show: canWrite },
+    { key: 'copy', label: t2('نسخ النص', 'Copy text'), icon: <Copy width={15} height={15} />, show: !!message.text },
+    { key: 'edit', label: t2('تحرير', 'Edit'), icon: <Pencil width={15} height={15} />, show: mine },
+    { key: 'delete', label: t2('حذف', 'Delete'), icon: <Trash2 width={15} height={15} />, danger: true, show: canDeleteMsg },
+  ];
+  const visible = items.filter((it) => it.show);
+  if (!visible.length) return null;
+
+  return (
+    <div class="tchat-ctx-backdrop" onClick={onClose}>
+      <div
+        ref={ref}
+        class="tchat-ctx-menu"
+        role="menu"
+        aria-label={t2('إجراءات الرسالة', 'Message actions')}
+        style={pos ? { top: pos.top, left: pos.left, visibility: 'visible' } : { visibility: 'hidden' }}
+        onClick={(e: MouseEvent) => e.stopPropagation()}
+      >
+        <div class="tchat-ctx-reactions" role="group" aria-label={t2('تفاعل سريع', 'Quick reaction')}>
+          {ALL_REACTIONS.map((e) => (
+            <button key={e} class="tchat-ctx-reaction" aria-label={e} title={e} onClick={() => onAction('react', e)}>{e}</button>
+          ))}
+        </div>
+        {visible.map((it) => (
+          <button
+            key={it.key}
+            role="menuitem"
+            class={`tchat-ctx-item${it.danger ? ' danger' : ''}`}
+            onClick={() => onAction(it.key)}
+          >
+            {it.icon}
+            <span>{it.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Composer emoji keyboard: a small categorized emoji board for TYPING. */
+function ComposerEmojiPanel({ onPick, onClose }: { onPick: (emoji: string) => void; onClose: () => void }) {
+  const { t2 } = useI18n();
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [onClose]);
+
+  const sections: { title: string; emojis: string[] }[] = [
+    { title: t2('وجوه', 'Smileys'), emojis: ['😀','😂','🥲','😊','😍','😘','😉','🤗','🤔','😐','😴','😅','😎','🥳','😭','😡','🤝','🙏'] },
+    { title: t2('إيماءات وكائنات', 'Gestures & objects'), emojis: ['👍','👎','👏','💪','🔥','✨','🎉','❤️','💔','✅','❌','⭐','💯','🚀','👀','📌','📎','💡'] },
+    { title: t2('رموز', 'Symbols'), emojis: ['❓','❗','⚠️','⏰','📅','✔️','➕','➖','➗','💰','🔔','🔒','🔑','🖥️','📱','☕','🧠','🎯'] },
+  ];
+
+  return (
+    <div class="tchat-emoji-panel-wrap" ref={wrapRef}>
+      <div class="tchat-emoji-panel" role="dialog" aria-label={t2('إدراج إيموجي', 'Insert emoji')}>
+        {sections.map((s) => (
+          <div key={s.title} class="tchat-emoji-section">
+            <div class="tchat-emoji-section-title">{s.title}</div>
+            <div class="tchat-emoji-grid">
+              {s.emojis.map((e) => (
+                <button key={e} class="tchat-emoji-cell" aria-label={e} title={e} onMouseDown={(e: MouseEvent) => e.preventDefault()} onClick={() => onPick(e)}>{e}</button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EmojiPicker({ onSelect, onClose }: { onSelect: (emoji: string) => void; onClose: () => void }) {
+  const { t2 } = useI18n();
   const ref = useEmojiPickerRef(onClose);
   return (
-    <div class="tchat-emoji-picker" ref={ref} role="group" aria-label="Pick a reaction">
+    <div class="tchat-emoji-picker" ref={ref} role="group" aria-label={t2('اختر تفاعلاً', 'Pick a reaction')}>
       {ALL_REACTIONS.map((e) => (
         <button
           key={e}
@@ -357,6 +554,7 @@ function MessageReactions({
   onToggle: (emoji: string) => void;
   onPicker: () => void;
 }) {
+  const { t2 } = useI18n();
   const entries = reactions
     ? Object.entries(reactions).filter(([, ids]) => ids.length > 0).sort((a, b) => b[1].length - a[1].length)
     : [];
@@ -378,7 +576,7 @@ function MessageReactions({
           </button>
         );
       })}
-      <button class="tchat-reaction-add" aria-label="Add reaction" onClick={onPicker} title="Add reaction">
+      <button class="tchat-reaction-add" aria-label={t2('إضافة تفاعل', 'Add reaction')} onClick={onPicker} title={t2('إضافة تفاعل', 'Add reaction')}>
         <Plus width={12} height={12} />
       </button>
     </div>
@@ -447,6 +645,8 @@ function playChatSound(): void {
 
 export function Chat() {
   const { user } = useAuth();
+  const { t, t2, lang } = useI18n();
+  const ar = lang === 'ar';
   const meId = user?.id || '';
   const [, setLocation] = useHashLocation();
   const [channels, setChannels] = useState<ChatChannel[]>([]);
@@ -477,6 +677,16 @@ export function Chat() {
   const [lightbox, setLightbox] = useState<{ images: { id: string; name: string }[]; index: number } | null>(null);
   const [emojiPickerFor, setEmojiPickerFor] = useState<string | null>(null);
 
+  // ── WhatsApp-style interactions ──
+  // Unified message action menu (contextmenu / long-press / ⋮ button all feed it)
+  const [ctxMenu, setCtxMenu] = useState<{ msgId: string; rect: { top: number; bottom: number; left: number; right: number } } | null>(null);
+  // Typing emoji keyboard for the composer
+  const [emojiPanelOpen, setEmojiPanelOpen] = useState(false);
+  // Missing-message counter on the jump-to-latest button
+  const [missedCount, setMissedCount] = useState(0);
+  // First unread message id for the "new messages" divider (from the REST list)
+  const [newDividerId, setNewDividerId] = useState<string | null>(null);
+
   // ── Responsive layout: drawer rail on phones, collapsible rail on tablets
   const isTablet = useMediaQuery('(max-width: 1023px)');
   const isPhone = useMediaQuery('(max-width: 639px)');
@@ -503,6 +713,8 @@ export function Chat() {
   const origTitleRef = useRef('');
   const docVisibleRef = useRef(true);
   const soundOnRef = useRef(true);
+  const viewerOnlyRef = useRef(false);
+  viewerOnlyRef.current = viewerOnly;
   const loadingEarlierRef = useRef(false);
   const noMoreRef = useRef(false);
   docVisibleRef.current = docVisible;
@@ -526,6 +738,10 @@ export function Chat() {
     setActiveId(id);
     setLightbox(null);
     setEmojiPickerFor(null);
+    setCtxMenu(null);
+    setEmojiPanelOpen(false);
+    setMissedCount(0);
+    setNewDividerId(null);
     if (isPhone) setRailOpen(false);
     // Kill any ghost unread tally synchronously — the message is now on
     // screen, so the count must not linger until the next poll reconciles.
@@ -595,7 +811,6 @@ export function Chat() {
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
   const discardRecordingRef = useRef(false);
-  const micDownAt = useRef(0);
 
   // ── New-channel / direct-message dialog focus management
   const createDialogRef = useRef<HTMLDivElement | null>(null);
@@ -617,6 +832,11 @@ export function Chat() {
   channelsRef.current = channels;
   activeIdRef.current = activeId;
   const lastSeen = useRef<Map<string, string>>(new Map());
+  // Long-press (touch) timer for the message context menu
+  const lpTimer = useRef<number | null>(null);
+  // Draft of the newest message per non-active channel — shows instantly on
+  // the rail row while the REST poll (30s) reconciles unread counts.
+  const lastMsgDraft = useRef<Map<string, { text: string; at: number }>>(new Map());
   // Per-message markdown cache: key = id + text + editedAt, cleared per channel,
   // so flips of local state (sending, editing) never re-parse 500 messages.
   const mdCache = useRef(new Map<string, string>());
@@ -662,7 +882,8 @@ export function Chat() {
     if (ev.type === 'channel_update') {
       if (ev.channel.id === activeIdRef.current) {
         setActiveCanSend(ev.channel.canSend);
-        setCanWrite(!viewerOnly && (ev.channel.canSend !== 'admins' || canManageChannel()));
+        // `viewerOnly`/`canWrite` are stale closure values here — derive from refs.
+        setCanWrite(!viewerOnlyRef.current && (ev.channel.canSend !== 'admins' || canManageChannel()));
         setChannels((prev) =>
           prev.map((c) => (c.id === ev.channel.id ? { ...c, canSend: ev.channel.canSend } : c))
         );
@@ -685,10 +906,20 @@ export function Chat() {
         });
       } else {
         bumpUnread(cid, ev.message);
+        // WhatsApp-style instant rail preview for non-active channels.
+        lastMsgDraft.current.set(cid, { text: ev.message.text || '📎', at: Date.now() });
       }
-      setChannels((prev) =>
-        prev.map((c) => (c.id === cid ? { ...c, lastMessageAt: ev.message.createdAt } : c))
-      );
+      // Instant re-sort (recent activity first) + instant unread badge for
+      // non-active channels (bumpUnread already tallied them locally).
+      setChannels((prev) => {
+        const next = prev.map((c) => {
+          if (c.id !== cid) return c;
+          const unread = list ? 0 : (unreadLocal.current.get(cid)?.size ?? c.unread ?? 0);
+          return { ...c, lastMessageAt: ev.message.createdAt, unread };
+        });
+        next.sort((a, b) => new Date(b.lastMessageAt || b.createdAt).getTime() - new Date(a.lastMessageAt || a.createdAt).getTime());
+        return next;
+      });
       return;
     }
     if (ev.type === 'chat_bump') {
@@ -696,9 +927,16 @@ export function Chat() {
       // bump the local unread tally + title/sound; the channel list refresh
       // (poll + subscriptions) reconciles the authoritative server unread.
       bumpUnread(ev.channelId, ev.message);
-      setChannels((prev) =>
-        prev.map((c) => (c.id === ev.channelId ? { ...c, lastMessageAt: ev.message.createdAt } : c))
-      );
+      lastMsgDraft.current.set(ev.channelId, { text: ev.message.text || '📎', at: Date.now() });
+      setChannels((prev) => {
+        const next = prev.map((c) => {
+          if (c.id !== ev.channelId) return c;
+          const unread = (unreadLocal.current.get(ev.channelId)?.size ?? c.unread ?? 0);
+          return { ...c, lastMessageAt: ev.message.createdAt, unread };
+        });
+        next.sort((a, b) => new Date(b.lastMessageAt || b.createdAt).getTime() - new Date(a.lastMessageAt || a.createdAt).getTime());
+        return next;
+      });
       return;
     }
     if (ev.type === 'typing' && ev.channelId === activeIdRef.current) {
@@ -751,7 +989,7 @@ export function Chat() {
           setEditingMsgId(null);
           setEditText('');
         }
-        setDeletedNotice('Message deleted');
+        setDeletedNotice(t2('تم حذف رسالة', 'Message deleted'));
         setTimeout(() => setDeletedNotice(''), 3000);
         requestAnimationFrame(() => {
           document.querySelector<HTMLTextAreaElement>('.tchat-textarea')?.focus();
@@ -815,6 +1053,10 @@ export function Chat() {
     setNoMore(false);
     setLoadingEarly(false);
     setShowJump(false);
+    setMissedCount(0);
+    // "New messages" divider: the REST list stamps firstUnreadId when there
+    // are unread messages; plant the divider at the first unread message.
+    setNewDividerId(known?.firstUnreadId || null);
     noMoreRef.current = false;
     loadingEarlierRef.current = false;
     let cancelled = false;
@@ -919,12 +1161,23 @@ export function Chat() {
   }, [messages, activeId]);
 
 
-  // scroll to bottom on message growth (only when the reader is near the bottom)
+  // scroll to bottom on message growth (only when the reader is near the
+  // bottom); when the reader is scrolled away, count the arrival for the
+  // jump-to-latest badge instead of yanking the view (WhatsApp behavior).
+  const prevLastIdRef = useRef<string | null>(null);
   useEffect(() => {
     const el = listRef.current;
+    const last = messages[messages.length - 1];
+    const prevLast = prevLastIdRef.current;
+    prevLastIdRef.current = last?.id ?? null;
     if (!el || skipScroll.current) return;
-    if (el.scrollHeight - el.scrollTop > el.clientHeight + 50) return;
-    el.scrollTop = el.scrollHeight;
+    const appended = !!last && !!prevLast && last.id !== prevLast;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (appended && dist > 60) {
+      setMissedCount((c) => Math.min(c + 1, 999));
+      return;
+    }
+    if (dist <= 50) el.scrollTop = el.scrollHeight;
   }, [messages, activeId]);
 
   // ── Load-earlier paging: prepend older history, preserving the reader's
@@ -974,6 +1227,7 @@ export function Chat() {
   const jumpToBottom = useCallback((instant = false) => {
     const el = listRef.current;
     if (!el) return;
+    setMissedCount(0);
     el.scrollTo({
       top: el.scrollHeight,
       behavior: reducedMotion() || instant ? 'auto' : 'smooth',
@@ -1191,7 +1445,7 @@ export function Chat() {
       });
       setComposer({ text: '', attachments: [] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
+      setError(err instanceof Error ? err.message : t2('فشل إرسال الرسالة', 'Failed to send message'));
     } finally {
       setSending(false);
     }
@@ -1380,11 +1634,16 @@ export function Chat() {
       setIsRecording(true);
       setRecordTime(0);
       timerRef.current = window.setInterval(() => setRecordTime(t => t + 1), 1000);
-    } catch (err) {
-      setError('Microphone access denied');
+    } catch (err: any) {
+      // Distinguish a hard denial (NotAllowedError) from other failures.
+      setError(err?.name === 'NotAllowedError' || err?.name === 'SecurityError'
+        ? t2('تم رفض الوصول إلى المايكروفون', 'Microphone access denied')
+        : t2('تعذّر بدء التسجيل', 'Could not start recording'));
     }
   };
 
+  // Tap-to-stop (WhatsApp-style): send the recording. `stopRecording` only
+  // tears down the timer — `recorder.onstop` does the actual send.
   const stopRecording = () => {
     if (!isRecording || !mediaRecorderRef.current) return;
     mediaRecorderRef.current.stop();
@@ -1395,7 +1654,8 @@ export function Chat() {
     }
   };
 
-  // Abandon an in-flight recording without sending it (unmount / channel switch).
+  // Abandon an in-flight recording without sending it (X button / unmount /
+  // channel switch). Discard first, then stop — `onstop` checks the flag.
   const cancelRecording = () => {
     discardRecordingRef.current = true;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -1420,7 +1680,7 @@ export function Chat() {
         attachments: [{ id: attachment.id, name: attachment.name }],
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send voice note');
+      setError(err instanceof Error ? err.message : t2('فشل إرسال الرسالة الصوتية', 'Failed to send voice note'));
     } finally {
       setSending(false);
     }
@@ -1461,6 +1721,17 @@ export function Chat() {
   // for instant re-derivation on `channel_update`.
   const localCanWrite = () => !viewerOnly && (activeCanSend !== 'admins' || canManageChannel());
   const userCanWrite = () => canWrite;
+
+  // Focus the composer when an empty channel invites the first message —
+  // the textarea unmounts during recording, so focus falls back to the
+  // mic/send FAB rather than dropping to <body>.
+  // Focus the composer when an empty channel invites the first message —
+  // the textarea unmounts during recording, so focus falls back to the
+  // mic/send FAB rather than dropping to <body>.
+  const focusComposer = () => {
+    taRef.current?.focus();
+    if (!taRef.current) document.querySelector<HTMLButtonElement>('.tchat-send-fab')?.focus();
+  };
 
   // Roving-tabindex keyboard navigation for the send-permissions menu (A2).
   const handleSettingsMenuKeyDown = (e: KeyboardEvent) => {
@@ -1516,6 +1787,29 @@ export function Chat() {
     }
   };
 
+  // ── Message action-menu dispatcher (context menu / long-press / ⋮ button)
+  const handleMsgAction = async (msg: TeamChatMessage, action: 'reply' | 'react' | 'pin' | 'copy' | 'edit' | 'delete', emoji?: string) => {
+    setCtxMenu(null);
+    if (action === 'reply') {
+      setComposer((c) => ({ ...c, replyTo: msg }));
+      requestAnimationFrame(() => taRef.current?.focus());
+    } else if (action === 'react' && emoji) {
+      void doToggleReaction(msg.id, emoji);
+    } else if (action === 'pin') {
+      void togglePin(msg);
+    } else if (action === 'copy' && msg.text) {
+      try {
+        await navigator.clipboard.writeText(msg.text);
+        setDeletedNotice(t2('تم نسخ النص', 'Text copied'));
+        setTimeout(() => setDeletedNotice(''), 2000);
+      } catch { /* clipboard unavailable */ }
+    } else if (action === 'edit') {
+      startEdit(msg);
+    } else if (action === 'delete') {
+      setDeleteMsgTarget(msg);
+    }
+  };
+
   const renderMsgHtml = (m: TeamChatMessage): string => {
     const key = `${m.id}:${m.text}:${m.editedAt ?? ''}`;
     const cached = mdCache.current.get(key);
@@ -1526,6 +1820,13 @@ export function Chat() {
   };
 
   const renderedMessages = useMemo(() => {
+    const openCtx = (m: TeamChatMessage, el: HTMLElement, x?: number, _y?: number) => {
+      const r = el.getBoundingClientRect();
+      setCtxMenu({
+        msgId: m.id,
+        rect: { top: r.top, bottom: r.bottom, left: x ?? r.left, right: x ?? r.right },
+      });
+    };
     return messages.map((m, i) => {
       const isMine = m.userId === meId;
       const prev = messages[i - 1];
@@ -1533,30 +1834,52 @@ export function Chat() {
       const dayKey = daySeparatorKey(m.createdAt);
       const prevDayKey = prev ? daySeparatorKey(prev.createdAt) : undefined;
       const showDaySep = !prev || dayKey !== prevDayKey;
+      const showNewDivider = !!newDividerId && m.id === newDividerId && !showDaySep;
       const reply = m.replyTo ? messages.find((x) => x.id === m.replyTo) : undefined;
       const author = active?.members.find((x) => x.userId === m.userId);
-      const canDeleteMsg = isMine || user?.role === 'admin' || canManageChannel();
       const isEditing = editingMsgId === m.id;
       const bodyHtml = m.text ? renderMsgHtml(m) : '';
 
       return (
         <Fragment key={m.id}>
           {showDaySep && (
-            <div class="tchat-day-sep">
-              <span>{formatDayLabel(dayKey)}</span>
+            <div class="tchat-day-sep"><span>{formatDayLabelLocalized(dayKey, lang)}</span></div>
+          )}
+          {showNewDivider && (
+            <div class="tchat-new-divider" role="separator" aria-label={t2('رسائل جديدة', 'New messages')}>
+              <span>{t2('رسائل جديدة', 'New messages')}</span>
             </div>
           )}
-          <div id={`msg-${m.id}`} class={`tchat-msg ${isMine ? 'mine' : ''}${isGrouped ? ' grouped' : ''}`}>
-          {!isGrouped && (
+          <div
+            id={`msg-${m.id}`}
+            class={`tchat-msg ${isMine ? 'mine' : ''}${isGrouped ? ' grouped' : ''}`}
+            onContextMenu={(e: MouseEvent) => {
+              if (isEditing) return;
+              e.preventDefault();
+              openCtx(m, e.currentTarget as HTMLElement, e.clientX, e.clientY);
+            }}
+            onDblClick={() => { if (userCanWrite() && !isEditing) void doToggleReaction(m.id, '👍'); }}
+            onTouchStart={(e: TouchEvent) => {
+              if (isEditing) return;
+              const el = e.currentTarget as HTMLElement;
+              const touch = e.touches[0];
+              lpTimer.current = window.setTimeout(() => {
+                lpTimer.current = null;
+                openCtx(m, el, touch?.clientX, touch?.clientY);
+              }, 500);
+            }}
+            onTouchEnd={() => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } }}
+            onTouchMove={() => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } }}
+            onTouchCancel={() => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } }}
+          >
+          {!isGrouped && !isMine && (
             <div class="tchat-msg-avatar">
-              <Avatar name={m.username} avatar={avatarUrl(m.userId, author?.avatarExt)} size={32} />
+              <Avatar name={m.username} avatar={avatarUrl(m.userId, author?.avatarExt)} size={32} decorative={true} />
             </div>
           )}
           <div class="tchat-msg-bubble">
-            {!isGrouped && (
-              <div class="tchat-msg-author" style="font-weight:600;font-size:0.75rem;margin-bottom:4px">
-                {m.username}
-              </div>
+            {!isGrouped && !isMine && (
+              <div class="tchat-msg-author">{m.username}</div>
             )}
             {reply ? (
               <div class="tchat-msg-reply">
@@ -1564,14 +1887,14 @@ export function Chat() {
               </div>
             ) : m.replyTo ? (
               <div class="tchat-msg-reply tchat-msg-reply-deleted">
-                <span class="tchat-msg-reply-from">Reply</span> Original message deleted
+                <span class="tchat-msg-reply-from">{t2('رد', 'Reply')}</span> {t2('الرسالة الأصلية حُذفت', 'Original message deleted')}
               </div>
             ) : null}
             {isEditing ? (
               <div class="tchat-edit-box">
                 <textarea
                   class="tchat-edit-textarea"
-                  aria-label="Edit message"
+                  aria-label={t2('تحرير الرسالة', 'Edit message')}
                   value={editText}
                   onInput={(e: Event) => setEditText((e.target as HTMLTextAreaElement).value)}
                   onKeyDown={(e: KeyboardEvent) => {
@@ -1585,8 +1908,8 @@ export function Chat() {
                   }}
                 />
                 <div class="tchat-edit-actions">
-                  <button class="btn-ghost sm" onClick={cancelEdit}>Cancel</button>
-                  <button class="btn-primary sm" onClick={() => void doEdit()} disabled={!editText.trim() || editText.trim() === m.text}>Save</button>
+                  <button class="btn-ghost sm" onClick={cancelEdit}>{t('common.cancel')}</button>
+                  <button class="btn-primary sm" onClick={() => void doEdit()} disabled={!editText.trim() || editText.trim() === m.text}>{t('common.save')}</button>
                 </div>
               </div>
             ) : (
@@ -1599,6 +1922,9 @@ export function Chat() {
             )}
             {m.attachments && m.attachments.length > 0 && (
               <MessageAttachments message={m} onOpenLightbox={(imgs, i) => setLightbox({ images: imgs, index: i })} />
+            )}
+            {userCanWrite() && !isEditing && (
+              <QuickReactions onPick={(emoji) => void doToggleReaction(m.id, emoji)} />
             )}
             <MessageReactions
               reactions={m.reactions}
@@ -1615,56 +1941,32 @@ export function Chat() {
                 onClose={() => setEmojiPickerFor(null)}
               />
             )}
-            <div class="tchat-msg-time">
-              {fmtTime(m.createdAt)}
-              {m.editedAt && <span class="tchat-msg-edited" title={`Edited ${new Date(m.editedAt).toLocaleString()}`}>edited</span>}
+            <div class="tchat-msg-meta">
+              {m.editedAt && <span class="tchat-msg-edited" title={t2(`عُدّلت ${new Date(m.editedAt).toLocaleString(lang === 'ar' ? 'ar' : undefined)}`, `Edited ${new Date(m.editedAt).toLocaleString()}`)}>{t2('عُدّلت', 'edited')}</span>}
+              <span class="tchat-msg-time">{fmtTime(m.createdAt)}</span>
               {isMine && <MessageStatus status={m.status} />}
             </div>
           </div>
           <div class="tchat-msg-side">
-            {(isMine || canDeleteMsg) && (
-              <>
-                {isMine && (
-                  <button
-                    class="tchat-msg-action"
-                    onClick={() => startEdit(m)}
-                    title="Edit message"
-                    aria-label="Edit message"
-                    disabled={isEditing}
-                  >
-                    <Pencil width={12} height={12} />
-                  </button>
-                )}
-                {canDeleteMsg && (
-                  <button
-                    class="tchat-msg-action tchat-msg-action-danger"
-                    onClick={() => setDeleteMsgTarget(m)}
-                    title="Delete message"
-                    aria-label="Delete message"
-                  >
-                    <Trash2 width={12} height={12} />
-                  </button>
-                )}
-              </>
-            )}
-            {userCanWrite() && (
-              <>
-                <button class="tchat-msg-action" onClick={() => {
-                  setComposer((c) => ({ ...c, replyTo: m }));
-                }} title="Reply">
-                  <div style="display:flex;align-items:center;gap:4px;font-size:0.65rem"><Send width={10} height={10} /> Reply</div>
-                </button>
-                <button class="tchat-msg-action" onClick={() => void togglePin(m)} aria-pressed={!!m.pinned} aria-label={m.pinned ? 'Unpin message' : 'Pin message'} title={m.pinned ? 'Unpin' : 'Pin'}>
-                  <Pin width={10} height={10} style={m.pinned ? 'color:var(--accent)' : ''} />
-                </button>
-              </>
+            {userCanWrite() && !isEditing && (
+              <button
+                class="tchat-msg-action"
+                onClick={(e: MouseEvent) => {
+                  const el = document.getElementById(`msg-${m.id}`) || (e.currentTarget as HTMLElement);
+                  openCtx(m, el);
+                }}
+                aria-label={t2('خيارات الرسالة', 'Message options')}
+                title={t2('خيارات الرسالة', 'Message options')}
+              >
+                <MoreVertical width={14} height={14} />
+              </button>
             )}
           </div>
         </div>
         </Fragment>
       );
     });
-  }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText, emojiPickerFor]);
+  }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText, emojiPickerFor, newDividerId, lang, user?.role]);
 
   const pinned = useMemo(() => messages.filter((m) => m.pinned), [messages]);
 
@@ -1688,11 +1990,11 @@ export function Chat() {
         ref={railRef}
         class={`tchat-rail${railOpen ? ' open' : ''}${railCollapsed ? ' collapsed' : ''}`}
       >
-        <nav class="tchat-rail-nav" aria-label="Channels">
+        <nav class="tchat-rail-nav" aria-label={t2('القنوات', 'Channels')}>
         <div class="tchat-rail-head">
           <span class="tchat-rail-title">
             <MessageCircle width={16} height={16} class="icon" />
-            Team Chat
+            {t2('محادثة الفريق', 'Team Chat')}
           </span>
           <div style="display:flex;align-items:center;gap:8px">
             <span
@@ -1724,25 +2026,25 @@ export function Chat() {
               ref={globalSearchBtnRef}
               onClick={toggleGlobalSearch}
               aria-pressed={globalOpen}
-              title="Search all channels"
-              aria-label="Search all channels"
+              title={t2('البحث في كل القنوات', 'Search all channels')}
+              aria-label={t2('البحث في كل القنوات', 'Search all channels')}
             >
               <Search width={14} height={14} />
             </button>
-            <span class="tchat-online">{presence.size} online</span>
+            <span class="tchat-online">{t('misc.online', { n: presence.size })}</span>
             {presence.size > 0 && (
               <span class="tchat-presence-avatars">
                 {Array.from(presence.values()).slice(0, 5).map((p) => (
                   <button
                     key={p.id}
                     class="tchat-presence-avatar"
-                    aria-label={`View ${p.displayName || p.username}'s profile`}
+                    aria-label={t2(`عرض ملف ${p.displayName || p.username}`, `View ${p.displayName || p.username}'s profile`)}
                     onClick={() => setLocation(`/user/${p.id}`)}
                   >
                     <Avatar name={p.displayName || p.username} avatar={avatarUrl(p.id, p.avatarExt)} size={22} title={p.displayName || p.username} />
                   </button>
                 ))}
-                {presence.size > 5 && <span class="tchat-members-all" title={`${presence.size} members online`} aria-label={`${presence.size} members online`}>+{presence.size - 5}</span>}
+                {presence.size > 5 && <span class="tchat-members-all" title={t('misc.moreOnline', { n: presence.size - 5 })} aria-label={t('misc.moreOnline', { n: presence.size - 5 })}>+{presence.size - 5}</span>}
               </span>
             )}
           </div>
@@ -1752,8 +2054,8 @@ export function Chat() {
             <input
               ref={searchBoxRef}
               class="input"
-              placeholder="Search all channels…"
-              aria-label="Search all channels"
+              placeholder={t2('ابحث في كل القنوات…', 'Search all channels…')}
+              aria-label={t2('البحث في كل القنوات', 'Search all channels')}
               value={globalQ}
               onInput={(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
@@ -1769,10 +2071,10 @@ export function Chat() {
                 }
               }}
             />
-            {globalLoading && <div class="tchat-global-status"><Loader2 width={12} height={12} class="icon spin" /> Searching…</div>}
+            {globalLoading && <div class="tchat-global-status"><Loader2 width={12} height={12} class="icon spin" /> {t2('جارٍ البحث…', 'Searching…')}</div>}
             {globalResults !== null && !globalLoading && (
               <div class="tchat-global-results">
-                {globalResults.length === 0 && <div class="tchat-global-empty">No matches.</div>}
+                {globalResults.length === 0 && <div class="tchat-global-empty">{t2('لا نتائج.', 'No matches.')}</div>}
                 {globalResults.map((gr) => {
                   const kindIcon = gr.channelKind === 'project' ? <FolderOpen width={13} height={13} /> :
                     gr.channelKind === 'direct' ? <UserIcon width={13} height={13} /> :
@@ -1824,19 +2126,25 @@ export function Chat() {
         )}
         {user?.role !== 'viewer' && (
           <div class="tchat-rail-actions">
-            <button class="btn btn-sm" onClick={() => setCreateOpen(true)} title="New channel">
-              <Plus width={14} height={14} /> Channel
+            <button class="btn btn-sm" onClick={() => setCreateOpen(true)} title={t2('قناة جديدة', 'New channel')}>
+              <Plus width={14} height={14} /> {t2('قناة', 'Channel')}
             </button>
-            <button class="btn btn-sm" onClick={() => setDirectOpen(true)} title="New direct message">
-              <UserIcon width={14} height={14} /> Direct
+            <button class="btn btn-sm" onClick={() => setDirectOpen(true)} title={t2('رسالة مباشرة جديدة', 'New direct message')}>
+              <UserIcon width={14} height={14} /> {t2('مباشر', 'Direct')}
             </button>
           </div>
         )}
-        <div class="tchat-channel-list" aria-label="Channel list">
+        <div class="tchat-channel-list" aria-label={t2('قائمة القنوات', 'Channel list')}>
           {channels.map((c) => {
             const isActive = c.id === activeId;
-            const onlineNow = c.members.filter((m) => presence.has(m.userId) && m.userId !== meId).length;
+            const onlineNow = c.kind === 'direct' && c.members.some((m) => m.userId !== meId && presence.has(m.userId));
             const label = channelLabel(c, { id: meId });
+            const other = c.kind === 'direct' ? c.members.find((m) => m.userId !== meId) : undefined;
+            const draft = lastMsgDraft.current.get(c.id);
+            const preview = draft && c.lastMessageAt && draft.at >= new Date(c.lastMessageAt).getTime() - 1500
+              ? draft.text
+              : msgPreview({ text: c.lastMessage?.text, attachments: [] }, t2('📎 مرفق', '📎 attachment'))
+                || (c.kind === 'project' ? t2('قناة مشروع', 'Project channel') : c.kind === 'direct' ? channelSub(c, { id: meId }) : t2('قناة للفريق', 'Team channel'));
             return (
               <div
                 key={c.id}
@@ -1847,30 +2155,31 @@ export function Chat() {
                   onClick={() => switchChannel(c.id)}
                   role="button"
                   tabIndex={0}
-                  aria-label={c.unread ? `${label}, ${c.unread} unread messages` : label}
+                  aria-label={c.unread ? `${label}, ${t2(`${c.unread} رسالة غير مقروءة`, `${c.unread} unread messages`)}` : label}
                   onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchChannel(c.id); } }}
                 >
-                  <span class="tchat-channel-icon">
-                    {c.kind === 'project' ? <FolderOpen width={15} height={15} /> : c.kind === 'direct' ? <UserIcon width={15} height={15} /> : <Hash width={15} height={15} />}
+                  <span class={`tchat-channel-avatar${onlineNow ? ' online' : ''}`}>
+                    {other
+                      ? <Avatar name={other.displayName || other.username} avatar={avatarUrl(other.userId, other.avatarExt)} size={40} decorative={true} />
+                      : <span class="tchat-channel-avatar-glyph">{channelGlyph(c)}</span>}
+                    <span class="tchat-online-dot" aria-hidden="true" />
                   </span>
                   <span class="tchat-channel-meta">
-                    <div class="tchat-channel-name-row" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                    <span class="tchat-channel-top">
                       <span class="tchat-channel-name">{label}</span>
-                    </div>
-                    <span class="tchat-channel-sub">
-                      {c.kind === 'direct' ? (onlineNow ? `${onlineNow} online` : channelSub(c, { id: meId })) : channelSub(c, { id: meId })}
+                      {c.lastMessageAt && <span class="tchat-channel-time">{fmtTime(c.lastMessageAt)}</span>}
                     </span>
-                  </span>
-                  <span class="tchat-channel-side">
-                    {c.lastMessageAt && <span class="tchat-channel-time">{fmtTime(c.lastMessageAt)}</span>}
-                    {c.unread ? <span class="tchat-unread-badge">{c.unread > 99 ? '99+' : c.unread}</span> : null}
+                    <span class="tchat-channel-bottom">
+                      <span class={`tchat-channel-preview${c.unread ? ' unread' : ''}`}>{preview}</span>
+                      {c.unread ? <span class="tchat-unread-badge">{c.unread > 99 ? '99+' : c.unread}</span> : null}
+                    </span>
                   </span>
                 </div>
                 {canDelete(c) && (
                   <button
                     class="tchat-delete-btn"
-                    title={`Delete channel ${label}`}
-                    aria-label={`Delete channel ${label}`}
+                    title={t2(`حذف ${label}`, `Delete ${label}`)}
+                    aria-label={t2(`حذف ${label}`, `Delete ${label}`)}
                     onClick={(e: Event) => { e.stopPropagation(); setDeleteTarget(c); }}
                   >
                     <X width={12} height={12} />
@@ -1880,7 +2189,7 @@ export function Chat() {
             );
           })}
           {!channels.length && (
-            <div class="tchat-empty-rail">No conversations yet. Create a channel to get started.</div>
+            <div class="tchat-empty-rail">{t2('لا محادثات بعد. أنشئ قناة للبدء.', 'No conversations yet. Create a channel to get started.')}</div>
           )}
         </div>
         </nav>
@@ -1898,18 +2207,39 @@ export function Chat() {
                     onClick={openRail}
                     aria-expanded={isPhone ? railOpen : !railCollapsed}
                     aria-controls="tchat-rail"
-                    title="Toggle channel list"
-                    aria-label="Toggle channel list"
+                    title={t2('إظهار/إخفاء قائمة القنوات', 'Toggle channel list')}
+                    aria-label={t2('إظهار/إخفاء قائمة القنوات', 'Toggle channel list')}
                   >
                     <Menu width={16} height={16} />
                   </button>
                 )}
-                <span class="tchat-channel-icon">{active.kind === 'project' ? <FolderOpen width={15} height={15} /> : active.kind === 'direct' ? <UserIcon width={15} height={15} /> : <Hash width={15} height={15} />}</span>
+                {active.kind === 'direct' ? (() => {
+                  const other = active.members.find((m) => m.userId !== meId);
+                  return (
+                    <span class="tchat-head-avatar">
+                      <Avatar
+                        name={other ? (other.displayName || other.username) : channelLabel(active, { id: meId })}
+                        avatar={other ? avatarUrl(other.userId, other.avatarExt) : null}
+                        size={36}
+                        decorative={true}
+                      />
+                      <span class={`tchat-head-status-dot${other && presence.has(other.userId) ? ' on' : ''}`} aria-hidden="true" />
+                    </span>
+                  );
+                })() : (
+                  <span class="tchat-channel-icon">{channelGlyph(active)}</span>
+                )}
                 <div style="min-width:0">
                   <div class="tchat-head-title">{channelLabel(active, { id: meId })}</div>
                   <div class="tchat-head-sub">
-                    {active.kind === 'project' ? 'Project channel' : active.kind === 'direct' ? 'Direct message' : 'Team channel'}
-                    {viewerOnly ? ' · read-only' : ''}
+                    {active.kind === 'direct'
+                      ? (() => {
+                          const other = active.members.find((m) => m.userId !== meId);
+                          if (typing.length) return <span class="tchat-head-typing">{fmtTyping(typing.map((u) => u.username), ar)}</span>;
+                          return other && presence.has(other.userId) ? t2('متصل الآن', 'online') : t2('رسالة مباشرة', 'Direct message');
+                        })()
+                      : active.kind === 'project' ? t2('قناة مشروع', 'Project channel') : t2('قناة الفريق', 'Team channel')}
+                    {viewerOnly ? (ar ? ' · قراءة فقط' : ' · read-only') : ''}
                   </div>
                 </div>
               </div>
@@ -1919,20 +2249,20 @@ export function Chat() {
                     <button
                       key={m.userId}
                       class="tchat-presence-avatar"
-                      aria-label={`View ${m.displayName || m.username}'s profile`}
+                      aria-label={t2(`عرض ملف ${m.displayName || m.username}`, `View ${m.displayName || m.username}'s profile`)}
                       onClick={() => setLocation(`/user/${m.userId}`)}
                     >
                       <Avatar name={m.displayName || m.username} avatar={avatarUrl(m.userId, m.avatarExt)} size={22} title={m.displayName || m.username} />
                     </button>
                   ))}
                   {(!active.members.length || active.kind === 'channel') && (
-                    <span class="tchat-members-all" title="All members" aria-label="All channel members">
+                    <span class="tchat-members-all" title={t2('كل الأعضاء', 'All members')} aria-label={t2('كل أعضاء القناة', 'All channel members')}>
                       <UsersIcon width={14} height={14} />
                     </span>
                   )}
                 </div>
-                <button class="btn btn-sm" ref={channelSearchBtnRef} onClick={() => setSearchResults((prev) => (prev === null ? [] : null))} aria-pressed={searchResults !== null} title="Search" aria-label="Search messages in this channel">
-                  <Search width={14} height={14} /> Search
+                <button class="btn btn-sm" ref={channelSearchBtnRef} onClick={() => setSearchResults((prev) => (prev === null ? [] : null))} aria-pressed={searchResults !== null} title={t2('بحث', 'Search')} aria-label={t2('البحث في رسائل هذه القناة', 'Search messages in this channel')}>
+                  <Search width={14} height={14} /> {t2('بحث', 'Search')}
                 </button>
                 {active.kind === 'channel' && canManageChannel() && (
                   <div class="tchat-settings-wrap" ref={settingsWrapRef}>
@@ -1952,8 +2282,8 @@ export function Chat() {
                       aria-haspopup="menu"
                       aria-expanded={settingsOpen}
                       aria-controls="tchat-settings-menu"
-                      title="Channel settings"
-                      aria-label="Channel settings"
+                      title={t2('إعدادات القناة', 'Channel settings')}
+                      aria-label={t2('إعدادات القناة', 'Channel settings')}
                     >
                       <Settings width={14} height={14} />
                     </button>
@@ -1962,10 +2292,10 @@ export function Chat() {
                         id="tchat-settings-menu"
                         class="tchat-settings-popover"
                         role="menu"
-                        aria-label="Channel send permissions"
+                        aria-label={t2('صلاحيات الإرسال في القناة', 'Channel send permissions')}
                         onKeyDown={handleSettingsMenuKeyDown}
                       >
-                        <div class="tchat-settings-title">Who can send</div>
+                        <div class="tchat-settings-title">{t2('من يستطيع الإرسال', 'Who can send')}</div>
                         <button
                           ref={firstOptionRef}
                           class={`tchat-settings-option${activeCanSend === 'everyone' ? ' active' : ''}`}
@@ -1975,8 +2305,8 @@ export function Chat() {
                         >
                           <Check width={13} height={13} style={activeCanSend === 'everyone' ? '' : 'visibility:hidden'} />
                           <span>
-                            <span class="tchat-settings-option-name">Everyone can send</span>
-                            <span class="tchat-settings-option-sub">All channel members may post</span>
+                            <span class="tchat-settings-option-name">{t2('الجميع يستطيع الإرسال', 'Everyone can send')}</span>
+                            <span class="tchat-settings-option-sub">{t2('كل أعضاء القناة يمكنهم النشر', 'All channel members may post')}</span>
                           </span>
                         </button>
                         <button
@@ -1987,8 +2317,8 @@ export function Chat() {
                         >
                           <Check width={13} height={13} style={activeCanSend === 'admins' ? '' : 'visibility:hidden'} />
                           <span>
-                            <span class="tchat-settings-option-name">Only admins can send</span>
-                            <span class="tchat-settings-option-sub">Editors and viewers read only</span>
+                            <span class="tchat-settings-option-name">{t2('المدراء فقط يرسلون', 'Only admins can send')}</span>
+                            <span class="tchat-settings-option-sub">{t2('المحررون والعارضون قراءة فقط', 'Editors and viewers read only')}</span>
                           </span>
                         </button>
                       </div>
@@ -2012,8 +2342,8 @@ export function Chat() {
               <div class="tchat-searchbox">
                 <input
                   class="input"
-                  placeholder="Search this channel…"
-                  aria-label="Search messages"
+                  placeholder={t2('ابحث في هذه القناة…', 'Search this channel…')}
+                  aria-label={t2('البحث في الرسائل', 'Search messages')}
                   value={searchQ}
                   onInput={(e: Event) => setSearchQ((e.target as HTMLInputElement).value)}
                   onKeyDown={(e: KeyboardEvent) => {
@@ -2024,35 +2354,43 @@ export function Chat() {
                     channelSearchBtnRef.current?.focus();
                   }
                 }}
-                />
-                {searchResults.length > 0 && (
-                  <div class="tchat-search-results">
-                    {searchResults.map((m) => (
-                      <div class="tchat-search-result" key={m.id}>
-                        <span class="dim">{m.username}</span> {m.text.slice(0, 100) || '📎 attachment'}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {searchResults.length === 0 && <div class="dim" style="padding:6px 10px">No matches.</div>}
+                />                 {searchResults.length > 0 && (
+                   <div class="tchat-search-results">
+                     {searchResults.map((m) => (
+                       <div
+                         class="tchat-search-result"
+                         key={m.id}
+                         role="button"
+                         tabIndex={0}
+                         aria-label={t2('انتقل إلى الرسالة', 'Jump to message')}
+                         onClick={() => { jumpToMessage(m.id); }}
+                         onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpToMessage(m.id); } }}
+                       >
+                         <span class="dim">{m.username}</span>
+                         <span class="tchat-search-hit-text" dangerouslySetInnerHTML={{ __html: snippetHtml(m.text, searchQ) }} />
+                       </div>
+                     ))}
+                   </div>
+                 )}
+                {searchResults.length === 0 && <div class="dim" style="padding:6px 10px">{t2('لا نتائج.', 'No matches.')}</div>}
               </div>
             )}
 
-             <div class="tchat-messages" ref={listRef} role="log" aria-live="polite" aria-relevant="additions" aria-busy={loadingEarly} aria-label="Messages" tabIndex={-1}>
+             <div class="tchat-messages" ref={listRef} role="log" aria-live="polite" aria-relevant="additions" aria-busy={loadingEarly} aria-label={t2('الرسائل', 'Messages')} tabIndex={-1}>
                {noMore && messages.length > 0 && (
-                 <div class="tchat-history-start">Beginning of conversation</div>
+                 <div class="tchat-history-start">{t2('بداية المحادثة', 'Beginning of conversation')}</div>
                )}
                {!noMore && messages.length > 0 && (
                  <button
                    class="tchat-load-earlier"
                    onClick={() => void loadEarlier()}
                    disabled={loadingEarly}
-                   aria-label="Load earlier messages"
+                   aria-label={t2('تحميل الرسائل الأقدم', 'Load earlier messages')}
                  >
                    {loadingEarly ? (
-                     <><Loader2 width={12} height={12} class="icon spin" /> Loading earlier…</>
+                     <><Loader2 width={12} height={12} class="icon spin" /> {t2('جارٍ تحميل الأقدم…', 'Loading earlier…')}</>
                    ) : (
-                     'Load earlier'
+                     t2('تحميل الأقدم', 'Load earlier')
                    )}
                  </button>
                )}
@@ -2061,19 +2399,19 @@ export function Chat() {
                  <div class="tchat-empty-msg">
                    {active?.kind === 'direct' ? (
                      <>
-                       You and {otherDirectName(active)} — say hello
-                       {userCanWrite() && (
-                         <button class="tchat-empty-btn" onClick={() => taRef.current?.focus()}>
-                           Write first message
-                         </button>
-                       )}
+                       {t2('أنت و', 'You and')} {otherDirectName(active)} {t2('— قولا سلاماً', '— say hello')}
+                        {userCanWrite() && (
+                          <button class="tchat-empty-btn" onClick={focusComposer}>
+                            {t2('اكتب أول رسالة', 'Write first message')}
+                          </button>
+                        )}
                      </>
                    ) : active?.kind === 'project' ? (
-                     'Workspace channel'
+                     t2('قناة مساحة العمل', 'Workspace channel')
                    ) : active ? (
-                     `# ${active.name} — Start the conversation`
+                     t2(`# ${active.name} — ابدأ المحادثة`, `# ${active.name} — Start the conversation`)
                    ) : (
-                     'No messages yet.'
+                     t2('لا رسائل بعد.', 'No messages yet.')
                    )}
                  </div>
                )}
@@ -2093,22 +2431,23 @@ export function Chat() {
                   requestAnimationFrame(() => listRef.current?.focus());
                 }
               }}
-              aria-label="Jump to latest"
-              title="Jump to latest"
+              aria-label={t2('انتقل للأحدث', 'Jump to latest')}
+              title={t2('انتقل للأحدث', 'Jump to latest')}
               disabled={!showJump}
               aria-hidden={!showJump}
               tabIndex={showJump ? 0 : -1}
               style={showJump ? undefined : 'visibility:hidden'}
             >
               <ArrowDownToLine width={16} height={16} />
+              {missedCount > 0 && <span class="tchat-jump-badge" aria-hidden="true">{missedCount > 99 ? '99+' : missedCount}</span>}
             </button>
             {deletedNotice && <div role="status" aria-live="polite" class="sr-only">{deletedNotice}</div>}
 
             {/* typing row */}
             {typing.length > 0 && (
               <div class="tchat-typing" role="status">
-                <Loader2 width={12} height={12} class="icon spin" />
-                {typing.map((t) => t.username).join(', ')} {typing.length > 1 ? 'are' : 'is'} typing…
+                <span class="tchat-typing-dots" aria-hidden="true"><i /><i /><i /></span>
+                {fmtTyping(typing.map((u) => u.username), ar)}
               </div>
             )}
 
@@ -2119,106 +2458,126 @@ export function Chat() {
               <div class="tchat-composer">
                 {composer.replyTo && (
                   <div class="tchat-composer-reply">
-                    Replying to {composer.replyTo.username}: {(composer.replyTo.text || '').slice(0, 60) || '📎'}
-                    <button class="tchat-x" onClick={() => setComposer((c) => ({ ...c, replyTo: undefined }))} aria-label="Cancel reply">
+                    {t2('رداً على', 'Replying to')} {composer.replyTo.username}: {(composer.replyTo.text || '').slice(0, 60) || '📎'}
+                    <button class="tchat-x" onClick={() => setComposer((c) => ({ ...c, replyTo: undefined }))} aria-label={t2('إلغاء الرد', 'Cancel reply')}>
                       <X width={12} height={12} />
                     </button>
                   </div>
-                )}
-                {composer.attachments.map((a) => (
-                  <div class="tchat-composer-att" key={a.id}>
-                    {a.kind === 'image' && <AttachImage id={a.id} alt={a.name} />}
-                    <span class="dim">{a.name}</span>
-                    <button class="tchat-x" onClick={() => setComposer((c) => ({ ...c, attachments: c.attachments.filter((x) => x.id !== a.id) }))} aria-label="Remove attachment">
-                      <X width={12} height={12} />
-                    </button>
-                  </div>
-                ))}
-                    <div style="display:flex;gap:8px;align-items:flex-end">
-                      {isRecording && (
-                        <div class="tchat-recording-indicator">
-                          <span class="tchat-recording-pulse" aria-hidden="true"></span>
-                          <span role="status">Recording…</span>
-                          <span aria-hidden="true">{Math.floor(recordTime / 60)}:{ (recordTime % 60).toString().padStart(2, '0') }</span>
-                        </div>
-                      )}
-                      <textarea
-                        ref={taRef}
-                        class="tchat-textarea"
-                        placeholder={isRecording ? "Recording..." : "Type a message…"}
-                        aria-label="Type a message"
-                        rows={2}
-                        maxLength={5000}
-                        value={composer.text}
-                        onInput={(e: Event) => {
-                          const el = e.target as HTMLTextAreaElement;
-                          const v = el.value;
-                          setComposer((c) => ({ ...c, text: v }));
-                          if (v.trim()) sock.sendTyping(active.id);
-                          el.style.height = 'auto';
-                          el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
-                        }}
-                        onKeyDown={(e: KeyboardEvent) => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            void doSend();
-                          }
-                        }}
-                      />
-                      <input
-                        ref={fileInput}
-                        type="file"
-                        multiple
-                        hidden
-                        aria-label="Attach files"
-                        onChange={(e: Event) => {
-                          const el = e.target as HTMLInputElement;
-                          if (el.files) void onPickAttachments(el.files);
-                          el.value = '';
-                        }}
-                      />
-                      <button class="btn btn-icon" title="Attach file" aria-label="Attach file" onClick={() => fileInput.current?.click()}>
-                        <Paperclip width={16} height={16} />
-                      </button>
-                      <button
-                        class={`btn btn-icon ${isRecording ? 'btn-recording' : ''}`}
-                        title={isRecording ? 'Stop voice note' : 'Record a voice note'}
-                        aria-label="Voice note"
-                        aria-pressed={isRecording}
-                        onMouseDown={() => { micDownAt.current = Date.now(); void startRecording(); }}
-                        onMouseUp={() => { stopRecording(); }}
-                        onMouseLeave={() => { if (micDownAt.current !== 0) { micDownAt.current = 0; stopRecording(); } }}
-                        onTouchStart={(e) => { e.preventDefault(); micDownAt.current = Date.now(); void startRecording(); }}
-                        onTouchEnd={(e) => { e.preventDefault(); stopRecording(); }}
-                        onClick={() => {
-                          // A mouse/touch click already ran start+stop via the
-                          // down/up handlers; only a keyboard-activated click
-                          // (no preceding pointerdown) reaches the toggle.
-                          if (micDownAt.current !== 0) { micDownAt.current = 0; return; }
-                          if (isRecording) stopRecording(); else void startRecording();
-                        }}
-                      >
-                        <Mic width={16} height={16} />
-                      </button>
-                      <button class="btn btn-primary" onClick={() => void doSend()} disabled={sending} aria-label="Send">
-                        {sending ? <Loader2 width={16} height={16} class="icon spin" /> : <Send width={16} height={16} />}
-                      </button>
-                    </div>
-                    {composer.text.length > 4800 && (
-                      <span class="tchat-char-counter" aria-live="off">{composer.text.length}/5000</span>
-                    )}
+                )}                 {composer.attachments.map((a) => (
+                   <div class="tchat-composer-att" key={a.id}>
+                     {a.kind === 'image' && <AttachImage id={a.id} alt={a.name} />}
+                     <span class="dim">{a.name}</span>
+                     <button class="tchat-x" onClick={() => setComposer((c) => ({ ...c, attachments: c.attachments.filter((x) => x.id !== a.id) }))} aria-label={t2('إزالة المرفق', 'Remove attachment')}>
+                       <X width={12} height={12} />
+                     </button>
+                   </div>
+                 ))}
+                 <div class="tchat-composer-row">
+                   <div class="tchat-composer-pill">
+                     <button
+                       class="tchat-pill-btn"
+                       title={t2('إيموجي', 'Emoji')}
+                       aria-label={t2('إيموجي', 'Emoji')}
+                       aria-expanded={emojiPanelOpen}
+                       onMouseDown={(e: MouseEvent) => e.preventDefault()}
+                       onClick={() => setEmojiPanelOpen((o) => !o)}
+                     >
+                       <Smile width={18} height={18} />
+                     </button>
+                     <button class="tchat-pill-btn" title={t2('إرفاق ملف', 'Attach file')} aria-label={t2('إرفاق ملف', 'Attach file')} onClick={() => fileInput.current?.click()}>
+                       <Paperclip width={18} height={18} />
+                     </button>
+                     <input
+                       ref={fileInput}
+                       type="file"
+                       multiple
+                       hidden
+                       aria-label={t2('إرفاق ملفات', 'Attach files')}
+                       onChange={(e: Event) => {
+                         const el = e.target as HTMLInputElement;
+                         if (el.files) void onPickAttachments(el.files);
+                         el.value = '';
+                       }}
+                     />
+                     {isRecording ? (
+                       <div class="tchat-recording-inline" role="status">
+                         <span class="tchat-recording-pulse" aria-hidden="true" />
+                         <span class="tchat-recording-time">{Math.floor(recordTime / 60)}:{(recordTime % 60).toString().padStart(2, '0')}</span>
+                         <button class="tchat-pill-btn danger" title={t2('إلغاء التسجيل', 'Discard recording')} aria-label={t2('إلغاء التسجيل', 'Discard recording')} onClick={cancelRecording}>
+                           <Trash2 width={16} height={16} />
+                         </button>
+                       </div>
+                     ) : (
+                       <textarea
+                         ref={taRef}
+                         class="tchat-textarea"
+                         placeholder={t2('اكتب رسالة…', 'Type a message…')}
+                         aria-label={t2('اكتب رسالة', 'Type a message')}
+                         rows={1}
+                         maxLength={5000}
+                         value={composer.text}
+                         onInput={(e: Event) => {
+                           const el = e.target as HTMLTextAreaElement;
+                           const v = el.value;
+                           setComposer((c) => ({ ...c, text: v }));
+                           if (v.trim()) sock.sendTyping(active.id);
+                           el.style.height = 'auto';
+                           el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+                         }}
+                         onKeyDown={(e: KeyboardEvent) => {
+                           if (e.key === 'Enter' && !e.shiftKey) {
+                             e.preventDefault();
+                             void doSend();
+                           }
+                         }}
+                       />
+                     )}
+                   </div>
+                   {isRecording ? (
+                     <button class="tchat-send-fab stop" onClick={stopRecording} disabled={sending} title={t2('إيقاف وإرسال', 'Stop and send')} aria-label={t2('إيقاف وإرسال', 'Stop and send')}>
+                       <span class="tchat-stop-square" aria-hidden="true" />
+                     </button>
+                   ) : (
+                     <button
+                       class={`tchat-send-fab${composer.text.trim() || composer.attachments.length ? '' : ' mic'}`}
+                       onClick={() => {
+                         if (composer.text.trim() || composer.attachments.length) void doSend();
+                         else void startRecording();
+                       }}
+                       disabled={sending}
+                       title={composer.text.trim() || composer.attachments.length ? t2('إرسال', 'Send') : t2('تسجيل رسالة صوتية', 'Record a voice note')}
+                       aria-label={composer.text.trim() || composer.attachments.length ? t2('إرسال', 'Send') : t2('تسجيل رسالة صوتية', 'Record a voice note')}
+                     >
+                       {sending
+                         ? <Loader2 width={18} height={18} class="icon spin" />
+                         : (composer.text.trim() || composer.attachments.length) ? <Send width={18} height={18} /> : <Mic width={18} height={18} />}
+                     </button>
+                   )}
+                 </div>
+                 {emojiPanelOpen && (
+                   <ComposerEmojiPanel
+                     onPick={(emoji) => {
+                       setComposer((c) => ({ ...c, text: c.text + emoji }));
+                       requestAnimationFrame(() => taRef.current?.focus());
+                     }}
+                     onClose={() => setEmojiPanelOpen(false)}
+                   />
+                 )}
+                 {composer.text.length > 4800 && (
+                   <span class="tchat-char-counter" aria-live="off">{composer.text.length}/5000</span>
+                 )}
 
-              </div>
+               </div>
             ) : viewerOnly ? (
-              <div class="tchat-readonly" role="status">Viewer — you can read this channel but not reply.</div>
+              <div class="tchat-readonly" role="status">{t2('عارض — تستطيع قراءة هذه القناة بلا رد.', 'Viewer — you can read this channel but not reply.')}</div>
             ) : (
-              <div class="tchat-readonly" role="status">Only admins can send in this channel.</div>
+              <div class="tchat-readonly" role="status">{t2('المدراء فقط يرسلون في هذه القناة.', 'Only admins can send in this channel.')}</div>
             )}
           </>
         ) : (
           <div class="tchat-main-empty">
             <MessageCircle width={32} height={32} class="icon" />
-            <p>Select a conversation to start chatting.</p>
+            <p>{t2('اختر محادثة لتبدأ الدردشة.', 'Select a conversation to start chatting.')}</p>
           </div>
         )}
       </div>
@@ -2242,20 +2601,20 @@ export function Chat() {
             onSubmit={(e: Event) => { e.preventDefault(); void createChannel(); }}
           >
             <div class="reauth-avatar" aria-hidden="true"><Plus width={24} height={24} /></div>
-            <div class="reauth-title" id="chat-create-title" style="text-align:center">New channel</div>
-            <p class="settings-hint" style="text-align:center">Team-wide channel — every member can read and post.</p>
+            <div class="reauth-title" id="chat-create-title" style="text-align:center">{t2('قناة جديدة', 'New channel')}</div>
+            <p class="settings-hint" style="text-align:center">{t2('قناة للفريق كله — كل عضو يقرأ وينشر.', 'Team-wide channel — every member can read and post.')}</p>
             <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
               <input
                 class="input"
-                placeholder="Channel name"
-                aria-label="Channel name"
+                placeholder={t2('اسم القناة', 'Channel name')}
+                aria-label={t2('اسم القناة', 'Channel name')}
                 value={newChannelName}
                 onInput={(e: Event) => setNewChannelName((e.target as HTMLInputElement).value)}
               />
             </div>
             <div style="display:flex;gap:8px;margin-top:14px;justify-content:center">
-              <button class="btn-ghost sm" type="button" onClick={() => setCreateOpen(false)}>Cancel</button>
-              <button class="btn-primary sm" type="submit">Create</button>
+              <button class="btn-ghost sm" type="button" onClick={() => setCreateOpen(false)}>{t('common.cancel')}</button>
+              <button class="btn-primary sm" type="submit">{t2('إنشاء', 'Create')}</button>
             </div>
           </form>
         </div>
@@ -2274,7 +2633,7 @@ export function Chat() {
         >
           <div class="modal-card reauth-card" role="dialog" aria-modal="true" aria-labelledby="chat-direct-title">
             <div class="reauth-avatar" aria-hidden="true"><UserIcon width={24} height={24} /></div>
-            <div class="reauth-title" id="chat-direct-title" style="text-align:center">New direct message</div>
+            <div class="reauth-title" id="chat-direct-title" style="text-align:center">{t2('رسالة مباشرة جديدة', 'New direct message')}</div>
             <div class="tchat-user-picker">
               {allUsers
                 .filter((u) => u.id !== meId)
@@ -2284,7 +2643,7 @@ export function Chat() {
                     key={u.id}
                     role="button"
                     tabIndex={0}
-                    aria-label={`Start a direct message with ${u.profile?.displayName || u.username}`}
+                    aria-label={t2(`ابدأ رسالة مباشرة مع ${u.profile?.displayName || u.username}`, `Start a direct message with ${u.profile?.displayName || u.username}`)}
                     onClick={() => void startDirect(u.id)}
                     onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void startDirect(u.id); } }}
                   >
@@ -2293,10 +2652,10 @@ export function Chat() {
                     <span class="dim" style="margin-left:auto">{u.role}</span>
                   </div>
                 ))}
-              {!allUsers.filter((u) => u.id !== meId).length && <div class="dim">No other members yet.</div>}
+              {!allUsers.filter((u) => u.id !== meId).length && <div class="dim">{t2('لا أعضاء آخرين بعد.', 'No other members yet.')}</div>}
             </div>
             <div style="display:flex;gap:8px;margin-top:14px;justify-content:center">
-              <button class="btn-ghost sm" onClick={() => setDirectOpen(false)}>Close</button>
+              <button class="btn-ghost sm" onClick={() => setDirectOpen(false)}>{t('common.close')}</button>
             </div>
           </div>
         </div>
@@ -2306,22 +2665,22 @@ export function Chat() {
       <ConfirmModal
         open={!!deleteTarget}
         danger
-        title={`Delete #${deleteTarget?.name || ''}?`}
-        confirmLabel="Delete"
+        title={t2(`حذف #${deleteTarget?.name || ''}؟`, `Delete #${deleteTarget?.name || ''}?`)}
+        confirmLabel={t('common.delete')}
         onConfirm={() => void runDelete()}
         onCancel={() => setDeleteTarget(null)}
-        message="This deletes the channel and all its messages. This cannot be undone."
+        message={t2('يحذف هذا القناة وكل رسائلها ولا يمكن التراجع.', 'This deletes the channel and all its messages. This cannot be undone.')}
       />
 
       {/* message delete confirm */}
       <ConfirmModal
         open={!!deleteMsgTarget}
         danger
-        title="Delete message?"
-        confirmLabel="Delete"
+        title={t2('حذف الرسالة؟', 'Delete message?')}
+        confirmLabel={t('common.delete')}
         onConfirm={() => void doDeleteMessage()}
         onCancel={() => setDeleteMsgTarget(null)}
-        message="This message will be permanently deleted. This cannot be undone."
+        message={t2('ستُحذف هذه الرسالة نهائياً ولا يمكن التراجع.', 'This message will be permanently deleted. This cannot be undone.')}
       />
 
       {/* attachment lightbox */}
@@ -2333,6 +2692,24 @@ export function Chat() {
           onIndexChange={(i) => setLightbox((lb) => (lb ? { ...lb, index: i } : lb))}
         />
       )}
+
+      {/* WhatsApp-style message action menu (contextmenu / long-press / ⋮) */}
+      {ctxMenu && (() => {
+        const msg = messages.find((m) => m.id === ctxMenu.msgId);
+        if (!msg) return null;
+        const isMine = msg.userId === meId;
+        return (
+          <MessageContextMenu
+            message={msg}
+            mine={isMine}
+            canDeleteMsg={isMine || user?.role === 'admin' || canManageChannel()}
+            canWrite={userCanWrite()}
+            anchorRect={ctxMenu.rect}
+            onAction={(a, emoji) => { void handleMsgAction(msg, a, emoji); }}
+            onClose={() => setCtxMenu(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

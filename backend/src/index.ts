@@ -2186,6 +2186,14 @@ app.get('/api/updates', requireAdmin, async (_req: any, res) => {
   }
 });
 
+app.get('/api/updates/log', requireAdmin, updateCheckLimiter, (_req: any, res) => {
+  try {
+    res.json(componentUpdates.readUpdateLog());
+  } catch {
+    res.status(500).json({ error: 'Internal error' });
+  }
+});
+
 app.post('/api/updates/check', requireAdmin, updateCheckLimiter, async (req: any, res) => {
   try {
     res.json(await componentUpdates.checkNow({ ip: req.ip, userId: req.user?.id }));

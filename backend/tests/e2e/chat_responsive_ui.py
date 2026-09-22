@@ -18,6 +18,11 @@ import os
 import sys
 import time
 
+# Windows consoles default to a charmap codec; the UI now emits Arabic day
+# labels ("اليوم"), so force UTF-8 before printing any check details.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import jwt
 import requests
 from playwright.sync_api import sync_playwright
@@ -185,12 +190,12 @@ def main() -> int:
             pg.wait_for_selector(".tchat-msg", timeout=10000)
             time.sleep(1)
 
-            # D1: Rail is ~270px wide, burger hidden, backdrop hidden
+            # D1: Rail is ~300px wide, burger hidden, backdrop hidden
             rail = pg.locator(".tchat-rail")
             rail_box = rail.bounding_box()
             check(
-                "desktop: rail width is 270px",
-                rail_box is not None and 265 <= rail_box["width"] <= 280,
+                "desktop: rail width is 300px",
+                rail_box is not None and 295 <= rail_box["width"] <= 310,
                 f"width={rail_box['width'] if rail_box else 'None'}",
             )
             burger_d = pg.locator(".tchat-burger")
@@ -209,7 +214,8 @@ def main() -> int:
             check("desktop: day separator is present", day_seps.count() >= 1)
             if day_seps.count() > 0:
                 sep_text = day_seps.first.inner_text()
-                check("desktop: day separator says 'Today'", "Today" in sep_text, sep_text)
+                check("desktop: day separator says 'Today'",
+                      "Today" in sep_text or "اليوم" in sep_text, sep_text)
 
             # D3: Message grouping -- consecutive same-user msg has .grouped
             grouped = pg.locator(".tchat-msg.grouped")
@@ -388,12 +394,18 @@ def main() -> int:
             # P1: Rail hidden by default (drawer, translated off-screen).
             #     `is_visible()` returns True for a translateX(-110%) drawer (it
             #     still has a bounding box), so check the box is fully off the
-            #     left edge instead.
+            #     edge instead.  Direction-aware: the app is RTL-first, so the
+            #     closed drawer may sit off the RIGHT edge (x >= viewport) in
+            #     RTL or off the LEFT edge (x+width <= 0) in LTR.
             rail_p = pg.locator("#tchat-rail")
             rail_box_p = rail_p.bounding_box()
+            vp_w = pg.evaluate("() => window.innerWidth")
             rail_offscreen = (
                 rail_box_p is not None
-                and rail_box_p["x"] + rail_box_p["width"] <= 0
+                and (
+                    rail_box_p["x"] + rail_box_p["width"] <= 0
+                    or rail_box_p["x"] >= vp_w - 1
+                )
             )
             check(
                 "phone: rail hidden by default (drawer)",
@@ -414,15 +426,22 @@ def main() -> int:
                   pg.locator(".tchat-backdrop.open").count() >= 1)
 
             if rail_open:
-                # P4: Backdrop click closes drawer. The rail is z-95 and spans
-                #     the left 300px, so its center overlays the backdrop's
-                #     center -- click a point to the RIGHT of the drawer.
+                # P4: Backdrop click closes drawer. Pick a point on the
+                #     backdrop that is NOT under the drawer (direction-aware:
+                #     the drawer docks right in RTL, left in LTR).
                 backdrop_p = pg.locator(".tchat-backdrop.open")
                 bd_box = backdrop_p.bounding_box()
-                if bd_box is not None:
-                    backdrop_p.click(
-                        position={"x": min(360, bd_box["width"] - 10), "y": 400}
-                    )
+                rail_now = rail_p.bounding_box()
+                if bd_box is not None and rail_now is not None:
+                    rail_center = rail_now["x"] + rail_now["width"] / 2
+                    if rail_center > bd_box["x"] + bd_box["width"] / 2:
+                        # Drawer docked right -> click left of it
+                        click_x = max(10, rail_now["x"] - 40)
+                    else:
+                        # Drawer docked left -> click right of it
+                        click_x = min(bd_box["width"] - 10,
+                                      rail_now["x"] + rail_now["width"] + 40)
+                    backdrop_p.click(position={"x": click_x, "y": 400})
                 else:
                     backdrop_p.click()
                 time.sleep(0.5)

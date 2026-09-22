@@ -4,6 +4,7 @@ import { ArrowUpRight, LayoutGrid } from 'lucide-preact';
 import { listProjects } from '../api';
 import type { Project } from '../api';
 import { CrashBadge } from '../components/CrashBadge';
+import { useI18n } from '../i18n';
 import { fmtCpu, fmtMem } from '../lib/limits';
 import { relTime } from '../lib/time';
 
@@ -16,6 +17,7 @@ import { relTime } from '../lib/time';
 
 export function Planner() {
   const [, setLocation] = useHashLocation();
+  const { t, t2 } = useI18n();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<'recent' | 'alpha'>('recent');
@@ -63,8 +65,8 @@ export function Planner() {
     <div class="view">
       <div class="proj-header">
         <div>
-          <h1 class="hero-title" style="font-size:1.5rem">Planner</h1>
-          <p class="hero-sub" style="margin:0">Visual planning for every project — open a board and arrange sticky notes, tasks and arrows.</p>
+          <h1 class="hero-title" style="font-size:1.5rem">{t('nav.planner')}</h1>
+          <p class="hero-sub" style="margin:0">{t2('تخطيط بصري لكل مشروع — افتح لوحة ورتّب الملاحظات والمهام والأسهم.', 'Visual planning for every project — open a board and arrange sticky notes, tasks and arrows.')}</p>
         </div>
       </div>
 
@@ -72,13 +74,13 @@ export function Planner() {
         <div class="proj-search-row">
           <input
             class="modern-input proj-search"
-            placeholder="Filter projects by name, slug or description…"
+            placeholder={t2('رشّح المشاريع بالاسم أو الوصف…', 'Filter projects by name, slug or description…')}
             value={query}
             onInput={(e: any) => setQuery(e.currentTarget.value)}
           />
           <select class="modern-input chat-sel" value={sort} onChange={(e: any) => setSort(e.currentTarget.value as 'recent' | 'alpha')}>
-            <option value="recent">Recently edited</option>
-            <option value="alpha">Name (A–Z)</option>
+            <option value="recent">{t2('الأحدث تعديلاً', 'Recently edited')}</option>
+            <option value="alpha">{t2('الاسم (أ–ي)', 'Name (A–Z)')}</option>
           </select>
         </div>
       </div>
@@ -86,7 +88,7 @@ export function Planner() {
       {error ? (
         <div class="panel" style="margin-top: 16px">
           <div class="empty-state">
-            <div style="color: var(--danger); margin-bottom: 8px" role="alert">Could not load projects</div>
+            <div style="color: var(--danger); margin-bottom: 8px" role="alert">{t2('تعذّر تحميل المشاريع', 'Could not load projects')}</div>
             <div class="dim">{error}</div>
           </div>
         </div>
@@ -94,7 +96,7 @@ export function Planner() {
         <div class="panel" style="margin-top: 16px">
           <div class="empty-state">
             <div class="big">…</div>
-            <div class="dim" role="status">Loading projects…</div>
+            <div class="dim" role="status">{t('common.loading')}</div>
           </div>
         </div>
       ) : visible.length === 0 ? (
@@ -103,10 +105,10 @@ export function Planner() {
             <div class="big">
               <LayoutGrid width={28} height={28} style="margin: 0 auto" />
             </div>
-            <div class="dim">{query ? 'No projects match that search.' : 'No projects yet — create one and its planning canvas will appear here.'}</div>
+            <div class="dim">{query ? t('projects.empty') : t2('لا توجد مشاريع بعد — أنشئ واحداً وستظهر لوحة التخطيط هنا.', 'No projects yet — create one and its planning canvas will appear here.')}</div>
             {!query && (
               <button class="btn-ghost sm" style="margin-top: 12px" onClick={() => setLocation('/projects')}>
-                Go to Projects
+                {t('nav.projects')}
               </button>
             )}
           </div>
@@ -130,7 +132,7 @@ const handleCardKeyDown = (path: string) => (e: KeyboardEvent) => {
               >
                 <div class="project-card-header">
                   <h3>{p.name}</h3>
-                  <span class={`status-badge ${p.status}`}>{p.status}</span>
+                  <span class={`status-badge ${p.status}`}>{t(`status.${p.status}`)}</span>
                   {p.crash && <CrashBadge crash={p.crash} />}
                 </div>
                 <div class="project-desc">{p.description || `Workspace ${p.slug}`}</div>
@@ -145,15 +147,15 @@ const handleCardKeyDown = (path: string) => (e: KeyboardEvent) => {
                       ))
                       : <span class="meta-chip">{p.slug}</span>
                   }
-                  {p.limits?.cpu && <span class="meta-chip" title="CPU limit">{fmtCpu(p.limits.cpu)}</span>}
-                  {p.limits?.memory && <span class="meta-chip" title="Memory limit">RAM {fmtMem(p.limits.memory)}</span>}
+                  {p.limits?.cpu && <span class="meta-chip" title={t('misc.cpuLimitChip')}>{fmtCpu(p.limits.cpu)}</span>}
+                  {p.limits?.memory && <span class="meta-chip" title={t('misc.memLimitChip')}>RAM {fmtMem(p.limits.memory)}</span>}
                 </div>
                 <div class="card-footer planner-footer">
                   <span class={`plan-edit ${edited ? '' : 'plan-new'}`}>
-                    {edited ? `Canvas edited ${edited} ago` : 'Canvas not started'}
+                    {edited ? t2(`عُدّلت اللوحة قبل ${edited}`, `Canvas edited ${edited} ago`) : t2('اللوحة لم تبدأ', 'Canvas not started')}
                   </span>
                   <button class="btn-ghost sm" onClick={(e) => { e.stopPropagation(); setLocation(`/project/${p.slug}?tab=canvas`); }}>
-                    Open board <ArrowUpRight width={13} height={13} class="icon" />
+                    {t2('افتح اللوحة', 'Open board')} <ArrowUpRight width={13} height={13} class="icon" />
                   </button>
                 </div>
               </div>

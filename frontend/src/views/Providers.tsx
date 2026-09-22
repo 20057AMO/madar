@@ -9,6 +9,7 @@ import {
   Timer,
 } from 'lucide-preact';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { useI18n } from '../i18n';
 import {
   getProviders,
   getProviderTemplates,
@@ -29,7 +30,14 @@ import {
   type KnownTemplate,
 } from '../api';
 
-const TYPE_LABEL: Record<ProviderType, string> = {
+const TYPE_LABEL_AR: Record<ProviderType, string> = {
+  ollama: 'Ollama',
+  openai: 'متوافق مع OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Gemini',
+  azure: 'Azure OpenAI',
+};
+const TYPE_LABEL_EN: Record<ProviderType, string> = {
   ollama: 'Ollama',
   openai: 'OpenAI-compatible',
   anthropic: 'Anthropic',
@@ -56,6 +64,7 @@ function storeLockEnabled(enabled: boolean): void {
 }
 
 export function Providers() {
+  const { t, t2 } = useI18n();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -119,7 +128,7 @@ export function Providers() {
       setLocked(true);
       return true;
     }
-    setError(err?.message || 'Failed to load providers');
+    setError(err?.message || t2('فشل تحميل المزوّدين', 'Failed to load providers'));
     return false;
   };
 
@@ -248,12 +257,12 @@ export function Providers() {
         setLocked(false);
         setUnlockNotice({
           type: 'info',
-          text: 'No providers password is set — protection is off. You can enable it from Settings → Providers Security.',
+          text: t2('لا كلمة مرور للمزوّدين — الحماية متوقفة. يمكنك تفعيلها من الإعدادات ← أمان المزوّدين.', 'No providers password is set — protection is off. You can enable it from Settings → Providers Security.'),
         });
         await refresh();
         return;
       }
-      if (!res.unlockToken) throw new Error('Incorrect providers password.');
+      if (!res.unlockToken) throw new Error(t2('كلمة مرور المزوّدين غير صحيحة.', 'Incorrect providers password.'));
       const minutes = Math.max(1, Math.round((res.expiresInSec || 1800) / 60));
       setProvidersUnlock(res.unlockToken, res.expiresInSec || 1800);
       storeLockEnabled(true);
@@ -262,12 +271,12 @@ export function Providers() {
       setUnlockErr(null);
       setLockReason(null);
       setLocked(false);
-      setUnlockNotice({ type: 'ok', text: `Unlocked · ${minutes} min` });
+      setUnlockNotice({ type: 'ok', text: t2(`فُتح القفل · ${minutes} دقيقة`, `Unlocked · ${minutes} min`) });
       await refresh();
     } catch (err: any) {
       // Wrong password, cooldown, network — all stay on this page with an
       // inline message. The session is untouched.
-      setUnlockErr(err?.message || 'Unlock failed');
+      setUnlockErr(err?.message || t2('فشل فتح القفل', 'Unlock failed'));
     } finally {
       setUnlockLoading(false);
     }
@@ -290,7 +299,7 @@ export function Providers() {
     setLocked(true);
     if (!serverLocked) {
       setRelockWarn(
-        'Locked locally, but the server could not lock other devices. You can re-lock from Settings → Providers Security.'
+        t2('قُفل محلياً لكن الخادم لم يستطع قفل بقية الأجهزة. أعد القفل من الإعدادات ← أمان المزوّدين.', 'Locked locally, but the server could not lock other devices. You can re-lock from Settings → Providers Security.')
       );
     }
   };
@@ -300,11 +309,10 @@ export function Providers() {
     return (
       <div class="view">
         <div class="hero">
-          <span class="hero-badge"><KeyRound width={12} height={12} /> Providers</span>
-          <h1 class="hero-title" style="font-size: 1.5rem">Providers</h1>
+          <span class="hero-badge"><KeyRound width={12} height={12} /> {t('nav.providers')}</span>
+          <h1 class="hero-title" style="font-size: 1.5rem">{t2('المزوّدون', 'Providers')}</h1>
           <p class="hero-sub">
-            Manage any chat provider (Ollama, OpenRouter, OpenAI, Google AI Studio, Anthropic,
-            Groq, DeepSeek…). Paste an API key — everything else is detected automatically.
+            {t2('أدر أي مزوّد محادثة (Ollama أو OpenRouter أو OpenAI أو Google AI Studio أو Anthropic أو Groq أو DeepSeek…). الصق مفتاح API — يُكتشف كل شيء آخر تلقائياً.', 'Manage any chat provider (Ollama, OpenRouter, OpenAI, Google AI Studio, Anthropic, Groq, DeepSeek…). Paste an API key — everything else is detected automatically.')}
           </p>
         </div>
         <div class="providers-grid" aria-hidden="true">
@@ -321,7 +329,7 @@ export function Providers() {
           ))}
         </div>
 <div class="inline-loading" style="justify-content:center; margin-top:18px;" role="status">
-          <Loader2 width={14} height={14} class="icon spin" /> Checking providers…
+          <Loader2 width={14} height={14} class="icon spin" /> {t2('جارٍ فحص المزوّدين…', 'Checking providers…')}
         </div>
       </div>
     );
@@ -332,29 +340,27 @@ export function Providers() {
     return (
       <div class="view">
         <div class="hero">
-          <span class="hero-badge"><KeyRound width={12} height={12} /> Providers</span>
-          <h1 class="hero-title" style="font-size: 1.5rem">Providers</h1>
+          <span class="hero-badge"><KeyRound width={12} height={12} /> {t('nav.providers')}</span>
+          <h1 class="hero-title" style="font-size: 1.5rem">{t2('المزوّدون', 'Providers')}</h1>
           <p class="hero-sub">
             {lockReason === 'idle'
-              ? 'Auto-relocked after inactivity — enter the Providers password to continue.'
+              ? t2('أُعيد القفل تلقائياً بعد الخمول — أدخل كلمة مرور المزوّدين للمتابعة.', 'Auto-relocked after inactivity — enter the Providers password to continue.')
               : lockReason === 'expired'
-                ? 'Your unlock window ended — enter the Providers password to continue.'
-                : 'Protection is enabled for this page.'}
+                ? t2('انتهت نافذة الفتح — أدخل كلمة مرور المزوّدين للمتابعة.', 'Your unlock window ended — enter the Providers password to continue.')
+                : t2('الحماية مفعّلة لهذه الصفحة.', 'Protection is enabled for this page.')}
           </p>
         </div>
         <div class="modal-overlay static-overlay">
           <form class="modal-card unlock-card" onSubmit={doUnlock}>
             <div class="reauth-avatar" aria-hidden="true"><Lock width={24} height={24} /></div>
-            <div class="reauth-title" style="text-align:center;">Providers locked</div>
+            <div class="reauth-title" style="text-align:center;">{t2('المزوّدون مقفولون', 'Providers locked')}</div>
             <p class="settings-hint" style="text-align:center;">
-              A second-layer password protects your API keys. Enter the
-              Providers password — the page stays open for 30 minutes.
-              A wrong attempt keeps you signed in.
+              {t2('كلمة مرور ثانية تحمي مفاتيح API. أدخل كلمة مرور المزوّدين — تبقى الصفحة مفتوحة 30 دقيقة، والمحاولة الخاطئة تبقيك مسجّلاً.', 'A second-layer password protects your API keys. Enter the Providers password — the page stays open for 30 minutes. A wrong attempt keeps you signed in.')}
             </p>
             <input
               class="modern-input"
               type="password"
-              placeholder="Providers password"
+              placeholder={t2('كلمة مرور المزوّدين', 'Providers password')}
               autoFocus
               value={unlockPw}
               onInput={(e: any) => setUnlockPw(e.target.value)}
@@ -363,18 +369,18 @@ export function Providers() {
             <button class="btn-primary sm" type="submit" disabled={unlockLoading || !unlockPw} style="width:100%;">
               {unlockLoading ? (
                 <span style="display:inline-flex;align-items:center;gap:6px;">
-                  <Loader2 width={14} height={14} class="icon spin" /> Checking…
+                  <Loader2 width={14} height={14} class="icon spin" /> {t2('جارٍ التحقق…', 'Checking…')}
                 </span>
               ) : (
                 <span style="display:inline-flex;align-items:center;gap:6px;">
-                  <LockOpen width={14} height={14} /> Unlock
+                  <LockOpen width={14} height={14} /> {t2('فتح القفل', 'Unlock')}
                 </span>
               )}
             </button>
             <p class="settings-hint" style="margin-top:10px; text-align:center;">
-              Forgot it? Reset it from{' '}
-              <a href="#/settings" style="color: var(--accent)">Settings → Providers Security</a>{' '}
-              using your account password.
+              {t2('نسيتها؟ أعد ضبطها من', 'Forgot it? Reset it from')}
+              <a href="#/settings" style="color: var(--accent)">{t2(' الإعدادات ← أمان المزوّدين', ' Settings → Providers Security')}</a>
+              {t2(' بكلمة مرور حسابك.', ' using your account password.')}
             </p>
           </form>
         </div>
@@ -393,28 +399,26 @@ export function Providers() {
   return (
     <div class="view">
       <div class="hero">
-        <span class="hero-badge"><KeyRound width={12} height={12} /> Providers</span>
-        <h1 class="hero-title" style="font-size: 1.5rem">Providers</h1>
+        <span class="hero-badge"><KeyRound width={12} height={12} /> {t('nav.providers')}</span>
+        <h1 class="hero-title" style="font-size: 1.5rem">{t2('المزوّدون', 'Providers')}</h1>
         <p class="hero-sub">
-          Manage any chat provider (Ollama, OpenRouter, OpenAI, Google AI Studio, Anthropic,
-          Groq, DeepSeek…). Paste an API key — the provider, host and name are detected
-          automatically in the background. Changes take effect immediately — no restart needed.
+          {t2('أدر أي مزوّد محادثة (Ollama أو OpenRouter أو OpenAI أو Google AI Studio أو Anthropic أو Groq أو DeepSeek…). الصق مفتاح API — يُكتشف المزوّد والمضيف والاسم تلقائياً بالخلفية. التغييرات تفعّل فوراً بلا إعادة تشغيل.', 'Manage any chat provider (Ollama, OpenRouter, OpenAI, Google AI Studio, Anthropic, Groq, DeepSeek…). Paste an API key — the provider, host and name are detected automatically in the background. Changes take effect immediately — no restart needed.')}
         </p>
       </div>
 
       <div style="display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 14px; align-items: center;">
         {minutesLeft > 0 && (
-          <span class="badge-ok unlock-countdown" title="Time remaining before this page locks again">
-            <Timer width={11} height={11} /> unlocked · {minutesLeft} min left
+          <span class="badge-ok unlock-countdown" title={t2('الوقت المتبقي قبل قفل الصفحة مجدداً', 'Time remaining before this page locks again')}>
+            <Timer width={11} height={11} /> {t2(`مفتوح · ${minutesLeft} دقيقة متبقية`, `unlocked · ${minutesLeft} min left`)}
           </span>
         )}
         {lockConfigured && (
-          <button class="btn-ghost sm" onClick={lockNow} title="Lock on all tabs and devices">
-            <span class="icon-wrap"><Lock width={13} height={13} /></span> Lock now
+          <button class="btn-ghost sm" onClick={lockNow} title={t2('قفل على كل التبويبات والأجهزة', 'Lock on all tabs and devices')}>
+            <span class="icon-wrap"><Lock width={13} height={13} /></span> {t2('قفل الآن', 'Lock now')}
           </button>
         )}
         <button class="btn-primary sm" onClick={() => setAdding(true)}>
-          <span class="icon-wrap"><Plus width={13} height={13} /></span> Add provider
+          <span class="icon-wrap"><Plus width={13} height={13} /></span> {t2('إضافة مزوّد', 'Add provider')}
         </button>
       </div>
 
@@ -436,19 +440,17 @@ export function Providers() {
 
       {/* First-visit guidance while no lock password is configured */}
       {welcomeOpen && lockConfigured === false && (
-        <div class="modal-overlay" onMouseDown={(e: any) => { if (e.target === e.currentTarget) dismissWelcome(); }}>
-          <div class="modal-card reauth-card" role="dialog" aria-label="Protect your API keys">
+        <div class="modal-overlay" onMouseDown={(e: any) => { if (e.target === e.currentTarget) dismissWelcome(); }}>            <div class="modal-card reauth-card" role="dialog" aria-label={t2('احمِ مفاتيح API', 'Protect your API keys')}>
             <div class="reauth-avatar" aria-hidden="true"><ShieldCheck width={26} height={26} /></div>
-            <div class="reauth-title" style="text-align:center;">Protect your API keys</div>
+            <div class="reauth-title" style="text-align:center;">{t2('احمِ مفاتيح API', 'Protect your API keys')}</div>
             <p class="settings-hint" style="text-align:center;">
-              This page stores provider API keys. You can add a second-layer password so that
-              opening this page requires a quick unlock — even while you are signed in.
+              {t2('تخزّن هذه الصفحة مفاتيح مزوّدي API. يمكنك إضافة كلمة مرور ثانية بحيث يلزم فتح سريع عند فتحها — حتى أثناء تسجيلك.', 'This page stores provider API keys. You can add a second-layer password so that opening this page requires a quick unlock — even while you are signed in.')}
             </p>
             <div style="display:flex; gap:8px; margin-top:8px; justify-content:center; flex-wrap:wrap;">
               <a href="#/settings" class="btn-primary sm" style="text-decoration:none;" onClick={dismissWelcome}>
-                <span class="icon-wrap"><ShieldCheck width={13} height={13} /></span> Enable protection
+                <span class="icon-wrap"><ShieldCheck width={13} height={13} /></span> {t2('تفعيل الحماية', 'Enable protection')}
               </a>
-              <button class="btn-ghost sm" onClick={dismissWelcome}>Not now</button>
+              <button class="btn-ghost sm" onClick={dismissWelcome}>{t2('ليس الآن', 'Not now')}</button>
             </div>
           </div>
         </div>
@@ -482,6 +484,7 @@ function ProviderCard({
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const busyRef = useRef(false);
+  const { t, t2, lang } = useI18n();
 
   // Track dirty state: true if any field differs from the original provider prop.
   const isDirty = name !== provider.name || host !== provider.host || key !== '' || enabled !== provider.enabled;
@@ -532,8 +535,8 @@ function ProviderCard({
     try {
       const r = await testProvider(provider.id);
       const msg = r.ok
-        ? `✓ Connected (${r.modelCount ?? 0} models) • key verified`
-        : `✗ Failed${r.status ? ` (HTTP ${r.status})` : ''}${r.error ? ` — ${r.error}` : ''}`;
+        ? t2(`✓ متصل (${r.modelCount ?? 0} نموذجاً) • تم التحقق من المفتاح`, `✓ Connected (${r.modelCount ?? 0} models) • key verified`)
+        : t2(`✗ فشل${r.status ? ` (HTTP ${r.status})` : ''}${r.error ? ` — ${r.error}` : ''}`, `✗ Failed${r.status ? ` (HTTP ${r.status})` : ''}${r.error ? ` — ${r.error}` : ''}`);
       setTestResult({ ok: r.ok, msg });
       if (r.ok) setTimeout(() => setTestResult(null), 5000);
     } catch (err: any) {
@@ -570,32 +573,32 @@ function ProviderCard({
           <div class="provider-id mono">{provider.id}</div>
         </div>
         <div style="display: flex; align-items: center; gap: 10px">
-          <span class="provider-type">{TYPE_LABEL[provider.type]}</span>
+          <span class="provider-type">{lang === 'ar' ? TYPE_LABEL_AR[provider.type] : TYPE_LABEL_EN[provider.type]}</span>
           <label class="provider-toggle">
             <input
               type="checkbox"
               checked={enabled}
               onChange={(e: any) => setEnabled(e.target.checked)}
             />
-            <span>{enabled ? 'Enabled' : 'Disabled'}</span>
+            <span>{enabled ? t2('مفعّل', 'Enabled') : t2('معطّل', 'Disabled')}</span>
           </label>
         </div>
       </div>
 
-      <label class="field-label">Name</label>
+      <label class="field-label">{t2('الاسم', 'Name')}</label>
       <input class="modern-input" dir="auto" value={name} onInput={(e: any) => setName(e.target.value)} />
 
-      <label class="field-label">Host / Base URL</label>
+      <label class="field-label">{t2('المضيف / الرابط الأساسي', 'Host / Base URL')}</label>
       <input class="modern-input" dir="auto" value={host} onInput={(e: any) => setHost(e.target.value)} />
 
-      <label class="field-label">API key</label>
+      <label class="field-label">{t2('مفتاح API', 'API key')}</label>
       {provider.apiKeyMasked ? (
         <div class="key-row">
           <span class="key-masked mono">{provider.apiKeyMasked}</span>
           <input
             class="modern-input key-replace"
             type="password"
-            placeholder="Replace key…"
+            placeholder={t2('استبدال المفتاح…', 'Replace key…')}
             value={key}
             onInput={(e: any) => setKey(e.target.value)}
           />
@@ -604,24 +607,24 @@ function ProviderCard({
         <input
           class="modern-input"
           type="password"
-          placeholder="API key (optional)"
+          placeholder={t2('مفتاح API (اختياري)', 'API key (optional)')}
           value={key}
           onInput={(e: any) => setKey(e.target.value)}
         />
       )}
 
 {error && <div class="login-error" role="alert">{error}</div>}
-      {saved && <div class="chat-save-msg" role="status">Saved ✓</div>}
+      {saved && <div class="chat-save-msg" role="status">{t2('حُفظ ✓', 'Saved ✓')}</div>}
 
       <div class="provider-actions">
         <button class="btn-ghost sm" onClick={test} disabled={testing}>
-          {testing ? 'Testing…' : 'Test'}
+          {testing ? t2('جارٍ الاختبار…', 'Testing…') : t2('اختبار', 'Test')}
         </button>
         <button class="btn-primary sm" onClick={save} disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? t2('جارٍ الحفظ…', 'Saving…') : t('common.save')}
         </button>
         <button class="btn-danger sm" onClick={remove} disabled={deleting}>
-          {deleting ? 'Deleting…' : 'Delete'}
+          {deleting ? t2('جارٍ الحذف…', 'Deleting…') : t('common.delete')}
         </button>
       </div>
 
@@ -633,9 +636,9 @@ function ProviderCard({
         open={confirmDelete}
         danger
         loading={deleting}
-        title={`Delete provider '${provider.name}'?`}
-        message="The configuration and its stored API key are removed."
-        confirmLabel="Delete"
+        title={t2(`حذف المزوّد '${provider.name}'؟`, `Delete provider '${provider.name}'?`)}
+        message={t2('ستُزال الإعدادات ومفتاح API المخزّن.', 'The configuration and its stored API key are removed.')}
+        confirmLabel={t('common.delete')}
         onConfirm={runDelete}
         onCancel={() => { if (!deleting) setConfirmDelete(false); }}
       />
@@ -658,6 +661,7 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  const { t, t2 } = useI18n();
 
   const seqRef = useRef(0);
   const nameAutoRef = useRef(false);
@@ -708,10 +712,10 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
               nameAutoRef.current = true;
             }
             setDetectState('ok');
-            setDetectMsg(`✓ Detected: ${r.provider.name} (${r.provider.modelCount} models)`);
+            setDetectMsg(t2(`✓ اكتُشف: ${r.provider.name} (${r.provider.modelCount} نموذجاً)`, `✓ Detected: ${r.provider.name} (${r.provider.modelCount} models)`));
           } else {
             setDetectState('fail');
-            setDetectMsg('✗ Not detected from this key.');
+            setDetectMsg(t2('✗ لم يُكتشف من هذا المفتاح.', '✗ Not detected from this key.'));
             setShowAdvanced(true);
           }
         })
@@ -754,7 +758,7 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
     const h = host.trim();
     if (!name.trim() || saving || busyRef.current) return;
     if (!h && !key) {
-      setError('Paste an API key to auto-detect, or open Advanced to set the host.');
+      setError(t2('الصق مفتاح API للكشف التلقائي، أو افتح «متقدم» لضبط المضيف.', 'Paste an API key to auto-detect, or open Advanced to set the host.'));
       return;
     }
     busyRef.current = true;
@@ -773,28 +777,28 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
       if (err.code === 'detection_required') {
         setShowAdvanced(true);
         setDetectState('fail');
-        setDetectMsg('✗ Could not auto-detect — pick a template above or enter the host manually.');
+        setDetectMsg(t2('✗ تعذّر الكشف التلقائي — اختر قالباً أعلاه أو أدخل المضيف يدوياً.', '✗ Could not auto-detect — pick a template above or enter the host manually.'));
       }
-      setError(err.message || 'Failed to add provider');
+      setError(err.message || t2('فشل إضافة المزوّد', 'Failed to add provider'));
       setSaving(false);
       busyRef.current = false;
     }
   };
 
   const statusLabel = () => {
-    if (detectState === 'probing') return '⏳ Probing known providers…';
+    if (detectState === 'probing') return t2('⏳ جارٍ فحص المزوّدين المعروفين…', '⏳ Probing known providers…');
     return null;
   };
 
   return (
     <div class="modal-overlay">
       <form class="modal-card" onSubmit={submit}>
-        <div class="modal-title">Add provider</div>
+        <div class="modal-title">{t2('إضافة مزوّد', 'Add provider')}</div>
         <div class="modal-sub">
-          Paste your API key — everything else is detected automatically.
+          {t2('الصق مفتاح API — يُكتشف كل شيء آخر تلقائياً.', 'Paste your API key — everything else is detected automatically.')}
         </div>
 
-        <label class="field-label">API key</label>
+        <label class="field-label">{t2('مفتاح API', 'API key')}</label>
         <input
           class="modern-input"
           type="password"
@@ -809,7 +813,7 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
           {detectMsg && <div class={`detect-status ${detectState === 'ok' ? 'detect-ok' : detectState === 'fail' ? 'detect-fail' : ''}`}>{detectMsg}</div>}
           {detectState === 'fail' && (
             <div class="detect-quick-picks">
-              <span class="detect-quick-label">Quick pick:</span>
+              <span class="detect-quick-label">{t2('اختيار سريع:', 'Quick pick:')}</span>
               {templates.filter((t) => !t.host.includes('host.docker.internal')).map((t) => (
                 <button key={t.name} class="btn-ghost sm" type="button" onClick={() => applyTemplate(t.name)}>
                   {t.name}
@@ -819,16 +823,16 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
           )}
           {detectState === 'fail' && (
             <button class="btn-ghost sm" type="button" onClick={retryDetect}>
-              ↻ Retry
+              ↻ {t2('إعادة المحاولة', 'Retry')}
             </button>
           )}
         </div>
 
-        <label class="field-label">Name</label>
+        <label class="field-label">{t2('الاسم', 'Name')}</label>
         <input
           class="modern-input"
           dir="auto"
-          placeholder="My Provider"
+          placeholder={t2('مزوّدي', 'My Provider')}
           value={name}
           onInput={(e: any) => { setName(e.target.value); nameAutoRef.current = false; }}
         />
@@ -838,16 +842,16 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
           open={showAdvanced}
           onToggle={(e: any) => setShowAdvanced(e.target.open)}
         >
-          <summary>Advanced (host / type)</summary>
-          <label class="field-label">Template</label>
+          <summary>{t2('متقدم (المضيف / النوع)', 'Advanced (host / type)')}</summary>
+          <label class="field-label">{t2('قالب', 'Template')}</label>
           <select class="modern-input" value="" onChange={(e: any) => applyTemplate(e.target.value)}>
-            <option value="" disabled>Choose a known provider…</option>
+            <option value="" disabled>{t2('اختر مزوّداً معروفاً…', 'Choose a known provider…')}</option>
             {templates.filter((t) => !t.host.includes('host.docker.internal')).map((t) => (
               <option key={t.name} value={t.name}>{t.name}</option>
             ))}
           </select>
 
-          <label class="field-label">Host / Base URL</label>
+          <label class="field-label">{t2('المضيف / الرابط الأساسي', 'Host / Base URL')}</label>
           <input
             class="modern-input"
             dir="auto"
@@ -863,25 +867,28 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
           />
           {type === 'azure' && (
             <div class="field-hint">
-              Azure: Host = your resource endpoint (<code>*.openai.azure.com</code>). Models are picked from
-              your <b>deployments</b> later in chat/agent settings.
+              {t2('Azure: المضيف = نقطة نهاية مصادرك ', 'Azure: Host = your resource endpoint ')}
+              <code>*.openai.azure.com</code>
+              {t2('، وتُختار النماذج من ', ', and models are picked from ')}
+              <b>{t2('عمليات النشر', 'deployments')}</b>
+              {t2(' لاحقاً في إعدادات المحادثة/الوكيل.', ' later in chat/agent settings.')}
             </div>
           )}
 
           <div class="add-provider-row">
             <label class="chat-settings-label">
-              <span>Type</span>
+              <span>{t2('النوع', 'Type')}</span>
               <select class="modern-input chat-sel" value={type} onChange={(e: any) => setType(e.target.value as ProviderType)}>
-                <option value="openai">OpenAI-compatible</option>
+                <option value="openai">{t2('متوافق مع OpenAI', 'OpenAI-compatible')}</option>
                 <option value="ollama">Ollama</option>
                 <option value="anthropic">Anthropic</option>
-                <option value="gemini">Gemini (native)</option>
+                <option value="gemini">{t2('Gemini (أصلي)', 'Gemini (native)')}</option>
                 <option value="azure">Azure OpenAI</option>
               </select>
             </label>
             <label class="provider-toggle" style="align-self: flex-end">
               <input type="checkbox" checked={enabled} onChange={(e: any) => setEnabled(e.target.checked)} />
-              <span>Enabled</span>
+              <span>{t2('مفعّل', 'Enabled')}</span>
             </label>
           </div>
         </details>
@@ -889,9 +896,9 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
         {error && <div class="login-error">{error}</div>}
 
         <div style="display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end">
-          <button class="btn-ghost sm" type="button" onClick={onClose}>Cancel</button>
+          <button class="btn-ghost sm" type="button" onClick={onClose}>{t('common.cancel')}</button>
           <button class="btn-primary sm" type="submit" disabled={saving || !name.trim()}>
-            {saving ? 'Adding…' : 'Add provider'}
+            {saving ? t2('جارٍ الإضافة…', 'Adding…') : t2('إضافة مزوّد', 'Add provider')}
           </button>
         </div>
       </form>

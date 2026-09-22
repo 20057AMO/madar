@@ -3,12 +3,14 @@ import { ArrowLeft, Search } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { listProjects, type Project } from '../api';
 import { ProjectTerminal } from '../components/ProjectTerminal';
+import { useI18n } from '../i18n';
 
 const LS_LAST = 'wsd.terminals.lastProject';
 
 export function Terminals({ params }: { params: { slug?: string } }) {
   const slug = params?.slug;
   const [, setLocation] = useHashLocation();
+  const { t, t2 } = useI18n();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -61,9 +63,9 @@ export function Terminals({ params }: { params: { slug?: string } }) {
     <div class="app-view terminals-page" style="display:flex;flex-direction:column">
       <div class="opencode-toolbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/')}>
-          <ArrowLeft width={13} height={13} class="icon" /> Dashboard
+          <ArrowLeft width={13} height={13} class="icon" /> {t('nav.dashboard')}
         </button>
-        <h1 style="font-weight:600;font-size:0.9rem;margin:0;margin-left:8px">Terminals</h1>
+        <h1 style="font-weight:600;font-size:0.9rem;margin:0;margin-inline-start:8px">{t2('الطرفيات', 'Terminals')}</h1>
         <span style="flex:1" />
       </div>
 
@@ -71,22 +73,22 @@ export function Terminals({ params }: { params: { slug?: string } }) {
         {/* Project picker */}
         <div
           class="terms-picker"
-          style="width:270px;overflow:auto;border-right:1px solid var(--border,#333);padding-right:10px;display:flex;flex-direction:column;gap:6px"
+          style="width:270px;overflow:auto;border-inline-end:1px solid var(--border,#333);padding-inline-end:10px;display:flex;flex-direction:column;gap:6px"
         >
           <div style="position:relative">
             <Search width={12} height={12} class="icon" style="position:absolute;top:7px;left:8px;opacity:.45" />
             <input
               class="modern-input"
               style="width:100%;font-size:0.72rem;padding:5px 8px 5px 24px;box-sizing:border-box"
-              placeholder="Filter projects…"
+              placeholder={t2('تصفية المشاريع…', 'Filter projects…')}
               value={query}
               onInput={(e: any) => setQuery(e.target.value)}
             />
           </div>
           {loading ? (
-            <p style="color:var(--text-3);font-size:0.75rem" role="status">Loading…</p>
+            <p style="color:var(--text-3);font-size:0.75rem" role="status">{t('common.loading')}</p>
           ) : visible.length === 0 ? (
-            <p style="color:var(--text-3);font-size:0.75rem" role="status">No projects match.</p>
+            <p style="color:var(--text-3);font-size:0.75rem" role="status">{t2('لا مشاريع مطابقة.', 'No projects match.')}</p>
           ) : (
             visible.map((p) => {
               const active = selected === p.slug;
@@ -124,8 +126,7 @@ export function Terminals({ params }: { params: { slug?: string } }) {
           ) : (
             <div class="empty-state" style="margin:auto;text-align:center">
               <p style="color:var(--text-3);font-size:0.82rem">
-                Select a project to open its terminal — project and control shells,
-                tabs, command history and quick commands all work here for every project.
+                {t2('اختر مشروعاً لفتح طرفيته — أطراف المشروع والتحكم والتبويبات وسجل الأوامر والأوامر السريعة تعمل هنا لكل مشروع.', 'Select a project to open its terminal — project and control shells, tabs, command history and quick commands all work here for every project.')}
               </p>
             </div>
           )}

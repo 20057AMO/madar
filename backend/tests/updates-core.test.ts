@@ -22,6 +22,7 @@ import {
   isSupportedArch,
   isStrictPublisherVersion,
   applyStateMachine,
+  freshApplyState,
   type ApplyState,
   type ApplyEvent,
 } from '../src/services/updates-core.ts';
@@ -557,6 +558,39 @@ describe('applyStateMachine', () => {
       assert.ok(e.message.includes('idle'), 'mentions current state');
       assert.ok(e.message.includes('downloaded'), 'mentions event');
     }
+  });
+});
+
+/* ── freshApplyState (new-run seeding) ─────────────────────────────────── */
+
+describe('freshApplyState', () => {
+  test('resets from any state to idle', () => {
+    const states: ApplyState[] = [
+      'idle', 'downloading', 'verifying', 'installing', 'restarting',
+      'verifying-boot', 'ok', 'failed', 'rollback',
+    ];
+    for (const s of states) {
+      assert.deepStrictEqual(freshApplyState({ applyState: s }), { applyState: 'idle' }, s);
+    }
+  });
+
+  test('drops stale error / rolledBack / targetVersion / currentVersion from a previous run', () => {
+    const fresh = freshApplyState({
+      applyState: 'failed',
+      currentVersion: '4.99.0',
+      targetVersion: '4.99.1',
+      error: 'failed to boot — rolled back to 4.99.0',
+      rolledBack: true,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    });
+    assert.deepStrictEqual(fresh, { applyState: 'idle' });
+    assert.equal('error' in fresh, false);
+    assert.equal('rolledBack' in fresh, false);
+    assert.equal('targetVersion' in fresh, false);
+    assert.equal('currentVersion' in fresh, false);
+    assert.equal('startedAt' in fresh, false);
+    assert.equal('updatedAt' in fresh, false);
   });
 });
 

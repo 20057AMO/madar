@@ -42,8 +42,8 @@ import type { ActivityDetails } from '../api';
 
 export interface ActivityMeta {
   Icon: any;
-  /** Human label, e.g. "Member added". */
-  label: string;
+  /** i18n key under `activity.*` (e.g. `activity.member_added`), or null for the humanize fallback. */
+  labelKey: string | null;
   /** CSS class suffix used by `.activity-dot.<dotClass>` / `.activity-ico.<dotClass>`. */
   dotClass: string;
   /** Formats the action payload (`details`) as a secondary mono line. */
@@ -68,119 +68,131 @@ function fmtPairs(details: ActivityDetails): string[] {
 
 const fmtGeneric = (details: ActivityDetails): string => fmtPairs(details).join(' · ');
 
-/** All 33 server actions. */
+/** All 33 server actions. Labels resolve through i18n keys under `activity.*`. */
 const META: Record<string, ActivityMeta> = {
   // ── Lifecycle ──
-  created: { Icon: FolderPlus, label: 'Created', dotClass: 'created', fmtDetail: fmtGeneric },
-  recreated: { Icon: RefreshCw, label: 'Recreated', dotClass: 'recreated', fmtDetail: fmtGeneric },
-  duplicated: { Icon: Copy, label: 'Duplicated', dotClass: 'duplicated', fmtDetail: fmtGeneric },
-  imported: { Icon: Upload, label: 'Imported', dotClass: 'imported', fmtDetail: fmtGeneric },
-  restored: { Icon: History, label: 'Restored', dotClass: 'restored', fmtDetail: fmtGeneric },
-  deleted: { Icon: Trash2, label: 'Deleted', dotClass: 'deleted', fmtDetail: fmtGeneric },
-  started: { Icon: Play, label: 'Started', dotClass: 'started', fmtDetail: fmtGeneric },
-  stopped: { Icon: Square, label: 'Stopped', dotClass: 'stopped', fmtDetail: fmtGeneric },
-  cloned: { Icon: GitBranch, label: 'Git cloned', dotClass: 'cloned', fmtDetail: fmtGeneric },
+  created: { Icon: FolderPlus, labelKey: 'activity.created', dotClass: 'created', fmtDetail: fmtGeneric },
+  recreated: { Icon: RefreshCw, labelKey: 'activity.recreated', dotClass: 'recreated', fmtDetail: fmtGeneric },
+  duplicated: { Icon: Copy, labelKey: 'activity.duplicated', dotClass: 'duplicated', fmtDetail: fmtGeneric },
+  imported: { Icon: Upload, labelKey: 'activity.imported', dotClass: 'imported', fmtDetail: fmtGeneric },
+  restored: { Icon: History, labelKey: 'activity.restored', dotClass: 'restored', fmtDetail: fmtGeneric },
+  deleted: { Icon: Trash2, labelKey: 'activity.deleted', dotClass: 'deleted', fmtDetail: fmtGeneric },
+  started: { Icon: Play, labelKey: 'activity.started', dotClass: 'started', fmtDetail: fmtGeneric },
+  stopped: { Icon: Square, labelKey: 'activity.stopped', dotClass: 'stopped', fmtDetail: fmtGeneric },
+  cloned: { Icon: GitBranch, labelKey: 'activity.cloned', dotClass: 'cloned', fmtDetail: fmtGeneric },
   // ── Setup ──
-  updated: { Icon: Settings, label: 'Updated', dotClass: 'updated', fmtDetail: fmtGeneric },
-  env_updated: { Icon: Variable, label: 'Env updated', dotClass: 'env_updated', fmtDetail: fmtGeneric },
-  tags_updated: { Icon: Tags, label: 'Tags updated', dotClass: 'tags_updated', fmtDetail: fmtGeneric },
-  ports_updated: { Icon: Network, label: 'Ports updated', dotClass: 'ports_updated', fmtDetail: fmtGeneric },
-  limits_updated: { Icon: Gauge, label: 'Limits updated', dotClass: 'limits_updated', fmtDetail: fmtGeneric },
+  updated: { Icon: Settings, labelKey: 'activity.updated', dotClass: 'updated', fmtDetail: fmtGeneric },
+  env_updated: { Icon: Variable, labelKey: 'activity.env_updated', dotClass: 'env_updated', fmtDetail: fmtGeneric },
+  tags_updated: { Icon: Tags, labelKey: 'activity.tags_updated', dotClass: 'tags_updated', fmtDetail: fmtGeneric },
+  ports_updated: { Icon: Network, labelKey: 'activity.ports_updated', dotClass: 'ports_updated', fmtDetail: fmtGeneric },
+  limits_updated: { Icon: Gauge, labelKey: 'activity.limits_updated', dotClass: 'limits_updated', fmtDetail: fmtGeneric },
   // ── Content ──
-  notes_saved: { Icon: Save, label: 'Notes saved', dotClass: 'notes_saved', fmtDetail: fmtGeneric },
-  canvas_saved: { Icon: PenTool, label: 'Canvas saved', dotClass: 'canvas_saved', fmtDetail: fmtGeneric },
+  notes_saved: { Icon: Save, labelKey: 'activity.notes_saved', dotClass: 'notes_saved', fmtDetail: fmtGeneric },
+  canvas_saved: { Icon: PenTool, labelKey: 'activity.canvas_saved', dotClass: 'canvas_saved', fmtDetail: fmtGeneric },
   // ── Team ──
-  member_added: { Icon: UserPlus, label: 'Member added', dotClass: 'member_added', fmtDetail: fmtGeneric },
-  member_removed: { Icon: UserMinus, label: 'Member removed', dotClass: 'member_removed', fmtDetail: fmtGeneric },
+  member_added: { Icon: UserPlus, labelKey: 'activity.member_added', dotClass: 'member_added', fmtDetail: fmtGeneric },
+  member_removed: { Icon: UserMinus, labelKey: 'activity.member_removed', dotClass: 'member_removed', fmtDetail: fmtGeneric },
   member_role_changed: {
     Icon: UserCog,
-    label: 'Role changed',
+    labelKey: 'activity.member_role_changed',
     dotClass: 'member_role_changed',
     fmtDetail: fmtGeneric,
   },
   ownership_transferred: {
     Icon: Crown,
-    label: 'Ownership transferred',
+    labelKey: 'activity.ownership_transferred',
     dotClass: 'ownership_transferred',
     fmtDetail: fmtGeneric,
   },
   // ── Snapshots ──
   snapshot_captured: {
     Icon: Camera,
-    label: 'Snapshot captured',
+    labelKey: 'activity.snapshot_captured',
     dotClass: 'snapshot_captured',
     fmtDetail: fmtGeneric,
   },
   snapshot_deleted: {
     Icon: Trash2,
-    label: 'Snapshot deleted',
+    labelKey: 'activity.snapshot_deleted',
     dotClass: 'snapshot_deleted',
     fmtDetail: fmtGeneric,
   },
   snapshot_config: {
     Icon: CalendarClock,
-    label: 'Snapshot schedule changed',
+    labelKey: 'activity.snapshot_config',
     dotClass: 'snapshot_config',
     fmtDetail: fmtGeneric,
   },
-  exported: { Icon: Download, label: 'Exported', dotClass: 'exported', fmtDetail: fmtGeneric },
+  exported: { Icon: Download, labelKey: 'activity.exported', dotClass: 'exported', fmtDetail: fmtGeneric },
   // ── Serve ──
-  serve_started: { Icon: Globe, label: 'Serve started', dotClass: 'serve_started', fmtDetail: fmtGeneric },
-  serve_stopped: { Icon: Globe, label: 'Serve stopped', dotClass: 'serve_stopped', fmtDetail: fmtGeneric },
+  serve_started: { Icon: Globe, labelKey: 'activity.serve_started', dotClass: 'serve_started', fmtDetail: fmtGeneric },
+  serve_stopped: { Icon: Globe, labelKey: 'activity.serve_stopped', dotClass: 'serve_stopped', fmtDetail: fmtGeneric },
   // ── Crash ──
-  crashed: { Icon: TriangleAlert, label: 'Crashed', dotClass: 'crashed', fmtDetail: fmtGeneric },
+  crashed: { Icon: TriangleAlert, labelKey: 'activity.crashed', dotClass: 'crashed', fmtDetail: fmtGeneric },
   crash_cleared: {
     Icon: Check,
-    label: 'Crash cleared',
+    labelKey: 'activity.crash_cleared',
     dotClass: 'crash_cleared',
     fmtDetail: fmtGeneric,
   },
   // ── File reviews ──
   review_opened: {
     Icon: MessageSquare,
-    label: 'Review opened',
+    labelKey: 'activity.review_opened',
     dotClass: 'review_opened',
     fmtDetail: fmtGeneric,
   },
   review_commented: {
     Icon: MessageCircle,
-    label: 'Review commented',
+    labelKey: 'activity.review_commented',
     dotClass: 'review_commented',
     fmtDetail: fmtGeneric,
   },
   review_resolved: {
     Icon: CircleCheck,
-    label: 'Review resolved',
+    labelKey: 'activity.review_resolved',
     dotClass: 'review_resolved',
     fmtDetail: fmtGeneric,
   },
   review_reopened: {
     Icon: RotateCcw,
-    label: 'Review reopened',
+    labelKey: 'activity.review_reopened',
     dotClass: 'review_reopened',
     fmtDetail: fmtGeneric,
   },
   review_deleted: {
     Icon: Trash2,
-    label: 'Review deleted',
+    labelKey: 'activity.review_deleted',
     dotClass: 'review_deleted',
     fmtDetail: fmtGeneric,
   },
   // ── Agents ──
-  agent_run: { Icon: BrainCircuit, label: 'Agent run', dotClass: 'agent_run', fmtDetail: fmtGeneric },
+  agent_run: { Icon: BrainCircuit, labelKey: 'activity.agent_run', dotClass: 'agent_run', fmtDetail: fmtGeneric },
 };
 
 /** Presentation metadata for an action (unknown actions get a neutral fallback). */
 export function activityMeta(action: string): ActivityMeta {
   return META[action] || {
     Icon: Activity,
-    label: humanize(action),
+    labelKey: null,
     dotClass: 'unknown',
     fmtDetail: fmtGeneric,
   };
 }
 
-/** Human label for an action — shared with the Overview quick list. */
+/** Localized human label for an action — shared with the Overview quick list. */
 export function fmtAction(action: string): string {
-  return META[action] ? META[action].label : humanize(action);
+  const meta = META[action];
+  if (meta && meta.labelKey) return tFn(meta.labelKey);
+  return humanize(action);
+}
+
+/**
+ * Late-bound translator — the i18n module can't be imported at the top of this
+ * file (it's a .tsx component module; this is a plain lib module), so consumers
+ * (ActivityPanel / Project) inject it once via `setActivityTranslator`.
+ */
+let tFn = (key: string): string => humanize(key.split('.').pop() || key);
+export function setActivityTranslator(t: (key: string) => string): void {
+  tFn = t;
 }

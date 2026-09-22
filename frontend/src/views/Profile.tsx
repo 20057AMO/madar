@@ -25,6 +25,7 @@ import { PwMeter } from '../components/PwMeter';
 import { ReAuthModal } from '../components/ReAuthModal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { fmtDate, type Msg, AuditLog } from './settings-shared';
+import { useI18n } from '../i18n';
 
 type SensitiveAction = 'revoke-all' | '2fa-disable';
 type IdleChoice = 'off' | '30' | '60' | '120';
@@ -32,6 +33,7 @@ type RelockChoice = 'off' | '5' | '15' | '30';
 
 export function Profile() {
   const { user, logout, refreshUser } = useAuth();
+  const { t, t2, lang } = useI18n();
 
   // ── User profile (display name / email / bio / avatar) ──
   const [profile, setProfile] = useState<UserProfile>({});
@@ -85,7 +87,7 @@ export function Profile() {
       setTotpEnrolling({ secret: r.secret, uri: r.uri });
       setTotpCode('');
     } catch (err: any) {
-      setTotpMsg({ type: 'err', text: err.message || 'Could not start setup.' });
+      setTotpMsg({ type: 'err', text: err.message || t2('تعذّر بدء الإعداد.', 'Could not start setup.') });
     } finally {
       setTotpBusy(false);
     }
@@ -100,11 +102,11 @@ export function Profile() {
       setTotpEnabled(true);
       setTotpEnrolling(null);
       setTotpCode('');
-      setTotpMsg({ type: 'ok', text: 'Two-factor authentication is now active.' });
+      setTotpMsg({ type: 'ok', text: t2('التحقق بخطوتين مفعّل الآن.', 'Two-factor authentication is now active.') });
       setTimeout(() => setTotpMsg(null), 4000);
       getMyActivity(AUDIT_PAGE, 0).then((r) => { setAudit(r.entries || []); setAuditTotal(r.total || 0); }).catch(() => {});
     } catch (err: any) {
-      setTotpMsg({ type: 'err', text: err.message || 'Invalid code.' });
+      setTotpMsg({ type: 'err', text: err.message || t2('رمز غير صحيح.', 'Invalid code.') });
     } finally {
       setTotpBusy(false);
     }
@@ -224,7 +226,7 @@ export function Profile() {
         case '2fa-disable': {
           await totpDisable(accountPassword);
           setTotpEnabled(false);
-          setTotpMsg({ type: 'ok', text: 'Two-factor authentication disabled.' });
+          setTotpMsg({ type: 'ok', text: t2('عُطّل التحقق بخطوتين.', 'Two-factor authentication disabled.') });
           setTimeout(() => setTotpMsg(null), 4000);
           break;
         }
@@ -234,7 +236,7 @@ export function Profile() {
         .then((r) => { setAudit(r.entries || []); setAuditTotal(r.total || 0); })
         .catch(() => {});
     } catch (err: any) {
-      const msg = err.message || 'Operation failed.';
+      const msg = err.message || t2('فشلت العملية.', 'Operation failed.');
       const isRetryable = err.status === 401 || err.status === 429 || (err.status === 400 && /password/i.test(msg));
       fail(msg, isRetryable);
     } finally {
@@ -248,15 +250,15 @@ export function Profile() {
     if (pwLoading) return;
 
     if (!currentPw || !newPw) {
-      setPwMsg({ type: 'err', text: 'Please fill in all fields.' });
+      setPwMsg({ type: 'err', text: t2('يرجى تعبئة جميع الحقول.', 'Please fill in all fields.') });
       return;
     }
     if (newPw !== confirmPw) {
-      setPwMsg({ type: 'err', text: 'New passwords do not match.' });
+      setPwMsg({ type: 'err', text: t2('كلمتا المرور الجديدتان غير متطابقتين.', 'New passwords do not match.') });
       return;
     }
     if (newPw.length < 6) {
-      setPwMsg({ type: 'err', text: 'New password must be at least 6 characters.' });
+      setPwMsg({ type: 'err', text: t2('يجب ألا تقل كلمة المرور الجديدة عن 6 أحرف.', 'New password must be at least 6 characters.') });
       return;
     }
 
@@ -274,15 +276,15 @@ export function Profile() {
         body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
+      if (!res.ok) throw new Error(data.error || t2('فشل', 'Failed'));
       if (data.token) localStorage.setItem('wsd.token', data.token);
       await refreshUser();
-      setPwMsg({ type: 'ok', text: 'Password changed. Other devices were signed out.' });
+      setPwMsg({ type: 'ok', text: t2('تغيّرت كلمة المرور وتم تسجيل خروج بقية الأجهزة.', 'Password changed. Other devices were signed out.') });
       setCurrentPw('');
       setNewPw('');
       setConfirmPw('');
     } catch (err: any) {
-      setPwMsg({ type: 'err', text: err.message || 'Failed' });
+      setPwMsg({ type: 'err', text: err.message || t2('فشل', 'Failed') });
     } finally {
       setPwLoading(false);
     }
@@ -301,9 +303,9 @@ export function Profile() {
       });
       setProfile(r.profile || {});
       await refreshUser();
-      setProfileMsg({ type: 'ok', text: 'Profile saved.' });
+      setProfileMsg({ type: 'ok', text: t2('حُفظ الملف الشخصي.', 'Profile saved.') });
     } catch (err: any) {
-      setProfileMsg({ type: 'err', text: err.message || 'Failed to save profile' });
+      setProfileMsg({ type: 'err', text: err.message || t2('فشل حفظ الملف الشخصي', 'Failed to save profile') });
     } finally {
       setProfileSaving(false);
     }
@@ -314,11 +316,11 @@ export function Profile() {
     e.target.value = '';
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) {
-      setProfileMsg({ type: 'err', text: 'Image too large — max 2 MB.' });
+      setProfileMsg({ type: 'err', text: t2('الصورة كبيرة جداً — الحد الأقصى 2 ميغابايت.', 'Image too large — max 2 MB.') });
       return;
     }
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-      setProfileMsg({ type: 'err', text: 'Unsupported file type — use PNG, JPEG or WebP.' });
+      setProfileMsg({ type: 'err', text: t2('نوع ملف غير مدعوم — استخدم PNG أو JPEG أو WebP.', 'Unsupported file type — use PNG, JPEG or WebP.') });
       return;
     }
     setAvatarBusy(true);
@@ -328,9 +330,9 @@ export function Profile() {
       const r = await getMyProfile();
       setProfile(r.profile || {});
       await refreshUser();
-      setProfileMsg({ type: 'ok', text: 'Avatar updated.' });
+      setProfileMsg({ type: 'ok', text: t2('حُدّثت الصورة الرمزية.', 'Avatar updated.') });
     } catch (err: any) {
-      setProfileMsg({ type: 'err', text: err.message || 'Upload failed' });
+      setProfileMsg({ type: 'err', text: err.message || t2('فشل الرفع', 'Upload failed') });
     } finally {
       setAvatarBusy(false);
     }
@@ -344,9 +346,9 @@ export function Profile() {
       const r = await getMyProfile();
       setProfile(r.profile || {});
       await refreshUser();
-      setProfileMsg({ type: 'ok', text: 'Avatar removed.' });
+      setProfileMsg({ type: 'ok', text: t2('أُزيلت الصورة الرمزية.', 'Avatar removed.') });
     } catch (err: any) {
-      setProfileMsg({ type: 'err', text: err.message || 'Failed to remove avatar' });
+      setProfileMsg({ type: 'err', text: err.message || t2('فشل إزالة الصورة', 'Failed to remove avatar') });
     } finally {
       setAvatarBusy(false);
     }
@@ -355,21 +357,21 @@ export function Profile() {
   return (
     <div class="view">
       <div class="hero">
-        <span class="hero-badge"><UserRound width={12} height={12} /> Profile</span>
-        <h1 class="hero-title" style="font-size: 1.5rem">Profile</h1>
-        <p class="hero-sub">Your account settings — name, avatar, security, and sign-in preferences.</p>
+        <span class="hero-badge"><UserRound width={12} height={12} /> {t('common.profile')}</span>
+        <h1 class="hero-title" style="font-size: 1.5rem">{t2('الملف الشخصي', 'Profile')}</h1>
+        <p class="hero-sub">{t2('إعدادات حسابك — الاسم والصورة والأمان وتفضيلات الدخول.', 'Your account settings — name, avatar, security, and sign-in preferences.')}</p>
       </div>
 
       {/* Profile */}
       <div class="panel settings-section">
         <h2 class="panel-title">
-          <span class="icon-wrap"><UserRound width={14} height={14} /></span> Profile
+          <span class="icon-wrap"><UserRound width={14} height={14} /></span> {t2('الملف الشخصي', 'Profile')}
         </h2>
         <p class="settings-hint">
-          How you appear across the team — name, avatar, bio and contact.
+          {t2('كيف تظهر أمام الفريق — الاسم والصورة والنبذة وجهة الاتصال.', 'How you appear across the team — name, avatar, bio and contact.')}
         </p>
         {profileLoading && user ? (
-          <div class="inline-loading"><Loader2 width={14} height={14} class="icon spin" /> Loading profile…</div>
+          <div class="inline-loading"><Loader2 width={14} height={14} class="icon spin" /> {t('common.loading')}</div>
         ) : (
           <>
             <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap;">
@@ -384,15 +386,15 @@ export function Profile() {
                     <span class="icon-wrap">
                       {avatarBusy ? <Loader2 width={13} height={13} class="icon spin" /> : <ImagePlus width={13} height={13} />}
                     </span>
-                    {profile.avatarExt ? 'Change photo' : 'Upload photo'}
+                    {profile.avatarExt ? t2('تغيير الصورة', 'Change photo') : t2('رفع صورة', 'Upload photo')}
                   </button>
                   {profile.avatarExt && (
                     <button class="btn-danger sm" type="button" onClick={() => setAvatarRemoveOpen(true)} disabled={avatarBusy}>
-                      {avatarBusy ? <Loader2 width={13} height={13} class="icon spin" /> : 'Remove'}
+                      {avatarBusy ? <Loader2 width={13} height={13} class="icon spin" /> : t2('إزالة', 'Remove')}
                     </button>
                   )}
                 </div>
-                <span class="settings-hint" style="margin: 0">PNG, JPEG or WebP · up to 2 MB</span>
+                <span class="settings-hint" style="margin: 0">{t2('PNG أو JPEG أو WebP · حتى 2 ميغابايت', 'PNG, JPEG or WebP · up to 2 MB')}</span>
               </div>
               <input
                 ref={avatarInputRef}
@@ -400,26 +402,26 @@ export function Profile() {
                 accept="image/png,image/jpeg,image/webp"
                 hidden
                 onChange={pickAvatar}
-                aria-label="Upload profile photo"
+                aria-label={t2('رفع صورة الملف الشخصي', 'Upload profile photo')}
               />
             </div>
 
-            <label class="field-label">Username</label>
+            <label class="field-label">{t2('اسم المستخدم', 'Username')}</label>
             <div class="settings-row" style="margin:0 0 12px">
               <span class="mono" style="color: var(--text)">@{user?.username || '—'}</span>
-              <span class="settings-hint" style="margin:0">Used to sign in — cannot be changed.</span>
+              <span class="settings-hint" style="margin:0">{t2('يُستخدم لتسجيل الدخول — لا يمكن تغييره.', 'Used to sign in — cannot be changed.')}</span>
             </div>
 
-            <label class="field-label">Display name</label>
+            <label class="field-label">{t2('الاسم المعروض', 'Display name')}</label>
             <input
               class="modern-input"
               maxLength={60}
-              placeholder="How you appear to the team"
+              placeholder={t2('كيف تظهر أمام الفريق', 'How you appear to the team')}
               value={profile.displayName || ''}
               onInput={(e: any) => setProfile({ ...profile, displayName: e.target.value })}
             />
 
-            <label class="field-label">Email</label>
+            <label class="field-label">{t2('البريد الإلكتروني', 'Email')}</label>
             <input
               class="modern-input"
               type="email"
@@ -429,12 +431,12 @@ export function Profile() {
               onInput={(e: any) => setProfile({ ...profile, email: e.target.value })}
             />
 
-            <label class="field-label">Bio</label>
+            <label class="field-label">{t2('نبذة', 'Bio')}</label>
             <textarea
               class="modern-input"
               rows={3}
               maxLength={500}
-              placeholder="A short line about you — shown to the team."
+              placeholder={t2('سطر قصير عنك — يظهر للفريق.', 'A short line about you — shown to the team.')}
               value={profile.bio || ''}
               onInput={(e: any) => setProfile({ ...profile, bio: e.target.value })}
             />
@@ -446,8 +448,8 @@ export function Profile() {
                 onChange={(e: any) => setProfile({ ...profile, emailVisible: (e.target as HTMLInputElement).checked })}
               />
               <span>
-                Show email to team members
-                <span class="settings-hint" style="display:block;margin:0">When off, your email is hidden on your public profile.</span>
+                {t2('إظهار البريد الإلكتروني لأعضاء الفريق', 'Show email to team members')}
+                <span class="settings-hint" style="display:block;margin:0">{t2('عند الإيقاف يُخفى بريدك في ملفك العام.', 'When off, your email is hidden on your public profile.')}</span>
               </span>
             </label>
 
@@ -461,7 +463,7 @@ export function Profile() {
               <button class="btn-primary sm" type="button" onClick={saveProfile} disabled={profileSaving}>
                 {profileSaving ? <Loader2 width={13} height={13} class="icon spin" /> : (
                   <>
-                    <span class="icon-wrap"><UserCheck width={13} height={13} /></span> Save profile
+                    <span class="icon-wrap"><UserCheck width={13} height={13} /></span> {t2('حفظ الملف الشخصي', 'Save profile')}
                   </>
                 )}
               </button>
@@ -472,58 +474,58 @@ export function Profile() {
 
       {/* Account Info */}
       <div class="panel settings-section">
-        <h2 class="panel-title">Account</h2>
+        <h2 class="panel-title">{t2('الحساب', 'Account')}</h2>
         <div class="settings-row">
-          <span class="field-label">Username</span>
+          <span class="field-label">{t2('اسم المستخدم', 'Username')}</span>
           <span class="mono" style="color: var(--text)">{user?.username || '—'}</span>
         </div>
         <div class="settings-row">
-          <span class="field-label">Role</span>
+          <span class="field-label">{t2('الدور', 'Role')}</span>
           <span style="color: var(--text-2)">{user?.role || '—'}</span>
         </div>
         <div class="settings-row">
-          <span class="field-label">Created</span>
-          <span style="color: var(--text-2)">{fmtDate(user?.createdAt)}</span>
+          <span class="field-label">{t2('تاريخ الإنشاء', 'Created')}</span>
+          <span style="color: var(--text-2)">{fmtDate(user?.createdAt, lang)}</span>
         </div>
         <div class="settings-row">
-          <span class="field-label">Last password change</span>
-          <span style="color: var(--text-2)">{fmtDate(user?.passwordChangedAt)}</span>
+          <span class="field-label">{t2('آخر تغيير لكلمة المرور', 'Last password change')}</span>
+          <span style="color: var(--text-2)">{fmtDate(user?.passwordChangedAt, lang)}</span>
         </div>
         <div style="margin-top: 12px">
           <button class="btn-danger sm" onClick={handleLogout}>
-            <span class="icon-wrap"><LogOut width={13} height={13} /></span> Sign out
+            <span class="icon-wrap"><LogOut width={13} height={13} /></span> {t('common.signOut')}
           </button>
         </div>
       </div>
 
       {/* Change Password */}
       <div class="panel settings-section">
-        <h2 class="panel-title">Change Password</h2>
+        <h2 class="panel-title">{t2('تغيير كلمة المرور', 'Change Password')}</h2>
         <form onSubmit={changePassword}>
-          <label class="field-label">Current Password</label>
+          <label class="field-label">{t2('كلمة المرور الحالية', 'Current Password')}</label>
           <input
             class="modern-input"
             type="password"
-            placeholder="Current password"
+            placeholder={t2('كلمة المرور الحالية', 'Current password')}
             value={currentPw}
             onInput={(e: any) => setCurrentPw(e.target.value)}
           />
 
-          <label class="field-label">New Password</label>
+          <label class="field-label">{t2('كلمة المرور الجديدة', 'New Password')}</label>
           <input
             class="modern-input"
             type="password"
-            placeholder="Min 6 characters"
+            placeholder={t2('6 أحرف على الأقل', 'Min 6 characters')}
             value={newPw}
             onInput={(e: any) => setNewPw(e.target.value)}
           />
           {newPw && <PwMeter pw={newPw} />}
 
-          <label class="field-label">Confirm New Password</label>
+          <label class="field-label">{t2('تأكيد كلمة المرور الجديدة', 'Confirm New Password')}</label>
           <input
             class="modern-input"
             type="password"
-            placeholder="Confirm new password"
+            placeholder={t2('تأكيد كلمة المرور الجديدة', 'Confirm new password')}
             value={confirmPw}
             onInput={(e: any) => setConfirmPw(e.target.value)}
           />
@@ -538,9 +540,9 @@ export function Profile() {
             <button class="btn-primary sm" type="submit" disabled={pwLoading}>
               {pwLoading ? (
                 <span style="display:inline-flex;align-items:center;gap:6px;">
-                  <Loader2 width={13} height={13} class="icon spin" /> Changing…
+                  <Loader2 width={13} height={13} class="icon spin" /> {t2('جارٍ التغيير…', 'Changing…')}
                 </span>
-              ) : 'Change Password'}
+              ) : t2('تغيير كلمة المرور', 'Change Password')}
             </button>
           </div>
         </form>
@@ -549,19 +551,18 @@ export function Profile() {
       {/* Two-factor authentication (TOTP) */}
       <div class="panel settings-section">
         <h2 class="panel-title">
-          Two-Factor Authentication
+          {t2('التحقق بخطوتين', 'Two-Factor Authentication')}
           {totpEnabled === true && (
             <span class="badge-ok" style="margin-inline-start: 8px;">
-              <ShieldCheck width={11} height={11} /> On
+              <ShieldCheck width={11} height={11} /> {t2('مفعّل', 'On')}
             </span>
           )}
           {totpEnabled === false && (
-            <span class="badge-off" style="margin-inline-start: 8px;">Off</span>
+            <span class="badge-off" style="margin-inline-start: 8px;">{t2('معطّل', 'Off')}</span>
           )}
         </h2>
         <p class="settings-hint">
-          Require a 6-digit code from an authenticator app (Google Authenticator,
-          Authy, Aegis…) after your password at every sign-in.
+          {t2('اطلب رمزاً من 6 أرقام من تطبيق مصادقة (Google Authenticator أو Authy أو Aegis…) بعد كلمة المرور عند كل دخول.', 'Require a 6-digit code from an authenticator app (Google Authenticator, Authy, Aegis…) after your password at every sign-in.')}
         </p>
 
         {totpMsg && (
@@ -573,11 +574,11 @@ export function Profile() {
         {totpEnrolling ? (
           <form onSubmit={confirmEnable2fa}>
             <div class="totp-enroll">
-              {qrDataUrl && <img class="totp-qr" src={qrDataUrl} alt="Authenticator QR code" />}
+              {qrDataUrl && <img class="totp-qr" src={qrDataUrl} alt={t2('رمز QR للمصادقة', 'Authenticator QR code')} />}
               <div class="totp-manual">
-                <span class="field-label">Can't scan? Enter this key instead</span>
+                <span class="field-label">{t2('لا تستطيع المسح؟ أدخل هذا المفتاح بدلاً منه', "Can't scan? Enter this key instead")}</span>
                 <code class="totp-secret">{totpEnrolling.secret}</code>
-                <span class="settings-hint">Time-based · SHA-1 · 6 digits · 30s — defaults for any app.</span>
+                <span class="settings-hint">{t2('مبني على الوقت · SHA-1 · 6 أرقام · كل 30 ثانية — الافتراضي لأي تطبيق.', 'Time-based · SHA-1 · 6 digits · 30s — defaults for any app.')}</span>
               </div>
             </div>
             <div class="settings-row" style="margin-top: 10px;">
@@ -593,71 +594,69 @@ export function Profile() {
                 onInput={(e: any) => setTotpCode(e.target.value)}
               />
               <button class="btn-primary sm" type="submit" disabled={totpBusy || !totpCode.trim()}>
-                {totpBusy ? <Loader2 width={13} height={13} class="icon spin" /> : <ShieldCheck width={13} height={13} />} Activate
+                {totpBusy ? <Loader2 width={13} height={13} class="icon spin" /> : <ShieldCheck width={13} height={13} />} {t2('تفعيل', 'Activate')}
               </button>
-              <button class="btn-ghost sm" type="button" onClick={cancelEnable2fa}>Cancel</button>
+              <button class="btn-ghost sm" type="button" onClick={cancelEnable2fa}>{t('common.cancel')}</button>
             </div>
             <p class="settings-hint" style="margin-top:8px;">
-              Scan the code with your app, then enter the current code to activate.
+              {t2('امسح الرمز بتطبيقك ثم أدخل الرمز الحالي للتفعيل.', 'Scan the code with your app, then enter the current code to activate.')}
             </p>
           </form>
         ) : totpEnabled === true ? (
           <button class="btn-danger sm" onClick={beginDisable2fa}>
-            <Smartphone width={13} height={13} /> Disable two-factor
+            <Smartphone width={13} height={13} /> {t2('تعطيل التحقق بخطوتين', 'Disable two-factor')}
           </button>
         ) : (
           <button class="btn-primary sm" onClick={beginEnable2fa} disabled={totpBusy}>
             {totpBusy ? <Loader2 width={13} height={13} class="icon spin" /> : <Smartphone width={13} height={13} />}
-            Enable two-factor
+            {t2('تفعيل التحقق بخطوتين', 'Enable two-factor')}
           </button>
         )}
       </div>
 
       {/* Auto-logout on inactivity */}
       <div class="panel settings-section">
-        <h2 class="panel-title">Idle security</h2>
+        <h2 class="panel-title">{t2('أمان الخمول', 'Idle security')}</h2>
         <p class="settings-hint">
-          Sign out automatically after a period of inactivity — and optionally re-lock
-          the Providers page (revokes its unlock token everywhere).
+          {t2('خروج تلقائي بعد فترة خمول — مع خيار إعادة قفل صفحة المزوّدين (يبطل رمز فتحها في كل مكان).', 'Sign out automatically after a period of inactivity — and optionally re-lock the Providers page (revokes its unlock token everywhere).')}
         </p>
         <div class="settings-row">
-          <span class="field-label">Auto-logout</span>
+          <span class="field-label">{t2('خروج تلقائي', 'Auto-logout')}</span>
           <select
             class="modern-input"
             style="max-width: 160px"
             value={idleChoice}
             onChange={(e: any) => applyIdleChoice(e.target.value as IdleChoice)}
           >
-            <option value="off">Disabled</option>
-            <option value="30">30 minutes</option>
-            <option value="60">1 hour</option>
-            <option value="120">2 hours</option>
+            <option value="off">{t2('معطّل', 'Disabled')}</option>
+            <option value="30">{t2('30 دقيقة', '30 minutes')}</option>
+            <option value="60">{t2('ساعة واحدة', '1 hour')}</option>
+            <option value="120">{t2('ساعتان', '2 hours')}</option>
           </select>
-          {idleSaved && <span class="chat-save-msg" role="status">Saved ✓</span>}
+          {idleSaved && <span class="chat-save-msg" role="status">{t2('حُفظ ✓', 'Saved ✓')}</span>}
         </div>
         <div class="settings-row">
-          <span class="field-label">Auto-relock Providers</span>
+          <span class="field-label">{t2('إعادة قفل المزوّدين تلقائياً', 'Auto-relock Providers')}</span>
           <select
             class="modern-input"
             style="max-width: 160px"
             value={relockChoice}
             onChange={(e: any) => applyRelockChoice(e.target.value as RelockChoice)}
           >
-            <option value="off">Disabled</option>
-            <option value="5">5 minutes</option>
-            <option value="15">15 minutes</option>
-            <option value="30">30 minutes</option>
+            <option value="off">{t2('معطّل', 'Disabled')}</option>
+            <option value="5">{t2('5 دقائق', '5 minutes')}</option>
+            <option value="15">{t2('15 دقيقة', '15 minutes')}</option>
+            <option value="30">{t2('30 دقيقة', '30 minutes')}</option>
           </select>
-          {relockSaved && <span class="chat-save-msg" role="status">Saved ✓</span>}
+          {relockSaved && <span class="chat-save-msg" role="status">{t2('حُفظ ✓', 'Saved ✓')}</span>}
         </div>
       </div>
 
       {/* Logout everywhere */}
       <div class="panel settings-section">
-        <h2 class="panel-title">Logout Everywhere</h2>
+        <h2 class="panel-title">{t2('خروج من كل الأجهزة', 'Logout Everywhere')}</h2>
         <p class="settings-hint">
-          Invalidate every signed-in session — all browser tabs and devices will
-          need to log in again. You will be logged out here too.
+          {t2('إبطال كل الجلسات النشطة — ستحتاج جميع التبويبات والأجهزة إلى تسجيل الدخول من جديد، وأنت كذلك.', 'Invalidate every signed-in session — all browser tabs and devices will need to log in again. You will be logged out here too.')}
         </p>
         {pwMsg && pendingAction === null && (
           <div class={pwMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px" role={pwMsg.type === 'ok' ? 'status' : 'alert'}>
@@ -665,18 +664,18 @@ export function Profile() {
           </div>
         )}
         <button class="btn-danger sm" onClick={beginRevokeAll}>
-          <span class="icon-wrap"><LogOut width={13} height={13} /></span> Sign out everywhere
+          <span class="icon-wrap"><LogOut width={13} height={13} /></span> {t2('خروج من كل الأجهزة', 'Sign out everywhere')}
         </button>
       </div>
 
       {/* Account Activity */}
       <div class="panel settings-section">
-        <h2 class="panel-title">Account Activity</h2>
-        <p class="settings-hint">Events on your account: sign-ins, security changes, and profile edits (newest first, last 50).</p>
+        <h2 class="panel-title">{t2('نشاط الحساب', 'Account Activity')}</h2>
+        <p class="settings-hint">{t2('أحداث حسابك: تسجيلات الدخول والتغييرات الأمنية وتحرير الملف الشخصي (الأحدث أولاً، آخر 50).', 'Events on your account: sign-ins, security changes, and profile edits (newest first, last 50).')}</p>
         {audit === null ? (
-          <div class="inline-loading" role="status"><Loader2 width={12} height={12} class="icon spin" /> Loading…</div>
+          <div class="inline-loading" role="status"><Loader2 width={12} height={12} class="icon spin" /> {t('common.loading')}</div>
         ) : audit.length === 0 ? (
-          <div class="settings-hint">No activity recorded yet.</div>
+          <div class="settings-hint">{t2('لا نشاط مسجّل بعد.', 'No activity recorded yet.')}</div>
         ) : (
           <AuditLog entries={audit} total={auditTotal} loadingMore={auditLoadingMore} onLoadMore={loadMoreAudit} />
         )}
@@ -685,9 +684,9 @@ export function Profile() {
       {/* Remove avatar confirmation */}
       <ConfirmModal
         open={avatarRemoveOpen}
-        title="Remove your profile photo?"
-        message="Your photo is removed immediately. You can upload a new one any time."
-        confirmLabel="Remove photo"
+        title={t2('إزالة صورتك الشخصية؟', 'Remove your profile photo?')}
+        message={t2('تُزال الصورة فوراً ويمكنك رفع صورة جديدة في أي وقت.', 'Your photo is removed immediately. You can upload a new one any time.')}
+        confirmLabel={t2('إزالة الصورة', 'Remove photo')}
         danger
         loading={avatarBusy}
         onConfirm={() => { setAvatarRemoveOpen(false); removeAvatar(); }}
@@ -702,15 +701,15 @@ export function Profile() {
         error={reauthError}
         title={
           pendingAction === 'revoke-all'
-            ? 'Sign out everywhere?'
-            : 'Disable two-factor authentication'
+            ? t2('خروج من كل الأجهزة؟', 'Sign out everywhere?')
+            : t2('تعطيل التحقق بخطوتين', 'Disable two-factor authentication')
         }
         description={
           pendingAction === 'revoke-all'
-            ? 'This signs you out of every device and browser tab.'
-            : 'Your account will be protected by the password only. You will confirm this with your account password.'
+            ? t2('سيُسجَّل خروجك من كل الأجهزة والتبويبات.', 'This signs you out of every device and browser tab.')
+            : t2('سيحمي حسابك كلمة المرور فقط. ستؤكد هذا بكلمة مرور حسابك.', 'Your account will be protected by the password only. You will confirm this with your account password.')
         }
-        confirmLabel="Confirm"
+        confirmLabel={t('common.confirm')}
         onConfirm={executeReauth}
         onCancel={() => { setPendingAction(null); setReauthError(null); }}
       />
