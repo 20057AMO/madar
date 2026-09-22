@@ -42,6 +42,12 @@ export function semverCompare(a: string, b: string): number {
   return pa.patch - pb.patch;
 }
 
+/** True when two semver strings are numerically equal (NaN-safe: invalid
+ * input never equals anything). Prerelease suffixes are ignored (v1). */
+export function semverEquals(a: string, b: string): boolean {
+  return semverCompare(a, b) === 0;
+}
+
 /* ── Strict npm dist-tag validation ──────────────────────────────────── */
 
 /** Exact published semver: `X.Y.Z` with an optional prerelease. Accepts

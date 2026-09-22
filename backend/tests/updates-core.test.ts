@@ -1,7 +1,7 @@
 /**
  * updates-core.test.ts
  * Pure unit coverage for the component-update pure rules (parseCliVersion,
- * semverCompare, parseCodeServerRelease, assetDebName, checksumMatches,
+ * semverCompare, semverEquals, parseCodeServerRelease, assetDebName, checksumMatches,
  * compatGate, freeSpaceGate, assertSafeDebName, applyStateMachine).
  * No server, no Docker — fully offline, mirroring serve-core.test.ts /
  * project-alerts.test.ts.
@@ -12,6 +12,7 @@ import {
   parseSemver,
   parseCliVersion,
   semverCompare,
+  semverEquals,
   parseCodeServerRelease,
   assetDebName,
   checksumMatches,
@@ -196,6 +197,42 @@ describe('semverCompare', () => {
     assert.ok(Number.isNaN(semverCompare('junk', '1.0.0')));
     assert.ok(Number.isNaN(semverCompare('1.0.0', 'junk')));
     assert.ok(Number.isNaN(semverCompare('junk', 'junk')));
+  });
+});
+
+/* ── semverEquals ────────────────────────────────────────────────────── */
+
+describe('semverEquals', () => {
+  test('equal versions → true', () => {
+    assert.strictEqual(semverEquals('1.18.22', '1.18.22'), true);
+    assert.strictEqual(semverEquals('1.0.0', '1.0.0'), true);
+  });
+
+  test('different versions → false', () => {
+    assert.strictEqual(semverEquals('1.18.22', '1.18.23'), false);
+    assert.strictEqual(semverEquals('1.18.22', '2.0.0'), false);
+  });
+
+  test('v-prefixed vs bare → true', () => {
+    assert.strictEqual(semverEquals('v1.18.22', '1.18.22'), true);
+    assert.strictEqual(semverEquals('1.18.22', 'v1.18.22'), true);
+  });
+
+  test('prerelease suffix stripped → true', () => {
+    assert.strictEqual(semverEquals('1.18.22-beta.1', '1.18.22'), true);
+    assert.strictEqual(semverEquals('1.18.22', '1.18.22-beta.1'), true);
+  });
+
+  test('invalid/junk input → false (NaN-safe)', () => {
+    assert.strictEqual(semverEquals('junk', '1.18.22'), false);
+    assert.strictEqual(semverEquals('1.18.22', 'junk'), false);
+    assert.strictEqual(semverEquals('junk', 'junk'), false);
+    assert.strictEqual(semverEquals('', ''), false);
+    assert.strictEqual(semverEquals('1.18', '1.18.22'), false);
+  });
+
+  test('patch mismatch → false', () => {
+    assert.strictEqual(semverEquals('1.18.22', '1.18.32'), false);
   });
 });
 

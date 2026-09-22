@@ -202,7 +202,7 @@ code-server مدمج في واجهة الويب، وOpenCode Web UI، كلاهم
 | `WSD_UPDATE_DOWNLOAD_BASE` | `https://github.com/coder/code-server/releases` | قاعدة تنزيل ملفات `.deb` |
 | `WSD_UPDATE_NPM_REGISTRY` | `https://registry.npmjs.org` | سجل npm لـ opencode (ميرور/بروكسي) |
 | `WSD_UPDATES_MAX_BYTES` | `419430400` (400 MB) | سقف حجم ملف `.deb` الواحد |
-| `WSD_UPDATE_BOOT_TIMEOUT_MS` | `30000` (30 ثانية) | مهلة تحقق الإقلاع قبل rollback |
+| `WSD_UPDATE_BOOT_TIMEOUT_MS` | `90000` (90 ثانية) | مهلة تحقق الإقلاع قبل rollback |
 | `WSD_RATE_UPDATE_CHECK_MAX` | `6` | حد الفحص الفوري لكل IP/دقيقة |
 | `WSD_RATE_UPDATE_APPLY_MAX` | `2` | حد التطبيق لكل IP/دقيقة |
 

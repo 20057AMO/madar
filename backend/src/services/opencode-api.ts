@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 
-import { assertAllowedUpdateBase, isStrictPublisherVersion, parseSemver } from './updates-core';
+import { assertAllowedUpdateBase, isStrictPublisherVersion, semverEquals } from './updates-core';
 import { bootTimeoutMs } from './code-server-update';
 
 /**
@@ -534,8 +534,9 @@ export interface UpdateResult {
  * Install the newest compatible release inside the container and restart
  * the supervised opencode web process into it. Single-flight; refuses
  * unsupported target majors via the caller-side gate as well as here.
- * Boot is verified (new binary on CLI + web, pid changed) before success —
- * a non-booting update reports ok:false honestly.
+ * Installs and restarts ONLY — boot verification is the CALLER's
+ * responsibility: the apply core (runOpencodeApply) probes the new binary
+ * via its `boot` dep and drives the rollback when it never comes up.
  */
 export function performOpencodeUpdate(): Promise<UpdateResult> {
   if (updateInFlight) {
@@ -546,7 +547,6 @@ export function performOpencodeUpdate(): Promise<UpdateResult> {
     updateInFlight = false;
     return r;
   };
-  const oldPid = currentOpencodePid();
 
   return fetchLatestVersion()
     .then((reg) => {
@@ -556,29 +556,19 @@ export function performOpencodeUpdate(): Promise<UpdateResult> {
           error: `Latest release (${reg.latest ?? 'unknown'}) is not supported by this Madar build yet`,
         });
       }
+      const target = reg.latest;
       return new Promise<UpdateResult>((resolve) => {
         execFile(
           'npm',
-          ['install', '-g', `opencode-ai@${reg.latest}`, '--no-fund', '--no-audit'],
+          ['install', '-g', `opencode-ai@${target}`, '--no-fund', '--no-audit'],
           { timeout: 180_000 },
           (err) => {
             if (err) {
               resolve(done({ ok: false, error: `npm install failed: ${err.message}` }));
               return;
             }
-            restartSupervisedWeb().then(() => {
-              waitForOpencodeBoot(reg.latest as string, oldPid).then((bootedVersion) => {
-                if (bootedVersion === null) {
-                  resolve(
-                    done({
-                      ok: false,
-                      error: `Updated opencode ${reg.latest} did not boot within ${Math.round(bootTimeoutMs() / 1000)}s — restart the container to apply`,
-                    }),
-                  );
-                  return;
-                }
-                resolve(done({ ok: true, updatedTo: bootedVersion, restarted: true }));
-              });
+            restartSupervisedWeb().then((restartOk) => {
+              resolve(done({ ok: true, updatedTo: target, restarted: restartOk }));
             });
           },
         );
@@ -625,7 +615,7 @@ export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Pro
               resolve(
                 done({
                   ok: false,
-                  error: `Rolled-back opencode ${currentVersion} did not boot within ${Math.round(bootTimeoutMs() / 1000)}s — restart the container to apply`,
+                  error: `Rolled-back opencode ${currentVersion} did not boot within ${Math.round(bootTimeoutMs() / 1000)}s — the supervisor keeps reviving it; check the update log`,
                 }),
               );
               return;
@@ -636,10 +626,6 @@ export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Pro
       },
     );
   });
-}
-
-function semverEquals(a: string, b: string): boolean {
-  return parseSemver(a) === parseSemver(b);
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -662,7 +648,7 @@ export function currentOpencodePid(): number | undefined {
 }
 
 /**
- * Boot verification shared by performOpencodeUpdate and rollbackOpencodeTo:
+ * Boot verification used by the apply core and rollbackOpencodeTo:
  * polls until the CLI probes as `targetVersion` AND the web server answers
  * AND (when `oldPid` is known) the supervised child pid changed — or the
  * boot window elapses (null). The CLI probe is FORCED (cache-bypass) so a

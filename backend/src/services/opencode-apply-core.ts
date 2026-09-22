@@ -143,7 +143,7 @@ export async function runOpencodeApply(
   }
 
   await fx.step('boot-ok'); // → ok
-  fx.setState({ applyState: 'ok', targetVersion: booted, rolledBack: false, error: undefined });
+  fx.setState({ applyState: 'ok', currentVersion: booted, targetVersion: booted, rolledBack: false, error: undefined });
   fx.log(`updated ${baseline} → ${booted}`);
   fx.audit('opencode-update', true);
   return { ok: true, error: '' };

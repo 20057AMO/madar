@@ -51,6 +51,9 @@
  *     with the tail marker kept and the head marker gone (seeded files cleaned after)
  * 11. GET /api/updates/log access matrix: 401 anon / 403 viewer / 403 editor / 200 admin
  *     with the exact {log, truncated, bytes} body
+ * 12. Late-boot reconciliation: a seeded opencode failed+boot state flips to ok
+ *     (surface + state file) when current == registry latest and the web server is
+ *     healthy; stays failed when latest differs
  *
  * Downgrade gate: `POST /api/updates/apply` now carries a SYNCHRONOUS gate (a
  * fresh registry compare inside the request flow, before the background run) —
@@ -714,7 +717,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
     const state = await readCodeServerState();
     assert.equal(state.applyState, 'ok');
-    assert.equal(state.currentVersion, BASELINE_VERSION, 'state records the pre-update current');
+    assert.equal(state.currentVersion, HAPPY_VERSION, 'state advances current to the installed version');
     assert.equal(state.targetVersion, HAPPY_VERSION);
 
     const rows = await piAudit(h);
@@ -952,6 +955,59 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     assert.equal(typeof body.log, 'string');
     assert.equal(typeof body.truncated, 'boolean');
     assert.equal(typeof body.bytes, 'number');
+  });
+
+  test('12. late-boot reconciliation: failed+boot error flips to ok when current==latest and web healthy; stays failed otherwise', async () => {
+    assert.ok(tempAdmin);
+    const h = tempAdmin!.headers;
+    const OC_STATE = '/app/data/updates/opencode.json';
+
+    // Seed a boot-timeout failure for the INSTALLED version (current == latest
+    // under the mock baseline) — the shape a real slow-boot update leaves behind.
+    const seedFailedState = async (): Promise<void> => {
+      const payload = JSON.stringify({
+        applyState: 'failed',
+        currentVersion: installedOpencode,
+        error: `Updated opencode ${installedOpencode} did not boot within 30s — restart the container to apply`,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      await dockerExec(['sh', '-c',
+        `mkdir -p /app/data/updates && printf '%s' '${payload.replace(/'/g, `'\\''`)}' > ${OC_STATE} && chmod 600 ${OC_STATE}`]);
+    };
+    const readOcState = async (): Promise<any> => {
+      const out = await dockerExec(['sh', '-c', `cat ${OC_STATE} 2>/dev/null || echo "{}"`]);
+      try { return JSON.parse(out); } catch { return {}; }
+    };
+
+    // Positive: mock latest == installed (suite baseline) + web healthy → the
+    // update DID land (slow boot, not a broken binary): status AND state file
+    // flip to ok with the landed target version, no error left behind.
+    await mockControl({ npm: installedOpencode });
+    await piPostCheck(h); // clears the npm 60s cache so latest == installed
+    await seedFailedState();
+    const j1 = await piGet(h);
+    const oc1 = byId(j1, 'opencode');
+    assert.equal(oc1.applyState, 'ok', `boot-timeout failure reconciled to ok (${JSON.stringify(oc1)})`);
+    assert.equal(oc1.error, undefined, 'reconciled surface carries no error');
+    const s1 = await readOcState();
+    assert.equal(s1.applyState, 'ok', 'state file flipped to ok');
+    assert.equal(s1.targetVersion, installedOpencode, 'state file records the landed version');
+    assert.equal(s1.error, undefined, 'state file error cleared');
+
+    // Negative: registry latest != installed → the failed state must survive
+    // (current != latest, so no evidence the update landed).
+    await mockControl({ npm: '1.19.0' });
+    await piPostCheck(h);
+    await seedFailedState();
+    const j2 = await piGet(h);
+    const oc2 = byId(j2, 'opencode');
+    assert.equal(oc2.applyState, 'failed', `no flip when current != latest (${JSON.stringify(oc2)})`);
+    assert.match(String(oc2.error ?? ''), /did not boot within/i, 'stale boot error preserved');
+
+    // restore the suite baseline so later tests / after() see up-to-date opencode
+    await mockControl({ npm: installedOpencode });
+    await piPostCheck(h);
   });
 
   after(async () => {

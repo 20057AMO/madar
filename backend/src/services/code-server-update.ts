@@ -73,7 +73,7 @@ const EXEC_STATES: ApplyState[] = [
 ];
 
 const DEFAULT_MAX_BYTES = 400 * 1024 * 1024; // real deb ~233MB
-const DEFAULT_BOOT_TIMEOUT_MS = 30_000;
+const DEFAULT_BOOT_TIMEOUT_MS = 90_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const DPKG_TIMEOUT_MS = 180_000;
 const VERSION_CACHE_MS = 30_000;
@@ -696,7 +696,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         // good install; only the reboot is pending).
         if (!restart.ok && restart.reason === 'missing') {
           await step('error');
-          const msg = 'installed but not restarted — no code-server pid file; restart the container to apply';
+          const msg = 'installed but not restarted — no code-server pid file (the IDE process is not running under supervision); the new version applies when the IDE starts';
           log(`failed: ${msg}`);
           return done({ ok: false, error: msg });
         }
@@ -752,7 +752,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         }
 
         await step('boot-ok'); // → ok
-        await persist({ error: undefined, rolledBack: false, updatedAt: new Date().toISOString() });
+        await persist({ currentVersion: release.version, error: undefined, rolledBack: false, updatedAt: new Date().toISOString() });
         log(`updated ${current} → ${release.version}`);
         return done({ ok: true, updatedTo: release.version, restarted: true });
       } catch (err: any) {

@@ -19,9 +19,9 @@
 import fs from 'fs';
 import path from 'path';
 
-import { probeOpencodeVersion, fetchLatestVersion, clearLatestVersionCache, isUpdateRunning, performOpencodeUpdate, rollbackOpencodeTo, waitForOpencodeBoot, currentOpencodePid } from './opencode-api';
+import { probeOpencodeVersion, probeOpencodeServer, fetchLatestVersion, clearLatestVersionCache, isUpdateRunning, performOpencodeUpdate, rollbackOpencodeTo, waitForOpencodeBoot, currentOpencodePid } from './opencode-api';
 import * as codeServer from './code-server-update';
-import { applyStateMachine, semverCompare, isSupportedArch, type ApplyEvent, type ApplyState } from './updates-core';
+import { applyStateMachine, semverCompare, semverEquals, parseCliVersion, isSupportedArch, type ApplyEvent, type ApplyState } from './updates-core';
 import { runOpencodeApply, type ApplyStep } from './opencode-apply-core';
 import { withFileLockAsync } from './write-queue';
 import { recordAudit, type AuditEvent } from './audit-store';
@@ -170,6 +170,45 @@ export async function getUpdatesStatus(): Promise<UpdatesStatus> {
   const ocVersion = openCodeCur.version === 'unknown' ? null : openCodeCur.version;
   const ocLatest = openCodeReg.latest;
   const ocState = readOpencodeState();
+
+  // Late-boot reconciliation (opencode only): the boot-verification window
+  // can elapse while the new binary is still coming up — if the component is
+  // NOW running the registry latest AND the web server answers, the update
+  // landed (slow boot, not a broken binary) and the persisted failed/boot
+  // state must flip to ok instead of telling the admin to restart the box.
+  // ocVersion is raw CLI stdout (may carry a `v` prefix / annotations) —
+  // normalize before the semver comparisons, and mirror the boot verifier's
+  // web gate: a server still serving a DIFFERENT version keeps polling, a
+  // server reporting no version passes on reachability alone.
+  const ocNormalized = ocVersion === null ? null : parseCliVersion(ocVersion) ?? ocVersion;
+  if (
+    ocState.applyState === 'failed' &&
+    /boot/i.test(ocState.error ?? '') &&
+    ocNormalized !== null &&
+    ocLatest !== null &&
+    semverEquals(ocNormalized, ocLatest)
+  ) {
+    const web = await probeOpencodeServer();
+    if (
+      web.ok &&
+      (typeof web.version !== 'string' || !web.version || semverEquals(web.version, ocNormalized))
+    ) {
+      const next: OpencodeUpdateState = {
+        ...ocState,
+        applyState: 'ok',
+        targetVersion: ocNormalized,
+        rolledBack: false,
+        error: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      await persistOpencodeState(next);
+      ocState.applyState = 'ok';
+      ocState.error = undefined;
+      ocState.rolledBack = false;
+      ocState.targetVersion = ocNormalized;
+    }
+  }
+
   const csVersion = csCur;
   const csLatest = csRel?.version ?? null;
   const csState = codeServer.getCodeServerUpdateState();

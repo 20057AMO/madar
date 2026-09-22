@@ -275,6 +275,7 @@ export function Settings() {
   const pendingUpdateComponent = useRef<'opencode' | 'code-server' | 'all'>('opencode');
   const updatesPanelRef = useRef<HTMLDivElement | null>(null);
   const updLogAlive = useRef(true);
+  const lastUpdLogFetch = useRef(0);
   useEffect(() => () => { updLogAlive.current = false; }, []);
 
   useEffect(() => {
@@ -321,11 +322,14 @@ export function Settings() {
         setUpdates(r);
         const stillRunning = r.components.some((c) => c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState));
         if (!stillRunning) {
-          setApplyInFlight(false);
           const failed = r.components.some((c) => c.applyState === 'failed');
-          setUpdatesMsg(failed
-            ? { type: 'err', text: t2('لم يكتمل أحد التحديثات بشكل نظيف — انظر حالة المكوّن أدناه.', 'An update did not finish cleanly — see the component status below.') }
-            : { type: 'ok', text: t2('اكتمل التحديث — النسخة الجديدة تعمل الآن.', 'Update finished — the new version is live.') });
+          const ok = r.components.some((c) => c.applyState === 'ok');
+          if (failed || ok) {
+            setApplyInFlight(false);
+            setUpdatesMsg(failed
+              ? { type: 'err', text: t2('لم يكتمل أحد التحديثات بشكل نظيف — انظر حالة المكوّن أدناه.', 'An update did not finish cleanly — see the component status below.') }
+              : { type: 'ok', text: t2('اكتمل التحديث — النسخة الجديدة تعمل الآن.', 'Update finished — the new version is live.') });
+          }
         }
       } catch {
         // transient network error — keep polling; the server continues.
@@ -383,6 +387,25 @@ export function Settings() {
       .catch((err: any) => { if (updLogAlive.current) setUpdLogError(err.message || t2('فشل تحميل سجل التحديثات', 'Failed to load update log')); })
       .finally(() => { if (updLogAlive.current) setUpdLogLoading(false); });
   };
+
+  // Keep the open log viewer in sync: re-fetch whenever the status snapshot
+  // changes (2.5s apply poll / 30s idle recheck) so new lines appear without
+  // a collapse/expand. Skips the loading flash — that stays on initial open.
+  // Throttled to ≥10s between fetches: GET /api/updates/log shares the
+  // 'update-check' rate-limit scope (6/min in production), so the 2.5s apply
+  // poll must never drain the budget the manual "Check now" button needs.
+  useEffect(() => {
+    if (!updLogOpen) return;
+    let alive = true;
+    const now = Date.now();
+    if (now - lastUpdLogFetch.current >= 10_000) {
+      lastUpdLogFetch.current = now;
+      getUpdatesLog()
+        .then((r) => { if (alive) setUpdLog(r); })
+        .catch((err: any) => { if (alive) setUpdLogError(err.message || t2('فشل تحميل سجل التحديثات', 'Failed to load update log')); });
+    }
+    return () => { alive = false; };
+  }, [updLogOpen, updates]);
 
   const whRefresh = async (okText?: string) => {
     try {
@@ -983,7 +1006,7 @@ export function Settings() {
                   <span class="dim" aria-hidden="true">→</span>
                   <span class="upd-version" title={t2('أحدث إصدار', 'Latest version')}>{c.latest ? `v${c.latest}` : '—'}</span>
                   {c.upToDate === true && c.error && (
-                    <span class="upd-pill-warn"><TriangleAlert width={11} height={11} /> {t2('مطلوب إعادة تشغيل', 'Restart required')}</span>
+                    <span class="upd-pill-warn"><TriangleAlert width={11} height={11} /> {t2('محدّث — فشل سابق في السجل', 'Up to date — previous failure in log')}</span>
                   )}
                   {c.upToDate === true && !c.error && (
                     <span class="badge-ok"><CheckCircle2 width={11} height={11} /> {t2('محدّث', 'Up to date')}</span>
@@ -1012,7 +1035,7 @@ export function Settings() {
                       {c.rolledBack === true
                         ? t2(`فشل التحديث — تراجع تلقائياً إلى ${c.current ? `v${c.current}` : 'النسخة السابقة'}.`, `Update failed — automatically rolled back to ${c.current ? `v${c.current}` : 'the previous version'}.`)
                         : c.rolledBack === false
-                          ? t2('فشل التحديث وفشل التراجع أيضاً. يلزم تدخل يدوي.', 'Update failed — rollback also failed. Manual intervention required.')
+                          ? t2('فشل التحديث وفشل التراجع أيضاً — راجع سجل التحديثات.', 'Update failed — rollback also failed. Check the update log.')
                           : c.error || t2('فشل التحديث — انظر سجلات الخادم.', 'Update failed — see server logs.')}
                       {c.rolledBack !== undefined && c.error && (
                         <span style="display:block;font-size:0.72rem;opacity:.9;margin-top:3px">{c.error}</span>
