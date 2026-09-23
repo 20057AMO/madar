@@ -89,6 +89,17 @@ const FAKE_COMMIT = 'b'.repeat(40);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const debName = (v: string) => `code-server_${v}_amd64.deb`;
 
+/** Strict semver tuple compare: >0 when `a` is strictly newer than `b`. */
+function verCmp(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
 // ── docker helpers ──────────────────────────────────────────────────────────
 
 interface ExecOut { stdout: string; stderr: string }
@@ -819,6 +830,80 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     assert.equal(byId(j, 'opencode').bootReapply, 'failed', 'status surface carries opencode bootReapply');
     assert.equal(await piLogContains('[boot-reapply] code-server:'), true, 'log has the code-server boot marker');
     assert.equal(await piLogContains('[boot-reapply] opencode:'), true, 'log has the opencode boot marker');
+  });
+
+  // The opt-in supervised-child restart leg lives in its own test (4c) —
+  // gated behind WSD_TEST_OPENCODE_REAPPLY=1 so test 4b's mandatory
+  // off-registry assertions stay unconditional and the leg's skip is visible.
+  test('4c. boot re-apply: opencode restart leg (opt-in) — seeded 1.18.32 re-applied through the supervised-child restart', async (t) => {
+    if (process.env.WSD_TEST_OPENCODE_REAPPLY !== '1') {
+      return t.skip('WSD_TEST_OPENCODE_REAPPLY not "1" — opencode reapply restart leg skipped');
+    }
+    assert.ok(tempAdmin);
+    const h = tempAdmin!.headers;
+    const OC_STATE = '/app/data/updates/opencode.json';
+    const SEED = '1.18.32';
+    const WEB_PID = '/app/data/opencode-web.pid';
+    const readWebPid = async (): Promise<number | undefined> => {
+      const out = await dockerExec(['sh', '-c', `cat ${WEB_PID} 2>/dev/null || true`]);
+      const n = Number(out.trim());
+      return Number.isFinite(n) && n > 1 ? n : undefined;
+    };
+    const seed = (payload: string, dest: string): Promise<string> =>
+      dockerExec(['sh', '-c',
+        `printf '%s' '${payload.replace(/'/g, `'\\''`)}' > ${dest} && chmod 600 ${dest}`]);
+
+    // Pre-assert the seed contract before anything else: 1.18.32 must be
+    // STRICTLY NEWER than the image baseline the container actually runs,
+    // else the boot gate skips the reapply entirely and this leg burns 480s
+    // timing out instead of failing loudly the day the Dockerfile pins a
+    // newer opencode baseline.
+    const baselineLine = (await dockerExec(['sh', '-c', 'opencode --version 2>/dev/null | head -1'])).trim();
+    const baselineM = baselineLine.match(/\d+\.\d+\.\d+/);
+    assert.ok(baselineM, `cannot read the image opencode baseline (got ${JSON.stringify(baselineLine)})`);
+    const baseline = baselineM[0];
+    assert.ok(
+      verCmp(SEED, baseline) > 0,
+      `seeded version ${SEED} must be STRICTLY NEWER than the running image baseline ${baseline} — bump the seed when the Dockerfile pins a newer opencode`,
+    );
+
+    await seed(JSON.stringify({
+      applyState: 'ok', currentVersion: SEED, targetVersion: SEED, updatedAt: new Date().toISOString(),
+    }), OC_STATE);
+    await composeUp(UPDATES_ENV(mock.port), true);
+    await pollHealth(240_000);
+
+    // pid captured AFTER the recreate — same container, pre-restart. The
+    // ~27s npm install keeps the bootstrap child alive across the pollHealth
+    // window, so the notEqual below proves an in-container restart; reading
+    // legPidBefore from the PREVIOUS container (a fresh PID namespace after
+    // --force-recreate) could false-fail on racy fork order and could trivially
+    // pass even if the restart fix is broken.
+    const legPidBefore = await readWebPid();
+    assert.ok(legPidBefore !== undefined, 'supervised opencode pid readable before the reapply restart');
+
+    const ocOk = await piWaitOcState(
+      (s: any) => s.bootReapply === 'ok',
+      480_000,
+      'opencode bootReapply ok for the 1.18.32 reapply',
+    );
+    assert.equal(ocOk.currentVersion, SEED, 'state records the reapplied target');
+
+    const cli = (await dockerExec(['sh', '-c', 'opencode --version 2>/dev/null | head -1'])).trim();
+    assert.match(cli, /^1\.18\.32(?:\s|$)/, `CLI reports 1.18.32 (got ${JSON.stringify(cli)})`);
+
+    const healthRaw = await dockerExec(['sh', '-c',
+      'node -e "fetch(\'http://localhost:4096/global/health\').then(r=>r.json()).then(j=>process.stdout.write(JSON.stringify(j))).catch(()=>process.exit(1))"']);
+    const health: any = JSON.parse(healthRaw);
+    assert.equal(health.version, '1.18.32', `web server serves 1.18.32 (${JSON.stringify(health)})`);
+
+    const legPidAfter = await readWebPid();
+    assert.ok(legPidAfter !== undefined, 'supervised pid still present after the reapply');
+    assert.notEqual(legPidAfter, legPidBefore, `supervised child pid changed in-container (${legPidBefore} → ${legPidAfter})`);
+
+    // The box now runs 1.18.32 for the rest of the suite — later tests
+    // (npm status, late-boot reconciliation) must track the new reality.
+    installedOpencode = SEED;
   });
 
   test('5. real boot-failure rollback: broken 4.99.1 → failed + rolled back to 4.99.0', async () => {

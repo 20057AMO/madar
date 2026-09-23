@@ -6,6 +6,7 @@ import fs from 'fs';
 
 import { assertAllowedUpdateBase, isStrictPublisherVersion, semverEquals, parseSemver } from './updates-core';
 import { bootTimeoutMs } from './code-server-update';
+import { runRestartSequence, type RestartVerdict } from './opencode-restart-core';
 
 /**
  * Unified opencode integration layer.
@@ -552,7 +553,15 @@ export interface UpdateResult {
  *  from the pre-update pid: both are necessarily different from the revived
  *  child). Returns `ok:false, bootFailed:true` with the boot error when the
  *  new binary never comes up — callers (not this function) decide whether to
- *  roll back; npm failures keep plain `ok:false` without `bootFailed`.
+ *  roll back; npm failures keep plain `ok:false` without `bootFailed`. A
+ *  restart failure is also a plain `ok:false` (no `bootFailed`) — deliberately
+ *  no rollback: (i) a `bootFailed:true` would route the caller through
+ *  `deps.boot()` and burn the exact full boot window this fail-fast exists to
+ *  eliminate; (ii) every restart-failure reason (missing/refused/survived/
+ *  no-revival) reflects a supervisor-level structural problem under which the
+ *  rollback's own install+restart would fail identically; (iii) plain
+ *  `ok:false` matches the npm-failure fail-fast branch. The verdict's reason
+ *  is surfaced in the error.
  */
 export function installOpencodeVersion(target: string): Promise<UpdateResult> {
   if (!isStrictPublisherVersion(target)) {
@@ -589,12 +598,22 @@ export function installOpencodeVersion(target: string): Promise<UpdateResult> {
       'npm',
       ['install', '-g', `opencode-ai@${target}`, '--no-fund', '--no-audit'],
       { timeout: 180_000 },
-      (err) => {
-        if (err) {
-          resolve(done({ ok: false, error: `npm install failed: ${err.message}` }));
-          return;
-        }
-        restartSupervisedWeb().then(() => {
+      async (err) => {
+        try {
+          if (err) {
+            resolve(done({ ok: false, error: `npm install failed: ${err.message}` }));
+            return;
+          }
+          const restart = await restartSupervisedWeb();
+          if (!restart.ok) {
+            resolve(
+              done({
+                ok: false,
+                error: `opencode ${target} was installed but could not be restarted: ${restart.detail ?? restart.reason} — restart the container to apply the installed version`,
+              }),
+            );
+            return;
+          }
           waitForOpencodeBoot(target, pidBefore).then((bootedVersion) => {
             if (bootedVersion === null) {
               resolve(
@@ -608,7 +627,9 @@ export function installOpencodeVersion(target: string): Promise<UpdateResult> {
             }
             resolve(done({ ok: true, updatedTo: target, restarted: true }));
           });
-        });
+        } catch (e: any) {
+          resolve(done({ ok: false, error: `restart failed: ${e.message}` }));
+        }
       },
     );
   });
@@ -745,34 +766,50 @@ function isOpencodeProcess(pid: number): Promise<boolean> {
 }
 
 /**
- * Kill the supervised opencode child so entrypoint revives it (new binary).
- * Refuses (false) when the pid file is missing/stale or the target is not a
- * genuine opencode process.
+ * Restart the supervised opencode web child so entrypoint revives it with the
+ * newly-installed binary. Runs the import-free restart sequence (SIGTERM →
+ * verify death via a revived pid → escalate to SIGKILL) with the REAL
+ * primitives (pid file, ps probe, process.kill) and logs every step to the
+ * 0600 update log — a young child mid-bootstrap that ABSORBS the SIGTERM is
+ * killed with SIGKILL instead of silently surviving into the caller's boot
+ * window. Returns the honest verdict for fail-fast handling.
  */
-export function restartSupervisedWeb(): Promise<boolean> {
-  const pid = currentOpencodePid();
-  if (pid === undefined) return Promise.resolve(false);
-  return isOpencodeProcess(pid).then((isOurs) => {
-    if (!isOurs) {
-      try {
-        // Best-effort detail to the update log (0600).
-        fs.appendFileSync(
-          path.join(updatesDirName(), 'update.log'),
-          `${new Date().toISOString()} [opencode] restart guard: pid ${pid} is not an opencode process — refusing to SIGTERM\n`,
-          { encoding: 'utf8', mode: 0o600 },
-        );
-      } catch {
-        /* update logging is best-effort */
-      }
-      return false;
-    }
+export async function restartSupervisedWeb(): Promise<RestartVerdict> {
+  const log = (line: string): void => {
     try {
-      process.kill(pid, 'SIGTERM');
-      return true;
+      // Best-effort detail to the update log (0600). mkdir first — a fresh
+      // volume has no updates/ dir yet and appendFileSync alone would silently
+      // drop every step line (appendLog in component-updates does the same).
+      fs.mkdirSync(updatesDirName(), { recursive: true });
+      fs.appendFileSync(
+        path.join(updatesDirName(), 'update.log'),
+        `${new Date().toISOString()} [opencode] restart: ${line}\n`,
+        { encoding: 'utf8', mode: 0o600 },
+      );
     } catch {
-      /* process already gone — the supervisor will revive it anyway */
-      return false;
+      /* update logging is best-effort */
     }
+  };
+  return runRestartSequence({
+    readPid: currentOpencodePid,
+    probeIsOurs: isOpencodeProcess,
+    kill: (pid, signal) => {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        /* raced exit — the supervisor revives it anyway */
+      }
+    },
+    pidGone: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    },
+    sleep: sleepMs,
+    log,
   });
 }
 
