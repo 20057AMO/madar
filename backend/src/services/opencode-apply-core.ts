@@ -47,7 +47,7 @@ export interface OpencodeApplyDeps {
   /** Supervised child pid captured BEFORE the update — boot/rollback demand
    * a DIFFERENT pid so a stale warm probe can never fake a fresh binary. */
   currentPid(): number | undefined;
-  performUpdate(): Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
+  performUpdate(): Promise<{ ok: boolean; error?: string; bootFailed?: boolean }> | { ok: boolean; error?: string; bootFailed?: boolean };
   /** Poll until the new binary is live; null on timeout. */
   boot(target: string | null, oldPid?: number): Promise<string | null>;
   rollback(version: string, oldPid?: number): Promise<{ ok: boolean; error?: string }> | { ok: boolean; error?: string };
@@ -101,12 +101,19 @@ export async function runOpencodeApply(
   // boot-verification must demand a DIFFERENT pid than this one.
   const oldPid = deps.currentPid();
   const performed = await deps.performUpdate();
-  if (!performed.ok) {
+  if (!performed.ok && performed.bootFailed !== true) {
     const err = performed.error || 'opencode update failed';
     fx.log(`failed: ${err}`);
     fx.setState({ applyState: 'failed', error: err });
     fx.audit('opencode-update-failed', false);
     return { ok: false, error: err };
+  }
+  if (!performed.ok) {
+    // bootFailed: the primitive DID install + restart — only its internal
+    // boot verify failed. Walk the machine through the real steps; the boot
+    // probe below either confirms a slow boot (safety net) or drives the
+    // boot-fail → rollback branch as before the refactor.
+    fx.log(`install reported boot failure: ${performed.error ?? 'unknown error'} — re-verifying before rollback`);
   }
 
   // npm performed download+checksum+install in one op — the state machine

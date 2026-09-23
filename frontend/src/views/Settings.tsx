@@ -46,6 +46,7 @@ import {
   type WebhookInput,
   type StorageMetrics,
   type ApplyState,
+  type ComponentStatus,
   type UpdatesStatus,
   type UpdatesLog,
 } from '../api';
@@ -948,9 +949,9 @@ export function Settings() {
           </button>
         </h2>
         <p class="settings-hint">
-          {t2('حدّث opencode أو VS Code (code-server) في مكانه. تحديث المكوّن يعيد تشغيله فقط (~ثوانٍ) وتتصل جلساتك تلقائياً من جديد. إعادة بناء الصورة (', 'Update opencode or VS Code (code-server) in place. Updating a component only restarts it (~seconds) — your sessions reconnect automatically. Rebuilding the image (')}
+          {t2('حدّث opencode أو VS Code (code-server) في مكانه. تحديث المكوّن يعيد تشغيله فقط (~ثوانٍ) وتتصل جلساتك تلقائياً من جديد. التحديثات محفوظة وتُعاد تطبيقها تلقائياً بعد إعادة بناء الصورة (', 'Update opencode or VS Code (code-server) in place. Updating a component only restarts it (~seconds) — your sessions reconnect automatically. Updates are persisted and re-applied automatically after an image rebuild (')}
           <code>docker compose build</code>
-          {t2(') تعود للنسخة المثبتة في الصورة.', ') returns to the baked build version.')}
+          {t2(').', ').')}
           {updates && (
             <span style="display:block;margin-top:4px">
               {t2('آخر تحقق:', 'Last checked:')} <span class="mono">{updates.checkedAt ? new Date(updates.checkedAt).toLocaleTimeString(lang === 'ar' ? 'ar' : undefined) : '—'}</span>
@@ -979,7 +980,7 @@ export function Settings() {
           <div class="dim">{t2('لا مكوّنات أبلغ عنها الخادم.', 'No components reported by the server.')}</div>
         ) : (
           <>
-            {updates.components.map((c) => {
+            {updates.components.map((c: ComponentStatus) => {
               const running = c.updateRunning || UPDATE_RUNNING_STATES.includes(c.applyState);
               const locked = c.upToDate === false && c.channelUnlocked === false;
               const lockReason = c.id === 'opencode'
@@ -1027,8 +1028,20 @@ export function Settings() {
                   {running && !UPDATE_RUNNING_STATES.includes(c.applyState) && (
                     <div class="upd-track"><span class="dim" style="font-size:0.7rem">{t2('جارٍ التحديث…', 'Updating…')}</span></div>
                   )}
-                  {!running && c.applyState === 'ok' && (
+                  {!running && c.bootReapply === 'running' && (
+                    <div class="upd-track"><span class="dim" style="font-size:0.7rem">{t2('جارٍ إعادة تطبيق النسخة المحفوظة بعد الإقلاع…', 'Re-applying the saved version after boot…')}</span></div>
+                  )}
+                  {!running && c.applyState === 'ok' && c.bootReapply !== 'running' && c.bootReapply !== 'failed' && (
                     <div class="upd-msg-ok" role="status"><CheckCircle2 width={12} height={12} /> {t2('النسخة الجديدة تعمل الآن.', 'New version is live.')}</div>
+                  )}
+                  {!running && c.applyState === 'ok' && c.bootReapply === 'failed' && (
+                    <div class="upd-msg-err" role="alert">
+                      <TriangleAlert width={12} height={12} />{' '}
+                      {t2(
+                        `النسخة المحفوظة لم تُعَد تطبيقها بعد إعادة البناء${c.bootReapplyError ? ` — ${c.bootReapplyError}` : ''}. زر التحديث يعيد المحاولة يدوياً.`,
+                        `The saved version was not re-applied after the rebuild${c.bootReapplyError ? ` — ${c.bootReapplyError}` : ''}. The Update button retries manually.`
+                      )}
+                    </div>
                   )}
                   {!running && c.applyState === 'failed' && (
                     <div class="upd-msg-err" role="alert">

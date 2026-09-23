@@ -49,6 +49,10 @@ services:
       # WSD_TESTING=1: check 60 / apply 20). A positive .env value still wins.
       WSD_RATE_UPDATE_CHECK_MAX: ${WSD_RATE_UPDATE_CHECK_MAX:-}
       WSD_RATE_UPDATE_APPLY_MAX: ${WSD_RATE_UPDATE_APPLY_MAX:-}
+      # Boot-time update re-apply: npm installs (opencode update) must write
+      # their cache into the PERSISTENT data volume — the default /root/.npm
+      # lives in the container's writable layer and dies with a rebuild.
+      npm_config_cache: /app/data/.npm
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./workspaces:/workspaces

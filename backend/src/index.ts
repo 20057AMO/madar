@@ -88,6 +88,7 @@ import {
 import { agentCapability, type DelegateCapability } from './services/opencode-delegate-core';
 import { probeOpencodeServer } from './services/opencode-api';
 import * as componentUpdates from './services/component-updates';
+import { startBootUpdatesReapply } from './services/updates-boot';
 import type { ComponentId } from './services/component-updates';
 import { reconcileRunningDelegations } from './services/opencode-delegate-store';
 import { getStorageMetrics, invalidateStorageCache } from './services/storage-metrics';
@@ -2776,6 +2777,10 @@ reconcileRunningDelegations();
 
 // Flip any component update left mid-flight by a crashed server to failed.
 componentUpdates.reconcileStaleStates();
+
+// Re-apply persisted 'ok' component updates that a container rebuild discarded
+// (boot-time upgrade survival; fire-and-forget, never blocks boot).
+startBootUpdatesReapply();
 
 // Per-project automated snapshot captures (boot + every WSD_SNAPSHOT_SWEEP_MS).
 snapAuto.startSnapshotAutomation();

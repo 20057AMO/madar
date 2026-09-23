@@ -39,6 +39,10 @@ export interface ComponentStatus {
   /** true when a failed update was rolled back to the previous version. */
   rolledBack?: boolean;
   channelUnlocked?: boolean;
+  /** Boot-time re-apply verdict of the last dashboard start ('ok'|'failed'|'skipped'). */
+  bootReapply?: string;
+  /** Truncated reason when bootReapply === 'failed'. */
+  bootReapplyError?: string;
 }
 
 export interface UpdatesStatus {
@@ -76,7 +80,7 @@ function opencodeStateFile(): string {
   return path.join(updatesDir(), 'opencode.json');
 }
 
-function appendLog(line: string): void {
+export function appendLog(line: string): void {
   try {
     fs.mkdirSync(updatesDir(), { recursive: true });
     fs.appendFileSync(path.join(updatesDir(), 'update.log'), `${new Date().toISOString()} ${line}\n`, {
@@ -123,9 +127,13 @@ export interface OpencodeUpdateState {
   rolledBack?: boolean;
   startedAt?: string;
   updatedAt?: string;
+  /** Boot-time re-apply verdict of the last dashboard start ('ok'|'failed'|'skipped'). */
+  bootReapply?: string;
+  /** Truncated reason when bootReapply === 'failed'. */
+  bootReapplyError?: string;
 }
 
-function readOpencodeState(): OpencodeUpdateState {
+export function readOpencodeState(): OpencodeUpdateState {
   try {
     const j = JSON.parse(fs.readFileSync(opencodeStateFile(), 'utf8'));
     if (!j || typeof j !== 'object') return { applyState: 'idle' };
@@ -140,13 +148,15 @@ function readOpencodeState(): OpencodeUpdateState {
     if (typeof s.rolledBack === 'boolean') state.rolledBack = s.rolledBack;
     if (typeof s.startedAt === 'string') state.startedAt = s.startedAt;
     if (typeof s.updatedAt === 'string') state.updatedAt = s.updatedAt;
+    if (typeof s.bootReapply === 'string') state.bootReapply = s.bootReapply;
+    if (typeof s.bootReapplyError === 'string') state.bootReapplyError = s.bootReapplyError;
     return state;
   } catch {
     return { applyState: 'idle' };
   }
 }
 
-async function persistOpencodeState(state: OpencodeUpdateState): Promise<void> {
+export async function persistOpencodeState(state: OpencodeUpdateState): Promise<void> {
   fs.mkdirSync(updatesDir(), { recursive: true });
   await withFileLockAsync('update:opencode-state', async () => {
     fs.writeFileSync(opencodeStateFile(), JSON.stringify(state, null, 2) + '\n', {
@@ -224,6 +234,8 @@ export async function getUpdatesStatus(): Promise<UpdatesStatus> {
       error: ocState.error,
       rolledBack: ocState.rolledBack,
       channelUnlocked: openCodeReg.channelUnlocked,
+      bootReapply: ocState.bootReapply,
+      bootReapplyError: ocState.bootReapplyError,
     },
     {
       id: 'code-server',
@@ -235,6 +247,8 @@ export async function getUpdatesStatus(): Promise<UpdatesStatus> {
       error: csState.error,
       rolledBack: csState.rolledBack,
       channelUnlocked: isSupportedArch(process.arch),
+      bootReapply: csState.bootReapply,
+      bootReapplyError: csState.bootReapplyError,
     },
   ];
   return { components, checkedAt };

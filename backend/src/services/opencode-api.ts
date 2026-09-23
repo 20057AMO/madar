@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 
-import { assertAllowedUpdateBase, isStrictPublisherVersion, semverEquals } from './updates-core';
+import { assertAllowedUpdateBase, isStrictPublisherVersion, semverEquals, parseSemver } from './updates-core';
 import { bootTimeoutMs } from './code-server-update';
 
 /**
@@ -528,66 +528,42 @@ export interface UpdateResult {
   updatedTo?: string;
   restarted?: boolean;
   error?: string;
+  bootFailed?: boolean;
 }
 
 /**
- * Install the newest compatible release inside the container and restart
- * the supervised opencode web process into it. Single-flight; refuses
- * unsupported target majors via the caller-side gate as well as here.
- * Installs and restarts ONLY — boot verification is the CALLER's
- * responsibility: the apply core (runOpencodeApply) probes the new binary
- * via its `boot` dep and drives the rollback when it never comes up.
+ * Install a PINNED opencode version via npm, restart the supervised web
+ * process into it and verify the new binary boots (CLI version + web server
+ * + supervised-pid change — the same checks `waitForOpencodeBoot` applies to
+ * interactive updates and rollbacks). Single-flight; refuses non-publisher
+ * version strings (injection/range forms) and majors outside
+ * SUPPORTED_MAJORS before a byte moves.
+ *
+ * Shared primitive behind three callers:
+ *  - performOpencodeUpdate (registry latest → install);
+ *  - rollbackOpencodeTo (reinstall the pinned baseline after a failed boot);
+ *  - the boot-time re-apply (updates-boot.ts) restoring a persisted 'ok'
+ *    version that a container rebuild discarded.
+ *
+ * The supervised-pid snapshot for the boot-verify pid-change check is taken
+ * BEFORE npm runs (a rollback is always invoked after the failed update's own
+ *  restart, so the pid captured at rollback entry is the broken child —
+ *  requiring a change from it is behaviorally equivalent to demanding a change
+ *  from the pre-update pid: both are necessarily different from the revived
+ *  child). Returns `ok:false, bootFailed:true` with the boot error when the
+ *  new binary never comes up — callers (not this function) decide whether to
+ *  roll back; npm failures keep plain `ok:false` without `bootFailed`.
  */
-export function performOpencodeUpdate(): Promise<UpdateResult> {
-  if (updateInFlight) {
-    return Promise.resolve({ ok: false, error: 'An update is already running' });
+export function installOpencodeVersion(target: string): Promise<UpdateResult> {
+  if (!isStrictPublisherVersion(target)) {
+    return Promise.resolve({ ok: false, error: `Invalid target version: ${target}` });
   }
-  updateInFlight = true;
-  const done = (r: UpdateResult): UpdateResult => {
-    updateInFlight = false;
-    return r;
-  };
-
-  return fetchLatestVersion()
-    .then((reg) => {
-      if (!reg.latest || !reg.channelUnlocked) {
-        return done({
-          ok: false,
-          error: `Latest release (${reg.latest ?? 'unknown'}) is not supported by this Madar build yet`,
-        });
-      }
-      const target = reg.latest;
-      return new Promise<UpdateResult>((resolve) => {
-        execFile(
-          'npm',
-          ['install', '-g', `opencode-ai@${target}`, '--no-fund', '--no-audit'],
-          { timeout: 180_000 },
-          (err) => {
-            if (err) {
-              resolve(done({ ok: false, error: `npm install failed: ${err.message}` }));
-              return;
-            }
-            restartSupervisedWeb().then((restartOk) => {
-              resolve(done({ ok: true, updatedTo: target, restarted: restartOk }));
-            });
-          },
-        );
-      });
-    })
-    .catch((e: Error) => done({ ok: false, error: e.message }));
-}
-
-/**
- * Reinstall a pinned opencode version and restart the supervised web process
- * into it. Mirrors performOpencodeUpdate exactly — used by the unified
- * update facade to roll opencode back after a failed boot-to-new-version.
- * `oldPid` MUST be the supervised pid captured BEFORE the failed update
- * started (Boot-verify then demands a pid change — without it a stale child
- * still running the broken binary could pass the version probe alone).
- */
-export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Promise<UpdateResult> {
-  if (!isStrictPublisherVersion(currentVersion)) {
-    return Promise.resolve({ ok: false, error: `Invalid rollback version: ${currentVersion}` });
+  const parsed = parseSemver(target);
+  if (parsed === null || !SUPPORTED_MAJORS.includes(parsed.major)) {
+    return Promise.resolve({
+      ok: false,
+      error: `opencode ${target} is not supported by this Madar build yet`,
+    });
   }
   if (updateInFlight) {
     return Promise.resolve({ ok: false, error: 'An update is already running' });
@@ -597,12 +573,21 @@ export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Pro
     updateInFlight = false;
     return r;
   };
-  const pidBefore = oldPid ?? currentOpencodePid();
+  const pidBefore = currentOpencodePid(); // captured BEFORE npm / the restart
+  try {
+    // npm cache is set to the shared data dir (docker-compose
+    // `npm_config_cache: /app/data/.npm`); create it 0700 so `_cacache` url
+    // metadata (token-bearing tarball URLs under a private registry) never
+    // sits world-readable on the volume.
+    fs.mkdirSync(process.env.npm_config_cache || path.join(os.homedir(), '.npm'), { recursive: true, mode: 0o700 });
+  } catch {
+    /* npm handles its own cache when the dir is unusable */
+  }
 
   return new Promise<UpdateResult>((resolve) => {
     execFile(
       'npm',
-      ['install', '-g', `opencode-ai@${currentVersion}`, '--no-fund', '--no-audit'],
+      ['install', '-g', `opencode-ai@${target}`, '--no-fund', '--no-audit'],
       { timeout: 180_000 },
       (err) => {
         if (err) {
@@ -610,22 +595,65 @@ export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Pro
           return;
         }
         restartSupervisedWeb().then(() => {
-          waitForOpencodeBoot(currentVersion, pidBefore).then((bootedVersion) => {
+          waitForOpencodeBoot(target, pidBefore).then((bootedVersion) => {
             if (bootedVersion === null) {
               resolve(
                 done({
                   ok: false,
-                  error: `Rolled-back opencode ${currentVersion} did not boot within ${Math.round(bootTimeoutMs() / 1000)}s — the supervisor keeps reviving it; check the update log`,
+                  bootFailed: true,
+                  error: `Updated opencode ${target} did not boot within ${Math.round(bootTimeoutMs() / 1000)}s — the supervisor keeps reviving it; check the update log`,
                 }),
               );
               return;
             }
-            resolve(done({ ok: true, updatedTo: currentVersion, restarted: true }));
+            resolve(done({ ok: true, updatedTo: target, restarted: true }));
           });
         });
       },
     );
   });
+}
+
+/**
+ * Install the newest compatible release inside the container and restart
+ * the supervised opencode web process into it. Single-flight; refuses
+ * unsupported target majors via the caller-side gate as well as here.
+ * Installs, restarts AND boot-verifies (via installOpencodeVersion) — the
+ * apply core re-verifies through its own `boot` dep (idempotent: the binary
+ * already booted), and reports `ok:false` honestly when that probe fails.
+ */
+export function performOpencodeUpdate(): Promise<UpdateResult> {
+  if (updateInFlight) {
+    return Promise.resolve({ ok: false, error: 'An update is already running' });
+  }
+  return fetchLatestVersion()
+    .then((reg) => {
+      if (!reg.latest || !reg.channelUnlocked) {
+        return {
+          ok: false,
+          error: `Latest release (${reg.latest ?? 'unknown'}) is not supported by this Madar build yet`,
+        } satisfies UpdateResult;
+      }
+      return installOpencodeVersion(reg.latest);
+    })
+    .catch((e: Error): UpdateResult => ({ ok: false, error: e.message }));
+}
+
+/**
+ * Reinstall a pinned opencode version and restart the supervised web process
+ * into it — used by the unified update facade to roll opencode back after a
+ * failed boot-to-new-version. Delegates to installOpencodeVersion (same
+ * install + restart + boot-verify path); `oldPid` is kept for the facade's
+ * signature but the install captures the supervised pid itself at rollback
+ * entry — that pid is the update's broken child, so demanding a change from
+ * it is equivalent to demanding a change from the pre-update pid.
+ */
+export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Promise<UpdateResult> {
+  if (!isStrictPublisherVersion(currentVersion)) {
+    return Promise.resolve({ ok: false, error: `Invalid rollback version: ${currentVersion}` });
+  }
+  void oldPid;
+  return installOpencodeVersion(currentVersion);
 }
 
 function sleepMs(ms: number): Promise<void> {

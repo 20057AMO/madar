@@ -185,6 +185,85 @@ describe('runOpencodeApply boot-fail → rollback wiring', () => {
     assert.deepStrictEqual(rec.audits, [{ event: 'opencode-update-failed', ok: false }]);
   });
 
+  test('perform {ok:false, bootFailed:true} → the install DID happen, so the boot-fail rollback branch drives rollback with baseline + oldPid', async () => {
+    const rollbackCalls: Array<{ version: string; oldPid?: number }> = [];
+    const deps = makeDeps({
+      currentPid: () => 987,
+      performUpdate: async () => ({
+        ok: false,
+        bootFailed: true,
+        error: 'Updated opencode 1.19.0 did not boot within 90s — the supervisor keeps reviving it; check the update log',
+      }),
+      boot: async () => null, // re-probe agrees the new binary is dead
+      rollback: async (version, oldPid) => {
+        rollbackCalls.push({ version, oldPid });
+        return { ok: true };
+      },
+    });
+    const { fx, rec } = makeFx();
+
+    const res = await runOpencodeApply(deps, fx);
+
+    // A bootFailed perform must NOT be treated as a plain install failure —
+    // the pre-refactor contract (perform returned ok:true and the core's own
+    // boot probe detected the dead binary) is restored: roll back to baseline.
+    assert.strictEqual(res.ok, false);
+    assert.match(res.error, /rolled back to 1\.18\.22/);
+    assert.strictEqual(rollbackCalls.length, 1, 'bootFailed must trigger exactly one rollback');
+    assert.strictEqual(rollbackCalls[0].version, '1.18.22', 'rollback pins the baseline');
+    assert.strictEqual(rollbackCalls[0].oldPid, 987, 'rollback boot-checks against the PRE-update pid');
+    assert.strictEqual(lastPatch(rec).rolledBack, true);
+    assert.strictEqual(lastPatch(rec).applyState, 'failed');
+    assert.deepStrictEqual(rec.steps, [
+      'start', 'downloaded', 'verified', 'installed', 'restarted',
+      'boot-fail', 'rollback-ok',
+    ]);
+    assert.deepStrictEqual(rec.audits, [
+      { event: 'opencode-update-rollback', ok: true },
+      { event: 'opencode-update-failed', ok: false },
+    ]);
+  });
+
+  test('perform {ok:false, bootFailed:true} with a boot that then SUCCEEDS (slow-boot safety net) → ok, no rollback', async () => {
+    let rollbackCalled = false;
+    const deps = makeDeps({
+      performUpdate: async () => ({
+        ok: false,
+        bootFailed: true,
+        error: 'Updated opencode 1.19.0 did not boot within 90s — the supervisor keeps reviving it; check the update log',
+      }),
+      boot: async () => '1.19.0', // the binary came up just after the internal timeout
+      rollback: async () => { rollbackCalled = true; return { ok: true }; },
+    });
+    const { fx, rec } = makeFx();
+
+    const res = await runOpencodeApply(deps, fx);
+
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(rollbackCalled, false, 'a live binary must never roll back — the re-probe is the safety net');
+    assert.deepStrictEqual(rec.steps, [
+      'start', 'downloaded', 'verified', 'installed', 'restarted', 'boot-ok',
+    ]);
+    assert.strictEqual(lastPatch(rec).applyState, 'ok');
+  });
+
+  test('perform plain {ok:false} (no bootFailed) NEVER rolls back — npm never ran install/restart', async () => {
+    const touched: string[] = [];
+    const deps = makeDeps({
+      performUpdate: async () => ({ ok: false, error: 'npm install failed: EACCES' }),
+      boot: async () => { touched.push('boot'); return '1.19.0'; },
+      rollback: async () => { touched.push('rollback'); return { ok: true }; },
+    });
+    const { fx, rec } = makeFx();
+
+    const res = await runOpencodeApply(deps, fx);
+
+    assert.strictEqual(res.ok, false);
+    assert.deepStrictEqual(touched, [], 'a plain install failure never probes boot nor rolls back');
+    assert.strictEqual(lastPatch(rec).applyState, 'failed');
+    assert.deepStrictEqual(rec.audits, [{ event: 'opencode-update-failed', ok: false }]);
+  });
+
   test('baseline is persisted into the state as currentVersion once known', async () => {
     const { fx, rec } = makeFx();
     const res = await runOpencodeApply(makeDeps(), fx);

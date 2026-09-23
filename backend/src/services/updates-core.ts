@@ -411,3 +411,66 @@ export interface ApplyStateSnapshot {
 export function freshApplyState(prev: ApplyStateSnapshot): { applyState: ApplyState } {
   return { applyState: applyStateMachine(prev.applyState, 'reset') };
 }
+
+/* ── Boot-time re-apply decision ────────────────────────────────────────── */
+
+export type BootReapplySkipReason =
+  | 'not-ok'
+  | 'no-persisted-version'
+  | 'no-running-version'
+  | 'unsupported-major'
+  | 'converged';
+
+export type BootReapplyDecision =
+  | { action: 'reapply'; targetVersion: string }
+  | { action: 'adopt-image'; runningVersion: string }
+  | { action: 'skip'; reason: BootReapplySkipReason };
+
+export interface BootReapplyInput {
+  /** The persisted state's applyState — only a terminal 'ok' re-applies. */
+  applyState?: string | null;
+  /** Persisted current/target version from the 'ok' terminal state. */
+  persisted?: string | null;
+  /** The version running in the freshly-built image. */
+  running?: string | null;
+  /** Component-supported major whitelist (opencode only). */
+  supportedMajors?: number[];
+}
+
+/**
+ * Decide what a dashboard boot must do with a persisted component-update
+ * state after a `docker compose build && up` discarded the writable layer:
+ *
+ *   reapply     — persisted 'ok' state IS strictly newer than the running
+ *                 image: re-install the persisted version (survive the rebuild).
+ *   adopt-image — persisted version is OLDER than the running image: the new
+ *                 build already ships the newer binary — adopt it as
+ *                 currentVersion (never a silent downgrade attempt).
+ *   skip        — everything else: never re-apply a failed/interrupted state,
+ *                 never re-apply when either version is unknown/unparseable,
+ *                 never re-apply a version the installers would refuse (a
+ *                 `v`-prefixed or range-form persisted string fails the strict
+ *                 publisher gate → guaranteed-fail reapply, never attempted),
+ *                 never re-apply a major outside the component's support gate,
+ *                 never re-apply a version the image already runs.
+ */
+export function decideBootReapply(input: BootReapplyInput): BootReapplyDecision {
+  if (input.applyState !== 'ok') return { action: 'skip', reason: 'not-ok' };
+  const persisted = typeof input.persisted === 'string' ? input.persisted.trim() : null;
+  if (persisted === null || parseSemver(persisted) === null || !isStrictPublisherVersion(persisted)) {
+    return { action: 'skip', reason: 'no-persisted-version' };
+  }
+  const running = typeof input.running === 'string' ? input.running.trim() : null;
+  if (running === null || parseSemver(running) === null) {
+    return { action: 'skip', reason: 'no-running-version' };
+  }
+  const p = parseSemver(persisted) as { major: number; minor: number; patch: number };
+  const r = parseSemver(running) as { major: number; minor: number; patch: number };
+  if (input.supportedMajors && !input.supportedMajors.includes(p.major)) {
+    return { action: 'skip', reason: 'unsupported-major' };
+  }
+  const cmp = p.major - r.major || p.minor - r.minor || p.patch - r.patch;
+  if (cmp > 0) return { action: 'reapply', targetVersion: persisted };
+  if (cmp === 0) return { action: 'skip', reason: 'converged' };
+  return { action: 'adopt-image', runningVersion: running };
+}

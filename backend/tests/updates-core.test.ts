@@ -24,6 +24,7 @@ import {
   isStrictPublisherVersion,
   applyStateMachine,
   freshApplyState,
+  decideBootReapply,
   type ApplyState,
   type ApplyEvent,
 } from '../src/services/updates-core.ts';
@@ -731,5 +732,145 @@ describe('isSupportedArch', () => {
     for (const bad of ['ia32', 'ppc64', 's390x', 'riscv64', '']) {
       assert.equal(isSupportedArch(bad), false, bad);
     }
+  });
+});
+
+/* ── decideBootReapply (boot-time re-apply after a rebuild) ────────────── */
+
+describe('decideBootReapply', () => {
+  test('ok + persisted strictly newer than the running image → reapply with that target', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '4.99.0', running: '4.96.4' }),
+      { action: 'reapply', targetVersion: '4.99.0' },
+    );
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '1.99.99', running: '1.18.22', supportedMajors: [1] }),
+      { action: 'reapply', targetVersion: '1.99.99' },
+    );
+  });
+
+  test('ok + equal versions → skip converged (never re-install what already runs)', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '4.99.0', running: '4.99.0' }),
+      { action: 'skip', reason: 'converged' },
+    );
+  });
+
+  test('ok + persisted OLDER than the running image → adopt-image (a newer build ships the version)', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '4.96.4', running: '4.99.0' }),
+      { action: 'adopt-image', runningVersion: '4.99.0' },
+    );
+  });
+
+  test('every non-ok persisted state → skip not-ok (a failed/interrupted update is never re-applied)', () => {
+    const notOk = ['idle', 'downloading', 'verifying', 'installing', 'restarting', 'verifying-boot', 'failed', 'rollback'];
+    for (const applyState of notOk) {
+      assert.deepEqual(
+        decideBootReapply({ applyState, persisted: '4.99.0', running: '4.96.4' }),
+        { action: 'skip', reason: 'not-ok' },
+        applyState,
+      );
+    }
+    assert.deepEqual(
+      decideBootReapply({ applyState: undefined, persisted: '4.99.0', running: '4.96.4' }),
+      { action: 'skip', reason: 'not-ok' },
+      'missing applyState',
+    );
+    assert.deepEqual(
+      decideBootReapply({ applyState: null, persisted: '4.99.0', running: '4.96.4' }),
+      { action: 'skip', reason: 'not-ok' },
+      'null applyState',
+    );
+  });
+
+  test('missing / null / junk persisted version → skip no-persisted-version', () => {
+    for (const persisted of [undefined, null, '', '   ', 'not-a-version', '1.2', 'latest', '4.99.0 || 4.98.0', 'v4.99.0']) {
+      assert.deepEqual(
+        decideBootReapply({ applyState: 'ok', persisted: persisted as string | null | undefined, running: '4.96.4' }),
+        { action: 'skip', reason: 'no-persisted-version' },
+        JSON.stringify(persisted),
+      );
+    }
+  });
+
+  test('missing / null / unknown running version → skip no-running-version', () => {
+    for (const running of [undefined, null, '', 'unknown', 'junk']) {
+      assert.deepEqual(
+        decideBootReapply({ applyState: 'ok', persisted: '4.99.0', running: running as string | null | undefined }),
+        { action: 'skip', reason: 'no-running-version' },
+        JSON.stringify(running),
+      );
+    }
+  });
+
+  test('supportedMajors gate: a persisted major outside the whitelist is never re-applied', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '1.99.0', running: '1.18.22', supportedMajors: [1] }),
+      { action: 'reapply', targetVersion: '1.99.0' },
+      'major 1 supported',
+    );
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '2.99.0', running: '1.18.22', supportedMajors: [1] }),
+      { action: 'skip', reason: 'unsupported-major' },
+      'major 2 not supported',
+    );
+    // An EMPTY whitelist (e.g. a future no-supported-majors build) refuses
+    // everything — the gate is `!includes`, never a special-cased length.
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '1.99.0', running: '1.18.22', supportedMajors: [] }),
+      { action: 'skip', reason: 'unsupported-major' },
+      'empty whitelist refuses everything',
+    );
+  });
+
+  test('no supportedMajors → no major gate at all (code-server path)', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '2.99.0', running: '1.99.0' }),
+      { action: 'reapply', targetVersion: '2.99.0' },
+    );
+  });
+
+  test('prerelease suffixes are stripped before compare (v1 numeric rule)', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '1.99.0-beta.1', running: '1.99.0' }),
+      { action: 'skip', reason: 'converged' },
+      'prerelease vs its release is the same numeric version',
+    );
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '1.99.1-rc.1', running: '1.99.0' }),
+      { action: 'reapply', targetVersion: '1.99.1-rc.1' },
+      'patch of the prerelease is newer',
+    );
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '1.99.0', running: '2.0.0-beta.1' }),
+      { action: 'adopt-image', runningVersion: '2.0.0-beta.1' },
+      'image prerelease still has the higher major',
+    );
+  });
+
+  test('surrounding whitespace is tolerated (trimmed before parse + returned clean)', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '  4.99.0  ', running: '4.96.4' }),
+      { action: 'reapply', targetVersion: '4.99.0' },
+      'target is the trimmed version (never reaches npm/dpkg with spaces)',
+    );
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: '4.99.0', running: ' 4.96.4 ' }),
+      { action: 'reapply', targetVersion: '4.99.0' },
+    );
+  });
+
+  test('v-prefixed persisted versions REFUSE reapply (strict publisher gate — parseSemver tolerates v, but the installers reject it → guaranteed-fail reapply)', () => {
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: 'v4.99.0', running: '4.96.4' }),
+      { action: 'skip', reason: 'no-persisted-version' },
+      'plain v-prefix',
+    );
+    assert.deepEqual(
+      decideBootReapply({ applyState: 'ok', persisted: 'v1.99.0-beta.1', running: '1.18.22', supportedMajors: [1] }),
+      { action: 'skip', reason: 'no-persisted-version' },
+      'v-prefixed prerelease',
+    );
   });
 });

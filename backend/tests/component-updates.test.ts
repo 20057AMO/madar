@@ -422,6 +422,12 @@ async function ensureContainerConfigured(mockPort: number): Promise<void> {
   if (envOk && binaryOk) return; // fast path — already the mock container
 
   console.log(`[container] recreating for mock env (envOk=${envOk}, binary=${currentVersion || 'unknown'})`);
+  // Clear persisted updates state on the OLD container BEFORE the recreate: a
+  // stale {applyState:'ok', currentVersion:'4.99.0'} (left by an aborted run)
+  // would trigger the boot-time re-apply during this very recreate and could
+  // reinstall a cached fake deb — this container must start from its pristine
+  // image baseline (test 1 asserts the 4.96.x shape).
+  await clearUpdatesState();
   await composeUp(want, envOk && !binaryOk);
   await pollHealth(240_000);
   await waitForCodeServerVersion(60_000);
@@ -520,6 +526,30 @@ async function piReadCsState(): Promise<any> {
   } catch {
     return null;
   }
+}
+
+const OPENCODE_STATE = '/app/data/updates/opencode.json';
+
+async function piReadOcState(): Promise<any> {
+  const out = await dockerExec(['sh', '-c', `cat ${OPENCODE_STATE} 2>/dev/null || echo "{}"`]);
+  try {
+    return JSON.parse(out);
+  } catch {
+    return null;
+  }
+}
+
+/** Poll the opencode state FILE until pred(s) is true. */
+async function piWaitOcState(pred: (s: any) => boolean, timeoutMs: number, what: string): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  let last: any = null;
+  while (Date.now() < deadline) {
+    const s = await piReadOcState();
+    last = s;
+    if (s && pred(s)) return s;
+    await sleep(1000);
+  }
+  throw new Error(`timed out waiting for opencode state: ${what}; last=${JSON.stringify(last)}`);
 }
 
 const CS_EXEC_STATES = ['downloading', 'verifying', 'installing', 'restarting', 'verifying-boot', 'rollback'];
@@ -726,6 +756,69 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     const after = await piMockStats();
     assert.equal(after.counters.deb[debName(HAPPY_VERSION)] ?? 0, 1, 'release asset fetched once');
     assert.equal(after.counters.download[debName(BASELINE_VERSION)] ?? 0, 1, 'baseline downloaded once');
+  });
+
+  test('4b. boot-time re-apply: persisted ok versions survive a rebuild (code-server from the deb cache, opencode fails fast off-registry)', async () => {
+    assert.ok(tempAdmin);
+    const h = tempAdmin!.headers;
+    const CS_STATE = '/app/data/updates/code-server.json';
+    const OC_STATE = '/app/data/updates/opencode.json';
+    await piWaitCsSettled(240_000, 'before boot-reapply test');
+
+    // Seed BOTH state files as the shape a pre-rebuild successful update leaves:
+    // {applyState:'ok'} + the installed version. 4.99.0 is cacheable (test 4
+    // cached the fake deb into $DATA_DIR/updates/debs/ on the shared volume);
+    // 1.99.99 exists NOWHERE — the mock never serves it and the boot npm
+    // install talks to the REAL registry (WSD_UPDATE_NPM_REGISTRY only feeds
+    // the probe/apply latest fetch), so the opencode reapply must fail fast —
+    // and the failure must NEVER disturb the persisted apply state.
+    const seed = (payload: string, dest: string): Promise<string> =>
+      dockerExec(['sh', '-c',
+        `printf '%s' '${payload.replace(/'/g, `'\\''`)}' > ${dest} && chmod 600 ${dest}`]);
+    await seed(JSON.stringify({
+      applyState: 'ok', currentVersion: HAPPY_VERSION, targetVersion: HAPPY_VERSION, updatedAt: new Date().toISOString(),
+    }), CS_STATE);
+    await seed(JSON.stringify({
+      applyState: 'ok', currentVersion: '1.99.99', targetVersion: '1.99.99', updatedAt: new Date().toISOString(),
+    }), OC_STATE);
+
+    // Discard the writable layer: the fresh container boots the image baseline
+    // (4.96.4 / installedOpencode) while the state files still claim the newer
+    // versions → the boot-time re-apply must kick in on start.
+    await composeUp(UPDATES_ENV(mock.port), true);
+    await pollHealth(240_000);
+
+    // code-server: re-applied 4.99.0 from the deb cache, verifiably booted.
+    const csLive = await waitForCodeServerVersion(120_000);
+    assert.equal(csLive, HAPPY_VERSION, `boot re-applied 4.99.0 from cache (got ${csLive})`);
+    const csState = await piWaitCsState(
+      (s: any) => s.applyState === 'ok' && s.bootReapply === 'ok',
+      90_000,
+      'code-server bootReapply ok + applyState preserved',
+    );
+    assert.equal(csState.currentVersion, HAPPY_VERSION, 'current stays the persisted version');
+
+    // opencode: the reapply fails (1.99.99 exists nowhere) — assert the honest
+    // bootReapply:'failed' while applyState/currentVersion are PRESERVED.
+    const ocState = await piWaitOcState(
+      (s: any) => s.bootReapply === 'failed',
+      300_000,
+      'opencode bootReapply failed',
+    );
+    assert.equal(ocState.applyState, 'ok', 'boot failure never touches applyState');
+    assert.equal(ocState.currentVersion, '1.99.99', 'boot failure never touches currentVersion');
+    assert.equal(ocState.targetVersion, '1.99.99', 'boot failure never touches targetVersion');
+    // the npm failure message echoes the target in its command line
+    // (`npm install -g opencode-ai@1.99.99 …`) even when the underlying cause
+    // is a 404 (no such version) or a registry network error
+    assert.match(String(ocState.bootReapplyError ?? ''), /1\.99\.99/i, `bootReapplyError names the target (${JSON.stringify(ocState.bootReapplyError)})`);
+
+    // both verdicts surface on GET /api/updates + both runs hit the update log
+    const j = await piGet(h);
+    assert.equal(byId(j, 'code-server').bootReapply, 'ok', 'status surface carries code-server bootReapply');
+    assert.equal(byId(j, 'opencode').bootReapply, 'failed', 'status surface carries opencode bootReapply');
+    assert.equal(await piLogContains('[boot-reapply] code-server:'), true, 'log has the code-server boot marker');
+    assert.equal(await piLogContains('[boot-reapply] opencode:'), true, 'log has the opencode boot marker');
   });
 
   test('5. real boot-failure rollback: broken 4.99.1 → failed + rolled back to 4.99.0', async () => {
@@ -1022,6 +1115,15 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
       await restoreCodeServer(fsBackup);
       const v = await waitForCodeServerVersion(90_000);
       if (!v.startsWith('4.96.')) throw new Error(`restored binary is ${v}, expected 4.96.x`);
+    });
+
+    await tryStep('clear updates state before the restore recreate', async () => {
+      // The boot-reapply test deliberately leaves {applyState:'ok',
+      // currentVersion:'4.99.0'} + the cached deb on this (mock) container;
+      // without this pre-clear the DEFAULT-env recreate below would trigger the
+      // boot-time re-apply and reinstall the cached fake deb, breaking the
+      // final 4.96.x verification.
+      await clearUpdatesState();
     });
 
     await tryStep('recreate container with default env', async () => {

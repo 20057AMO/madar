@@ -31,6 +31,8 @@ import {
   assertAllowedUpdateBase,
   applyStateMachine,
   freshApplyState,
+  isStrictPublisherVersion,
+  isSupportedArch,
   type ApplyEvent,
   type ApplyState,
 } from './updates-core';
@@ -54,6 +56,10 @@ export interface CodeServerUpdateState {
   rolledBack?: boolean;
   startedAt?: string;
   updatedAt?: string;
+  /** Boot-time re-apply verdict of the last dashboard start ('ok'|'failed'|'skipped'). */
+  bootReapply?: string;
+  /** Truncated reason when bootReapply === 'failed'. */
+  bootReapplyError?: string;
 }
 
 export interface ReleaseInfo {
@@ -440,6 +446,153 @@ function freeSpaceIn(dir: string): number | null {
   }
 }
 
+// ── Deb cache (boot-time re-apply after a container rebuild) ─────────────
+
+/**
+ * Path of the cached .deb for a version. The cache lives at
+ * $DATA_DIR/updates/debs/ (a subdir of the SAME wsd-data volume that carries
+ * the state files, so both survive a `docker compose build && up`) and is
+ * capped at ONE artifact — the most recently applied version.
+ */
+export function cachedDebPath(version: string): string {
+  return path.join(updatesDir(), 'debs', assetDebName(version, process.arch));
+}
+
+/** True when the cached deb for `version` exists AND parses as a real deb
+ * (dpkg-deb --info) — a truncated/corrupt cache entry must never be trusted. */
+export async function isCachedDebValid(version: string): Promise<boolean> {
+  const p = cachedDebPath(version);
+  if (!fs.existsSync(p)) return false;
+  try {
+    await execFileAsync('dpkg-deb', ['--info', p], { timeout: 30_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Move a freshly-installed deb into the cache and prune every OTHER cached
+ * deb — the cache holds at most the newest applied version. */
+export function cacheInstalledDeb(version: string, fromPath: string): void {
+  const dir = path.join(updatesDir(), 'debs');
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, assetDebName(version, process.arch));
+  fs.rmSync(target, { force: true });
+  fs.renameSync(fromPath, target);
+  for (const entry of fs.readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    if (full !== target) fs.rmSync(full, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Install a PINNED code-server deb version and ride the entrypoint
+ * supervision loop through a restart + boot-verify. Shared primitive behind
+ * the interactive apply's successful-boot path semantics and the boot-time
+ * re-apply (updates-boot.ts):
+ *
+ *  - `fromCache` installs from the local deb cache when a valid cached
+ *    artifact exists (fast, offline) — otherwise the deb is downloaded from
+ *    `downloadBase()/download/v<version>/<name>` under the usual transport +
+ *    host guards and a coarse free-space check;
+ *  - after a successful install the freshly-fetched deb is moved into the
+ *    cache so a FUTURE rebuild can re-apply it without the network;
+ *  - NO rollback is performed or returned: a boot-time re-apply is by
+ *    definition applied in the binary-swap window a rebuild creates, and a
+ *    failed install just reports `ok:false` for the caller to surface.
+ *
+ * The version does NOT have to be newer than the running one (rollback paths
+ * and re-applies reuse this) — only the interactive latest flow enforces
+ * not-newer via compatGate. State persistence is the CALLER's job.
+ */
+export async function installCodeServerVersion(
+  version: string,
+  opts: { fromCache?: boolean } = {},
+): Promise<UpdateResult> {
+  const fail = (error: string): UpdateResult => ({ ok: false, error });
+  if (!isSupportedArch(process.arch)) {
+    return fail(`No code-server update package for this platform (${process.arch}); supported platforms: x64 (amd64) and arm64`);
+  }
+  if (!isStrictPublisherVersion(version)) {
+    return fail(`Invalid target version: ${version}`);
+  }
+  const debName = assetDebName(version, process.arch);
+  if (!assertSafeDebName(debName)) {
+    return fail('Refusing to write a non-standard deb filename');
+  }
+  if (updateInFlight) {
+    return fail('An update is already running');
+  }
+  updateInFlight = true;
+  const done = (r: UpdateResult): UpdateResult => {
+    updateInFlight = false;
+    return r;
+  };
+  const log = (line: string) => appendLog(`[code-server] ${line}`);
+  const debPath = path.join(updatesDir(), debName);
+
+  try {
+    // 1. Obtain the deb: local-cache fast path first, download otherwise.
+    let usedCache = false;
+    if (opts.fromCache === true && (await isCachedDebValid(version))) {
+      usedCache = true;
+    }
+    if (!usedCache) {
+      const url = `${downloadBase()}/download/v${version}/${debName}`;
+      assertAllowedUpdateBase(url, 'update download URL', isTesting());
+      const freeBytes = freeSpaceIn(updatesDir());
+      if (freeBytes !== null && !freeSpaceGate(freeBytes, maxBytes())) {
+        return done(fail('Not enough free disk space for the update'));
+      }
+      log(`downloading ${version} (${urlForLog(url)})`);
+      await downloadDeb(url, debPath, null, maxBytes());
+    } else {
+      log(`installing ${version} from the local deb cache`);
+    }
+
+    // 2. Install + restart the supervised child into the new binary.
+    log(`installing ${version}`);
+    const installPath = usedCache ? cachedDebPath(version) : debPath;
+    await execFileAsync('dpkg', ['-i', installPath], { timeout: DPKG_TIMEOUT_MS });
+
+    const restart = await restartCodeServer();
+    if (!restart.ok && restart.reason === 'missing') {
+      const msg = 'installed but not restarted — no code-server pid file (the IDE process is not running under supervision); the new version applies when the IDE starts';
+      log(`failed: ${msg}`);
+      return done(fail(msg));
+    }
+    if (!restart.ok) {
+      const msg = `restart refused for pid ${restart.pid} — the new deb is installed but could not be restarted`;
+      log(`failed: ${msg}`);
+      return done(fail(msg));
+    }
+
+    const bootOk = await waitForBoot(version, restart.oldPid);
+    if (!bootOk) {
+      const msg = `Updated code-server ${version} failed to boot within ${Math.round(bootTimeoutMs() / 1000)}s`;
+      log(`failed: ${msg}`);
+      return done(fail(msg));
+    }
+
+    // 3. Success — keep the deb for the next rebuild.
+    if (!usedCache) {
+      try {
+        cacheInstalledDeb(version, debPath);
+      } catch (err: any) {
+        log(`failed to cache the installed deb: ${err.message}`);
+      }
+    }
+    log(`installed ${version}`);
+    return done({ ok: true, updatedTo: version, restarted: true });
+  } catch (err: any) {
+    try {
+      fs.rmSync(debPath, { force: true });
+    } catch { /* deb cleanup is best-effort */ }
+    log(`failed: ${err.message}`);
+    return done(fail(err.message));
+  }
+}
+
 // ── State persistence ───────────────────────────────────────────────────
 
 export function getCodeServerUpdateState(): CodeServerUpdateState {
@@ -457,13 +610,15 @@ export function getCodeServerUpdateState(): CodeServerUpdateState {
     if (typeof s.rolledBack === 'boolean') state.rolledBack = s.rolledBack;
     if (typeof s.startedAt === 'string') state.startedAt = s.startedAt;
     if (typeof s.updatedAt === 'string') state.updatedAt = s.updatedAt;
+    if (typeof s.bootReapply === 'string') state.bootReapply = s.bootReapply;
+    if (typeof s.bootReapplyError === 'string') state.bootReapplyError = s.bootReapplyError;
     return state;
   } catch {
     return { applyState: 'idle' };
   }
 }
 
-async function persistState(state: CodeServerUpdateState): Promise<void> {
+export async function persistCodeServerState(state: CodeServerUpdateState): Promise<void> {
   fs.mkdirSync(updatesDir(), { recursive: true });
   await withFileLockAsync('update:code-server-state', async () => {
     fs.writeFileSync(stateFile(), JSON.stringify(state, null, 2) + '\n', {
@@ -554,11 +709,11 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
 
     const persist = async (patch: Partial<CodeServerUpdateState>): Promise<void> => {
       state = { ...state, ...patch };
-      await persistState(state);
+      await persistCodeServerState(state);
     };
     const step = async (event: ApplyEvent): Promise<ApplyState> => {
       state.applyState = applyStateMachine(state.applyState, event);
-      await persistState(state);
+      await persistCodeServerState(state);
       return state.applyState;
     };
     const done = (r: UpdateResult): void => {
@@ -754,6 +909,15 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         await step('boot-ok'); // → ok
         await persist({ currentVersion: release.version, error: undefined, rolledBack: false, updatedAt: new Date().toISOString() });
         log(`updated ${current} → ${release.version}`);
+        // On success the freshly-installed deb moves into the persistent cache
+        // (a container rebuild re-applies it from there, offline); the rollback
+        // baseline deb is deliberately never cached. Failure paths reach the
+        // finally below with the debs still present and get both removed.
+        try {
+          cacheInstalledDeb(release.version, newDeb);
+        } catch (err: any) {
+          log(`failed to cache the installed deb: ${err.message}`);
+        }
         return done({ ok: true, updatedTo: release.version, restarted: true });
       } catch (err: any) {
         try {
@@ -769,9 +933,11 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         return done({ ok: false, error: 'The update failed unexpectedly — see the update log for details' });
       } finally {
         try {
-          for (const f of [newDeb, currentDeb]) {
-            if (f) fs.rmSync(f, { force: true });
-          }
+          // Success moved newDeb into the cache (rm is then a harmless no-op);
+          // failure removes both raw artifacts — a broken/partial download must
+          // never linger to be mistaken for a complete install.
+          if (newDeb) fs.rmSync(newDeb, { force: true });
+          if (currentDeb) fs.rmSync(currentDeb, { force: true });
         } catch {
           /* deb cleanup is best-effort */
         }

@@ -777,6 +777,8 @@ export interface ComponentStatus {
   rolledBack?: boolean;
   /** opencode: major gate; code-server: arch gate */
   channelUnlocked?: boolean;
+  bootReapply?: 'running' | 'ok' | 'failed' | 'skipped';
+  bootReapplyError?: string;
 }
 
 export interface UpdatesStatus {
