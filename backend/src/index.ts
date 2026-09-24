@@ -1966,6 +1966,7 @@ app.post('/api/webhooks', requireAdmin, (req: any, res) => {
     recordAudit('webhook-config-change', true, req.ip);
     res.status(201).json({ webhook: toPublic(webhook) });
   } catch (err: any) {
+    recordAudit('webhook-config-change-failed', false, req.ip);
     res.status(err.statusCode || err.status || 400).json({ error: err.message });
   }
 });
@@ -1977,6 +1978,7 @@ app.put('/api/webhooks/:id', requireAdmin, (req: any, res) => {
     recordAudit('webhook-config-change', true, req.ip);
     res.json({ webhook: toPublic(webhook) });
   } catch (err: any) {
+    recordAudit('webhook-config-change-failed', false, req.ip);
     res.status(err.statusCode || err.status || 400).json({ error: err.message });
   }
 });
@@ -1988,6 +1990,7 @@ app.delete('/api/webhooks/:id', requireAdmin, (req: any, res) => {
     recordAudit('webhook-config-change', true, req.ip);
     res.json({ ok: true });
   } catch (err: any) {
+    recordAudit('webhook-config-change-failed', false, req.ip);
     res.status(err.statusCode || err.status || 400).json({ error: err.message });
   }
 });

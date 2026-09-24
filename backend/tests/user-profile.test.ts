@@ -6,6 +6,23 @@ import path from 'path';
 import jwt from 'jsonwebtoken';
 import { uniqueId, req, reqAuth, initTestAuth, API_URL, JWT_SECRET } from './helpers.ts';
 
+// The 10/min-per-IP auth limiter is shared with every other suite (and can
+// still be draining from a previous run's window). Back off on exact
+// Retry-After instead of letting a 429 flake an otherwise-correct test
+// (same contract as auth.test.ts / team-access.test.ts).
+async function postWithBackoff(path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 429 || attempt >= 8) return res;
+    const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '2'), 10));
+    await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+  }
+}
+
 /**
  * User accounts & profile: display name / email / bio + avatar upload.
  *
@@ -348,7 +365,7 @@ describe('User profile & avatar (real Docker)', () => {
     // 'login' events carry the resolved userId — after this suite's own login
     // attempt (provision used the admin API, not login), do a REAL login with
     // the editor and assert the entry shows up in their account activity.
-    const loginRes = await req('POST', '/auth/login', { username: myName, password: pw });
+    const loginRes = await postWithBackoff('/auth/login', { username: myName, password: pw });
     assert.strictEqual(loginRes.status, 200);
     const session = await loginRes.json();
     assert.ok(session.token, 'real login mints a session');
@@ -362,7 +379,7 @@ describe('User profile & avatar (real Docker)', () => {
     );
 
     // A failed login against THIS username must also be tracked on the account.
-    await req('POST', '/auth/login', { username: myName, password: 'wrong-pass-zzz' });
+    await postWithBackoff('/auth/login', { username: myName, password: 'wrong-pass-zzz' });
     const mine2 = await (await req('GET', '/auth/me/activity', undefined, { Authorization: `Bearer ${session.token}` })).json();
     assert.ok(
       mine2.entries.some((e: any) => e.event === 'login-failed' && e.ok === false),

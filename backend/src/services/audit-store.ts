@@ -80,6 +80,7 @@ export type AuditEvent =
   | 'webhook-send'
   | 'webhook-send-failed'
   | 'webhook-config-change'
+  | 'webhook-config-change-failed'
   | 'chat-channel-settings'
   | 'chat-channel-settings-failed'
   | 'agent-run'

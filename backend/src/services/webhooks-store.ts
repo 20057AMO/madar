@@ -28,6 +28,11 @@ export const WEBHOOK_EVENTS = [
   'recreated',
   'deleted',
   'snapshot-saved',
+  'update-started',
+  'update-ok',
+  'update-failed',
+  'update-rolled-back',
+  'update-rollback-failed',
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];

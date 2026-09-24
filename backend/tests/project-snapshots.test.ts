@@ -137,8 +137,13 @@ describe('Project snapshots (export / restore)', () => {
     assert.strictEqual(project.name, 'Snapshot Source');
     assert.strictEqual(project.description, 'the original source project');
     assert.strictEqual(project.status, 'running');
-    assert.strictEqual(project.env.SNAP_VAR, 'roundtrip-value', 'env vars restored');
-    assert.strictEqual(project.env.NODE_ENV, 'test');
+    // env is deliberately scrubbed from public project payloads (security:
+    // env scrubbing) — read it back through its editor-gated endpoint.
+    const envRes = await reqAuth('GET', `/projects/${project.slug}/env`);
+    assert.strictEqual(envRes.status, 200, 'restored env readable via its endpoint');
+    const env = (await envRes.json()).env || {};
+    assert.strictEqual(env.SNAP_VAR, 'roundtrip-value', 'env vars restored');
+    assert.strictEqual(env.NODE_ENV, 'test');
     assert.ok(!project.ports.includes(SNAP_PORT), `manifest port taken by the source → fresh port (${project.ports})`);
 
     const file = await reqAuth('GET', `/projects/${project.slug}/file?path=app/main.py`);

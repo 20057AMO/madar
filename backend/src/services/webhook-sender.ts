@@ -18,6 +18,9 @@ import { recordAudit } from './audit-store';
 import { assertFetchableHost } from './providers-detect';
 import { webhooksForEvent, type Webhook, type WebhookEvent } from './webhooks-store';
 
+/** The update-event subset of the webhook whitelist (store owns the full list). */
+export type UpdateWebhookEvent = Extract<WebhookEvent, `update-${string}`>;
+
 const TIMEOUT_MS = 5000;
 
 export interface WebhookPayload {
@@ -77,4 +80,36 @@ export function dispatchWebhook(event: WebhookEvent, payload: WebhookPayload): v
       /* sendWebhook never throws — defensive only */
     });
   }
+}
+
+/** Flat payload shape for component-update events (see dispatchUpdateEvent). */
+export interface UpdateEventInfo {
+  component: 'opencode' | 'code-server';
+  phase: 'start' | 'ok' | 'failed' | 'rolled-back' | 'rollback-failed';
+  /** Running (start) or baseline (terminal) version, null when unknown. */
+  from?: string | null;
+  /** Target version on start, installed version on success; absent on failures. */
+  to?: string;
+  /** Persisted error string for failed phases. */
+  error?: string;
+}
+
+/**
+ * Fire a component-update event (update-started/update-ok/update-failed/
+ * update-rolled-back/update-rollback-failed) with the flat payload Madar
+ * webhooks use everywhere (`event` + `at` + one field per fact, no nesting).
+ * Same fire-and-forget semantics as dispatchWebhook — only webhooks with the
+ * event ticked receive it, so a Slack/Discord receiver subscribed to just
+ * `update-failed` never sees the routine started/ok traffic.
+ */
+export function dispatchUpdateEvent(event: UpdateWebhookEvent, info: UpdateEventInfo): void {
+  dispatchWebhook(event, {
+    event,
+    component: info.component,
+    phase: info.phase,
+    at: new Date().toISOString(),
+    ...(info.from !== undefined ? { from: info.from } : {}),
+    ...(info.to !== undefined ? { to: info.to } : {}),
+    ...(info.error !== undefined ? { error: info.error } : {}),
+  });
 }

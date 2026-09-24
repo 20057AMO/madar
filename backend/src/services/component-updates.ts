@@ -25,6 +25,21 @@ import { applyStateMachine, semverCompare, semverEquals, parseCliVersion, isSupp
 import { runOpencodeApply, type ApplyStep } from './opencode-apply-core';
 import { withFileLockAsync } from './write-queue';
 import { recordAudit, type AuditEvent } from './audit-store';
+import { dispatchUpdateEvent, type UpdateEventInfo, type UpdateWebhookEvent } from './webhook-sender';
+
+/**
+ * Emit a component-update webhook (fire-and-forget, only to webhooks with the
+ * event ticked) for every terminal/start verdict. Never throws: dispatchUpdate
+ * Event already swallows sender errors, and this wrapper additionally guards
+ * the payload build so a webhook surprise can never break an apply flow.
+ */
+function emitUpdateEvent(event: UpdateWebhookEvent, info: UpdateEventInfo): void {
+  try {
+    dispatchUpdateEvent(event, info);
+  } catch {
+    /* webhook delivery must never break an update flow */
+  }
+}
 
 export type ComponentId = 'opencode' | 'code-server' | 'all';
 
@@ -422,16 +437,25 @@ async function applyAll(actor?: Actor): Promise<ApplyOutcome> {
 }
 
 async function applyCodeServer(actor?: Actor): Promise<ApplyOutcome> {
+  const runningBefore = await codeServer.probeCurrentVersion().catch(() => null);
+  emitUpdateEvent('update-started', { component: 'code-server', phase: 'start', from: runningBefore });
   const result = await codeServer.applyCodeServerUpdate();
   recordAudit(result.ok ? 'code-server-update' : 'code-server-update-failed', result.ok, actor?.ip, actor?.userId);
+  if (result.ok) {
+    emitUpdateEvent('update-ok', { component: 'code-server', phase: 'ok', from: runningBefore, to: result.updatedTo });
+  } else {
+    emitUpdateEvent('update-failed', { component: 'code-server', phase: 'failed', from: runningBefore, error: result.error });
+  }
   // The rollback event's `ok` describes the ROLLBACK ITSELF: true when the
   // failed update was rolled back cleanly (rolledBack:true), false when the
   // rollback also failed (rolledBack:false). The update's own failure is
   // already carried by the -failed event above.
   if (result.rolledBack === true) {
     recordAudit('code-server-update-rollback', true, actor?.ip, actor?.userId);
+    emitUpdateEvent('update-rolled-back', { component: 'code-server', phase: 'rolled-back', from: runningBefore, error: result.error });
   } else if (result.rolledBack === false) {
     recordAudit('code-server-update-rollback', false, actor?.ip, actor?.userId);
+    emitUpdateEvent('update-rollback-failed', { component: 'code-server', phase: 'rollback-failed', from: runningBefore, error: result.error });
   }
   return { ok: result.ok, error: result.error };
 }
@@ -450,6 +474,9 @@ export async function applyOpencode(actor?: Actor): Promise<ApplyOutcome> {
   const log = (line: string) => appendLog(`[opencode] ${line}`);
   const setState = async (patch: Partial<OpencodeUpdateState>): Promise<void> => {
     state = { ...state, ...patch, updatedAt: new Date().toISOString() };
+    // A rollback fact (true/false) from a PREVIOUS failed run never leaks into
+    // this one: the first non-rollback write of a fresh run drops it.
+    if (patch.rolledBack === undefined) delete state.rolledBack;
     await persistOpencodeState(state);
   };
   const step = async (event: ApplyStep): Promise<void> => {
@@ -460,7 +487,26 @@ export async function applyOpencode(actor?: Actor): Promise<ApplyOutcome> {
     };
     await persistOpencodeState(state);
   };
-  const audit = (event: AuditEvent, ok: boolean) => recordAudit(event, ok, actor?.ip, actor?.userId);
+  const audit = (event: AuditEvent, ok: boolean) => {
+    recordAudit(event, ok, actor?.ip, actor?.userId);
+    // Mirror the audit vocabulary onto the webhook surface so Slack/Discord
+    // receivers subscribed to update-* events see the same verdicts (both the
+    // HTTP path and OpencodeStudio's direct applyUpdates land here).
+    const webhookEvent: UpdateWebhookEvent | null =
+      event === 'opencode-update' ? 'update-ok'
+      : event === 'opencode-update-failed' ? 'update-failed'
+      : event === 'opencode-update-rollback' ? (ok ? 'update-rolled-back' : 'update-rollback-failed')
+      : null;
+    if (webhookEvent) {
+      emitUpdateEvent(webhookEvent, {
+        component: 'opencode',
+        phase: ok ? 'ok' : event === 'opencode-update-rollback' ? 'rollback-failed' : 'failed',
+        from: state.currentVersion ?? null,
+        ...(event === 'opencode-update' && state.targetVersion ? { to: state.targetVersion } : {}),
+        ...(state.error ? { error: state.error } : {}),
+      });
+    }
+  };
 
   try {
     return await runOpencodeApply(

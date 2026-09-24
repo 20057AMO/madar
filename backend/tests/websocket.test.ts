@@ -2,7 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import WebSocket from 'ws';
 import jwt from 'jsonwebtoken';
-import { signTestToken, firstProjectSlug, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
+import { uniqueId, signTestToken, initTestAuth, JWT_SECRET, authHeaders, API_URL, reqAuth } from './helpers.ts';
 
 const WS_BASE = (process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api')
   .replace('/api', '')
@@ -36,11 +36,12 @@ function replaceSlug(p: string, slug: string): string {
 describe('WebSocket authentication matrix', () => {
   before(async () => { await initTestAuth(); });
 
-  let slug = 'probe-slug';
+  /** Dedicated throwaway project — NEVER reuse a user's real project. */
+  const slug = uniqueId('ws');
 
-  test('resolve a real project slug when available', async () => {
-    slug = (await firstProjectSlug()) || slug;
-    assert.ok(slug, 'a slug must be resolvable');
+  test('setup: create the dedicated probe project', async () => {
+    const res = await reqAuth('POST', '/projects', { name: slug });
+    assert.ok(res.ok, `probe project create failed: ${res.status} ${JSON.stringify(await res.json().catch(() => ({})))}`);
   });
 
   describe('per-endpoint auth', () => {
@@ -94,6 +95,11 @@ describe('WebSocket authentication matrix', () => {
     assert.ok(first.users.length >= 1, 'expected the connecting user in the roster');
     assert.ok(first.users.every((u: any) => typeof u.username === 'string'));
   });
+
+  after(async () => {
+    // The probe project belongs to this suite — remove it for good.
+    await reqAuth('DELETE', `/projects/${slug}`).catch(() => {});
+  });
 });
 
 /** Open a status socket and resolve when the next status message arrives. */
@@ -119,11 +125,12 @@ function openStatusSocket(slug: string, token: string): Promise<{ messages: any[
 describe('WebSocket fan-out broadcasters', () => {
   before(async () => { await initTestAuth(); });
 
-  let slug = 'probe-slug';
+  /** Dedicated throwaway project — read-only probes must not target real data. */
+  const slug = uniqueId('ws');
 
-  test('resolve a real project slug when available', async () => {
-    slug = (await firstProjectSlug()) || slug;
-    assert.ok(slug, 'a slug must be resolvable');
+  test('setup: create the dedicated probe project', async () => {
+    const res = await reqAuth('POST', '/projects', { name: slug });
+    assert.ok(res.ok, `probe project create failed: ${res.status} ${JSON.stringify(await res.json().catch(() => ({})))}`);
   });
 
   test('project status: two sockets on the same slug BOTH receive updates (fan-out)', async () => {
@@ -227,6 +234,11 @@ describe('WebSocket fan-out broadcasters', () => {
 
     for (const ws of sockets) { try { ws.terminate(); } catch { /* gone */ } }
   }, { timeout: 15000 });
+
+  after(async () => {
+    // The probe project belongs to this suite — remove it for good.
+    await reqAuth('DELETE', `/projects/${slug}`).catch(() => {});
+  });
 });
 
 /**
@@ -238,9 +250,22 @@ describe('WebSocket fan-out broadcasters', () => {
 describe('project chat access control (membership + roles)', () => {
   before(async () => { await initTestAuth(); });
 
-  let slug = 'probe-slug';
+  /** Dedicated throwaway project — membership writes must never touch a
+   *  user's real project (a member_added activity entry is forever). */
+  const slug = uniqueId('ws');
   let viewerId = '';
   let outsiderId = '';
+
+  test('setup: create the dedicated probe project + outsider viewer + member viewer users', async () => {
+    const res = await reqAuth('POST', '/projects', { name: slug });
+    assert.ok(res.ok, `probe project create failed: ${res.status} ${JSON.stringify(await res.json().catch(() => ({})))}`);
+    viewerId = await createUser(`wsacc-viewer-${Date.now().toString(36)}`, 'viewer');
+    outsiderId = await createUser(`wsacc-outsider-${Date.now().toString(36)}`, 'viewer');
+    await addMember(viewerId, 'viewer');
+  });
+
+  const chatUrl = (targetSlug: string, token: string): string =>
+    `${WS_BASE}/ws/chat/${targetSlug}/${Date.now().toString(36)}?token=${encodeURIComponent(token)}`;
 
   const mintUserToken = (id: string, username: string, role: string): string =>
     jwt.sign({ id, username, role, tv: 0, jti: `wsacc-${Date.now().toString(36)}-${role}` }, JWT_SECRET, { expiresIn: '1h' });
@@ -264,20 +289,6 @@ describe('project chat access control (membership + roles)', () => {
     });
     assert.ok(res.ok, `add member failed: ${res.status}`);
   };
-
-  test('resolve a real project slug when available', async () => {
-    slug = (await firstProjectSlug()) || slug;
-    assert.ok(slug, 'a slug must be resolvable');
-  });
-
-  test('setup: create outsider viewer + member viewer users', async () => {
-    viewerId = await createUser(`wsacc-viewer-${Date.now().toString(36)}`, 'viewer');
-    outsiderId = await createUser(`wsacc-outsider-${Date.now().toString(36)}`, 'viewer');
-    await addMember(viewerId, 'viewer');
-  });
-
-  const chatUrl = (targetSlug: string, token: string): string =>
-    `${WS_BASE}/ws/chat/${targetSlug}/${Date.now().toString(36)}?token=${encodeURIComponent(token)}`;
 
   test('non-member token → chat room closed with 1008 (no replay leaked)', async () => {
     const ws = new WebSocket(chatUrl(slug, mintUserToken(outsiderId, 'outsider', 'viewer')));
@@ -322,9 +333,13 @@ describe('project chat access control (membership + roles)', () => {
   }, { timeout: 10000 });
 
   after(async () => {
-    if (!slug || slug === 'probe-slug') return;
+    // Full cleanup: members were added to a DEDICATED probe project this time,
+    // so tearing down the project removes the membership (and its forever
+    // activity entries) together with it — no user-project pollution left.
+    if (slug) {
+      await reqAuth('DELETE', `/projects/${slug}`).catch(() => {});
+    }
     if (viewerId) {
-      await fetch(`${API_URL}/projects/${slug}/members/${viewerId}`, { method: 'DELETE', headers: authHeaders() }).catch(() => {});
       await fetch(`${API_URL}/users/${viewerId}`, { method: 'DELETE', headers: authHeaders() }).catch(() => {});
     }
     if (outsiderId) {

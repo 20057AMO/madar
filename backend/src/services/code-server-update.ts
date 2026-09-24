@@ -709,6 +709,9 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
 
     const persist = async (patch: Partial<CodeServerUpdateState>): Promise<void> => {
       state = { ...state, ...patch };
+      // A rollback fact (true/false) from a PREVIOUS failed run never leaks
+      // into this one: the first non-rollback write of a fresh run drops it.
+      if (patch.rolledBack === undefined) delete state.rolledBack;
       await persistCodeServerState(state);
     };
     const step = async (event: ApplyEvent): Promise<ApplyState> => {
@@ -723,9 +726,12 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         // boot-fail, rollback-fail) — persist the failure reason and the
         // rollback fact into the state file so the status surface can tell the
         // admin WHAT broke and whether the previous version was restored.
-        const patch: Partial<CodeServerUpdateState> = { updatedAt: new Date().toISOString() };
+        // rolledBack is ALWAYS written explicitly (true/false): a failure
+        // without a rollback attempt must CLEAR a stale `rolledBack:true`
+        // left by a previous failed run — otherwise the UI keeps claiming an
+        // automatic rollback happened on this failure too.
+        const patch: Partial<CodeServerUpdateState> = { updatedAt: new Date().toISOString(), rolledBack: r.rolledBack ?? false };
         if (r.error !== undefined) patch.error = r.error;
-        if (r.rolledBack !== undefined) patch.rolledBack = r.rolledBack;
         persist(patch)
           .catch(() => { /* state persistence is best-effort at a terminal state */ })
           .finally(() => resolveOuter(r));
@@ -742,8 +748,15 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
       rollbackVersion: string,
       oldPid: number | undefined,
     ): Promise<{ ok: boolean; error?: string }> => {
+      // The staged baseline deb is preferred; when the baseline download was
+      // skipped/failed, fall back to the persistent deb cache (it may hold the
+      // running version from a previous successful apply).
+      const baselineDeb = currentDeb || cachedDebPath(rollbackVersion);
+      if (!fs.existsSync(baselineDeb)) {
+        return { ok: false, error: 'no rollback baseline deb available (the baseline download failed and the persistent deb cache does not hold this version)' };
+      }
       try {
-        await execFileAsync('dpkg', ['-i', currentDeb], { timeout: DPKG_TIMEOUT_MS });
+        await execFileAsync('dpkg', ['-i', baselineDeb], { timeout: DPKG_TIMEOUT_MS });
         const rp = await restartCodeServer();
         const rollbackOk = await waitForBoot(rollbackVersion, rp.ok ? rp.oldPid : oldPid);
         return rollbackOk ? { ok: true } : { ok: false, error: 'the rollback binary did not boot or restart was refused' };
@@ -804,18 +817,38 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
           return done({ ok: false, error: 'Refusing to write a non-standard deb filename' });
         }
         newDeb = path.join(updatesDir(), debName);
-        currentDeb = path.join(updatesDir(), currentDebName);
+        // Only stage the rollback baseline when it is NOT already covered by
+        // the persistent deb cache — the cache keeps the most recently applied
+        // version, which for a follow-up update IS the running baseline.
+        if (await isCachedDebValid(current)) {
+          log(`rollback baseline ${current} already in the persistent deb cache`);
+        } else {
+          currentDeb = path.join(updatesDir(), currentDebName);
+        }
 
         log(`downloading ${release.version} (${urlForLog(release.debUrl)})`);
         await downloadDeb(release.debUrl, newDeb, release.digest, maxBytes());
 
-        log(`downloading rollback baseline ${current} (${urlForLog(`${downloadBase()}/download/v${current}/${currentDebName}`)})`);
-        await downloadDeb(
-          `${downloadBase()}/download/v${current}/${currentDebName}`,
-          currentDeb,
-          null,
-          maxBytes(),
-        );
+        // Baseline download is skipped entirely when the persistent deb cache
+        // already holds the current version (attemptRollback falls back to it).
+        if (currentDeb) {
+          log(`downloading rollback baseline ${current} (${urlForLog(`${downloadBase()}/download/v${current}/${currentDebName}`)})`);
+          try {
+            await downloadDeb(
+              `${downloadBase()}/download/v${current}/${currentDebName}`,
+              currentDeb,
+              null,
+              maxBytes(),
+            );
+          } catch (err: any) {
+            // The update deb is fine but the rollback baseline is gone — proceed
+            // WITHOUT a rollback safety net (same posture as a missing baseline
+            // at preflight) instead of failing after a 200 MB download.
+            log(`rollback baseline download failed: ${err.message} — proceeding without a rollback baseline`);
+            fs.rmSync(currentDeb, { force: true });
+            currentDeb = '';
+          }
+        }
 
         await step('downloaded'); // → verifying
         // Verification ran inside downloadDeb (checksum or dpkg-deb); mark it.
@@ -831,14 +864,26 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
           // The raw dpkg output stays in the update log — never the API client.
           const msg = `dpkg install failed: ${err.message}`;
           log(`failed: ${msg} — attempting defensive rollback`);
-          try {
-            await execFileAsync('dpkg', ['-i', currentDeb], { timeout: DPKG_TIMEOUT_MS });
-            await restartCodeServer();
-            log('defensive rollback to previous deb completed');
-          } catch (rbErr: any) {
-            log(`defensive rollback also failed: ${rbErr.message}`);
+          const baselineDeb = currentDeb || cachedDebPath(current);
+          let restored = false;
+          if (fs.existsSync(baselineDeb)) {
+            try {
+              await execFileAsync('dpkg', ['-i', baselineDeb], { timeout: DPKG_TIMEOUT_MS });
+              await restartCodeServer();
+              log('defensive rollback to previous deb completed');
+              restored = true;
+            } catch (rbErr: any) {
+              log(`defensive rollback also failed: ${rbErr.message}`);
+            }
+          } else {
+            log('defensive rollback skipped — no baseline deb on disk');
           }
-          return done({ ok: false, error: 'The package install failed (previous version restored)' });
+          return done({
+            ok: false,
+            error: restored
+              ? 'The package install failed (previous version restored)'
+              : 'The package install failed — the previous version could not be restored automatically (see the update log)',
+          });
         }
 
         await step('installed'); // → restarting

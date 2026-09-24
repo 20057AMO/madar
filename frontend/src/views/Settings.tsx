@@ -327,6 +327,8 @@ export function Settings() {
           const ok = r.components.some((c) => c.applyState === 'ok');
           if (failed || ok) {
             setApplyInFlight(false);
+            // Landing verdict — sidebar clears its 'applying' state at once.
+            window.dispatchEvent(new CustomEvent('wsd:updates-changed'));
             setUpdatesMsg(failed
               ? { type: 'err', text: t2('لم يكتمل أحد التحديثات بشكل نظيف — انظر حالة المكوّن أدناه.', 'An update did not finish cleanly — see the component status below.') }
               : { type: 'ok', text: t2('اكتمل التحديث — النسخة الجديدة تعمل الآن.', 'Update finished — the new version is live.') });
@@ -463,6 +465,12 @@ export function Settings() {
     }
   };
 
+  /** Map a registry-unreachable component to its honest status-hint text. */
+  const updUnknownHint = (id: 'opencode' | 'code-server'): string =>
+    id === 'opencode'
+      ? t2('تعذّر الوصول إلى سجل npm — لا يمكن التحقق الآن.', 'npm registry unreachable — cannot check right now.')
+      : t2('تعذّر الوصول إلى GitHub — لا يمكن التحقق الآن.', 'GitHub unreachable — cannot check right now.');
+
   const beginUpdate = (component: 'opencode' | 'code-server' | 'all') => {
     // 'all' must never sweep already-current components: the backend's
     // code-server preflight rejects a not-newer target and marks the whole
@@ -470,7 +478,7 @@ export function Settings() {
     // only one needs updating.
     let target = component;
     if (component === 'all') {
-      const stale = updates?.components.filter((c) => c.upToDate === false && c.channelUnlocked !== false);
+      const stale = updates?.components.filter((c) => c.upToDate === false);
       if (stale && stale.length === 1) target = stale[0].id;
     }
     const label = target === 'all' ? t2('كل المكوّنات', 'all components') : target;
@@ -652,6 +660,9 @@ export function Settings() {
         case 'apply-update': {
           await applyUpdates(accountPassword, pendingUpdateComponent.current);
           setApplyInFlight(true);
+          // Nudge the sidebar's notification-dot probe so the 'applying'
+          // state shows instantly instead of waiting for its next poll.
+          window.dispatchEvent(new CustomEvent('wsd:updates-changed'));
           const label = pendingUpdateComponent.current === 'all' ? t2('كل المكوّنات', 'All components') : pendingUpdateComponent.current;
           setUpdatesMsg({ type: 'ok', text: t2(`بدأ تحديث ${label} — يُتابع التقدم أدناه.`, `${label} update started — progress is tracked below.`) });
           // The trigger button is now disabled, so ReAuthModal's focus-return
@@ -737,7 +748,7 @@ export function Settings() {
             type="password"
             placeholder={t2('6 أحرف على الأقل', 'Min 6 characters')}
             value={lockNewPw}
-            onInput={(e: any) => setLockNewPw(e.target.value)}
+            onInput={(e: any) => setLockNewPw(e.currentTarget.value)}
           />
           {lockNewPw && <PwMeter pw={lockNewPw} />}
 
@@ -747,7 +758,7 @@ export function Settings() {
             type="password"
             placeholder={t2('أعد كتابة كلمة مرور المزوّدين', 'Repeat providers password')}
             value={lockConfirmPw}
-            onInput={(e: any) => setLockConfirmPw(e.target.value)}
+            onInput={(e: any) => setLockConfirmPw(e.currentTarget.value)}
           />
 
           {lockMsg && (
@@ -1016,7 +1027,7 @@ export function Settings() {
                     <span class="upd-pill-warn">{t2('يتوفر تحديث', 'Update available')}</span>
                   )}
                   {c.upToDate === null && (
-                    <span class="badge-off">{t2('مجهول — السجل غير متاح', 'Unknown — registry unreachable')}</span>
+                    <span class="badge-off" title={updUnknownHint(c.id)}>{t2('مجهول — السجل غير متاح', 'Unknown — registry unreachable')}</span>
                   )}
                   <div style="flex:1" />
                   <button class="btn-primary sm" onClick={() => beginUpdate(c.id)} disabled={!canUpdate} title={updateTitle}>
@@ -1053,6 +1064,11 @@ export function Settings() {
                       {c.rolledBack !== undefined && c.error && (
                         <span style="display:block;font-size:0.72rem;opacity:.9;margin-top:3px">{c.error}</span>
                       )}
+                    </div>
+                  )}
+                  {!running && c.applyState === 'failed' && c.rolledBack === true && (
+                    <div class="upd-msg-warn" role="status">
+                      {t2('النسخة السابقة مستقرة — إعادة المحاولة آمنة.', 'The previous version is stable — retrying is safe.')}
                     </div>
                   )}
                   {!running && !['rollback', 'ok', 'failed'].includes(c.applyState) && locked && (

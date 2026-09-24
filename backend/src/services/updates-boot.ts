@@ -42,6 +42,24 @@ import {
   appendLog,
   type OpencodeUpdateState,
 } from './component-updates';
+import { dispatchUpdateEvent, type UpdateEventInfo } from './webhook-sender';
+
+/** update-failed webhook for a boot-reapply failure — fire-and-forget and
+ * fully guarded: a webhook surprise must never break the boot pass. `from` is
+ * the image baseline where known; the target version (when known) rides in
+ * the error text. */
+function emitBootReapplyFailed(component: UpdateEventInfo['component'], from: string | null, targetVersion: string | null, error: string): void {
+  try {
+    dispatchUpdateEvent('update-failed', {
+      component,
+      phase: 'failed',
+      from,
+      error: targetVersion ? `boot reapply of ${targetVersion} failed: ${error}` : `boot reapply failed: ${error}`,
+    });
+  } catch {
+    /* webhook delivery must never break the boot pass */
+  }
+}
 
 const BOOT_REAPPLY_ERROR_CAP = 200;
 
@@ -124,9 +142,11 @@ async function reapplyOpencode(): Promise<void> {
       const done = readOpencodeState();
       await persistOpencodeState({ ...done, bootReapply: 'failed', bootReapplyError: err });
       appendLog(`[boot-reapply] opencode: failed to re-apply ${decision.targetVersion} — ${err}`);
+      emitBootReapplyFailed('opencode', running ?? null, decision.targetVersion, err);
     }
   } catch (err: any) {
     appendLog(`[boot-reapply] opencode: reapply pass crashed: ${truncate(err?.message ?? 'unknown error', BOOT_REAPPLY_ERROR_CAP)}`);
+    emitBootReapplyFailed('opencode', null, null, truncate(err?.message ?? 'unknown error', BOOT_REAPPLY_ERROR_CAP));
   }
 }
 
@@ -174,8 +194,10 @@ async function reapplyCodeServer(): Promise<void> {
       const done = codeServer.getCodeServerUpdateState();
       await codeServer.persistCodeServerState({ ...done, bootReapply: 'failed', bootReapplyError: err });
       appendLog(`[boot-reapply] code-server: failed to re-apply ${decision.targetVersion} — ${err}`);
+      emitBootReapplyFailed('code-server', running ?? null, decision.targetVersion, err);
     }
   } catch (err: any) {
     appendLog(`[boot-reapply] code-server: reapply pass crashed: ${truncate(err?.message ?? 'unknown error', BOOT_REAPPLY_ERROR_CAP)}`);
+    emitBootReapplyFailed('code-server', null, null, truncate(err?.message ?? 'unknown error', BOOT_REAPPLY_ERROR_CAP));
   }
 }

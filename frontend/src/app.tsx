@@ -207,6 +207,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   useEffect(() => {
     if (user?.role !== 'admin') return;
     let alive = true;
+    let reprobe = 0;
     const check = () => {
       getUpdates()
         .then((s) => {
@@ -215,20 +216,35 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           const available = s.components.some((c) => !c.updateRunning && c.upToDate === false && c.channelUnlocked !== false);
           setUpdatesFlag(applying ? 'applying' : available ? 'available' : 'none');
         })
-        .catch(() => { /* silent — a failed probe must never disturb the UI */ });
+        .catch(() => {
+          // A silent failure must not pin a stale flag forever (e.g. the
+          // server was restarting mid-probe): re-probe shortly instead of
+          // waiting out the whole 15-min interval.
+          if (!alive) return;
+          window.clearTimeout(reprobe);
+          reprobe = window.setTimeout(() => { if (alive) check(); }, 30_000);
+        });
     };
     check();
-    const timer = setInterval(check, 15 * 60_000);
+    // While an apply is showing, poll briefly so the sidebar clears the
+    // moment it lands; otherwise the 15-min probe is enough.
+    const period = updatesFlag === 'applying' ? 20_000 : 15 * 60_000;
+    const timer = setInterval(check, period);
     const onVisible = () => { if (!document.hidden) check(); };
+    // Settings page fires this when an apply starts/lands — re-probe at once.
+    const onUpdatesChanged = () => check();
+    window.addEventListener('wsd:updates-changed', onUpdatesChanged);
     window.addEventListener('pageshow', check);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive = false;
       clearInterval(timer);
+      window.clearTimeout(reprobe);
+      window.removeEventListener('wsd:updates-changed', onUpdatesChanged);
       window.removeEventListener('pageshow', check);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [user?.role]);
+  }, [user?.role, updatesFlag]);
 
   const toolBase = `${window.location.protocol === 'https:' ? 'https' : 'http'}://${window.location.hostname}`;
   return (

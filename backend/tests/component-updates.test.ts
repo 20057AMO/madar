@@ -950,7 +950,10 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
     const stats = await piMockStats();
     assert.equal(stats.counters.deb[debName(BROKEN_VERSION)] ?? 0, 1, 'broken release fetched once');
-    assert.equal(stats.counters.download[debName(HAPPY_VERSION)] ?? 0, 1, 'rollback baseline (4.99.0) downloaded once');
+    // The rollback baseline (4.99.0) is served from the persistent deb cache
+    // (the cache holds the most recently applied version — seeded by test 4b),
+    // so the mock download counter must stay at ZERO, not 1.
+    assert.equal(stats.counters.download[debName(HAPPY_VERSION)] ?? 0, 0, 'rollback baseline (4.99.0) served from the deb cache — never re-downloaded');
   });
 
   test('6. synchronous downgrade gate: 4.95.0 → immediate 400, state untouched, zero downloads',
