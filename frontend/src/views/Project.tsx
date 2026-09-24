@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Ellipsis, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -131,6 +131,12 @@ function relTime(iso: string): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
+// Localized failure copy starts with the fail/error prefix in both languages
+// (فشل/خطأ/منافذ غير صالحة/لا توجد/تعذّر) — match either language.
+function msgRole(m: string | null): 'alert' | 'status' | undefined {
+  return m && /^(Failed|No valid|Invalid|Save failed|Clone failed|Error|In use|Ports already|فشل|خطأ|تعذّر|منافذ غير صالحة|لا توجد)/i.test(m) ? 'alert' : m ? 'status' : undefined;
+}
+
 export function Project({ params }: { params: { slug: string } }) {
   // wouter's :slug captures query strings too (hash routing), so strip `?tab=…`.
   const slug = (params.slug || '').split('?')[0];
@@ -205,6 +211,13 @@ export function Project({ params }: { params: { slug: string } }) {
       setProject(project);
       setError(null);
     } catch (err: any) {
+      // A 404 means the project is gone (deleted elsewhere) — leave instead
+      // of parking the user on a dead error banner. Transient network errors
+      // (no status) keep the current banner behavior.
+      if (err?.status === 404) {
+        setLocation('/projects');
+        return;
+      }
       setError(err.message);
     }
   };
@@ -237,6 +250,7 @@ export function Project({ params }: { params: { slug: string } }) {
           if (msg.status === 'missing') {
             setError(t2ProjectDeleted());
             setLiveStats(null);
+            setLocation('/projects');
             return;
           }
           setProject((prev) => {
@@ -304,6 +318,23 @@ export function Project({ params }: { params: { slug: string } }) {
     if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [tab]);
 
+  // Tab changes go into the URL so refresh/share keep the active tab. wouter's
+  // navigate() would move the query OUT of the hash (see openIde), and a stale
+  // ?tab= left in location.search would outrank the hash in the deep-link
+  // effect above — so the query is written into the hash directly and any
+  // stale search is cleared afterwards (other params are preserved raw).
+  const selectTab = (tb: Tab) => {
+    if (tb === tab) return;
+    setTab(tb);
+    const qIdx = location.indexOf('?');
+    const parts: string[] = [];
+    if (qIdx >= 0) parts.push(location.slice(qIdx + 1).split('&').filter((p) => !/^tab=/.test(p)).join('&'));
+    if (window.location.search) parts.push(window.location.search.slice(1).split('&').filter((p) => !/^tab=/.test(p)).join('&'));
+    parts.push(`tab=${tb}`);
+    window.location.hash = `/project/${slug}?${parts.filter(Boolean).join('&')}`;
+    if (window.location.search) history.replaceState(null, '', window.location.pathname + window.location.hash);
+  };
+
   const onTabListKeyDown = (e: any) => {
     const idx = VALID_TABS.indexOf(tab);
     let next: number | null = null;
@@ -315,7 +346,7 @@ export function Project({ params }: { params: { slug: string } }) {
     e.preventDefault();
     const t = VALID_TABS[next];
     pendingTabFocus.current = t;
-    setTab(t);
+    selectTab(t);
   };
 
   useEffect(() => {
@@ -358,28 +389,13 @@ export function Project({ params }: { params: { slug: string } }) {
   const [exporting, setExporting] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
+  const renameSaveRef = useRef<HTMLButtonElement | null>(null);
+  const renameTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [copied, setCopied] = useState(false);
   const [zipping, setZipping] = useState(false);
 
-  const [moreOpen, setMoreOpen] = useState(false);
-  const headerMoreWrap = useRef<HTMLDivElement | null>(null);
-
   const [exportOpen, setExportOpen] = useState(false);
   const exportWrap = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!moreOpen) return;
-    const onDoc = (e: MouseEvent) => {
-      if (headerMoreWrap.current && !headerMoreWrap.current.contains(e.target as Node)) setMoreOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMoreOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDoc);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [moreOpen]);
 
   useEffect(() => {
     if (!exportOpen) return;
@@ -488,9 +504,17 @@ export function Project({ params }: { params: { slug: string } }) {
     }
   };
 
-  // Escape/blur both cancel — never commit a draft on accidental blur. The
-  // input unmounts right after Escape, firing onBlur; routing it here instead
-  // of handleSaveName is what keeps a stale keystroke from being PATCHed.
+  // Escape always cancels; blur cancels only an unchanged/empty draft, so a
+  // modified draft stays open for Save or Escape. Restoring focus to the
+  // rename trigger happens post-commit rather than inline: the input unmount
+  // right after Escape fires onBlur, and cancelRename/handleSaveName run
+  // before the re-render actually swaps the pencil button back in.
+  useEffect(() => {
+    if (!renaming && renameTriggerRef.current?.isConnected) {
+      try { renameTriggerRef.current.focus(); } catch { /* noop */ }
+    }
+  }, [renaming]);
+
   const cancelRename = () => {
     setNameDraft(project?.name || '');
     setRenaming(false);
@@ -522,19 +546,27 @@ export function Project({ params }: { params: { slug: string } }) {
         <div class="detail-title-wrap">
           <div>
             {renaming ? (
-              <input
-                type="text"
-                class="detail-title"
-                value={nameDraft}
-                onInput={(e: any) => setNameDraft((e.target as HTMLInputElement).value)}
-                onBlur={cancelRename}
-                onKeyDown={(e: KeyboardEvent) => {
-                  if (e.key === 'Enter') { e.preventDefault(); handleSaveName(); }
-                  if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                }}
-                autoFocus
-                aria-label={t('misc.projectNameAria')}
-              />
+              <span style="display:inline-flex; align-items:center; gap:6px; margin-bottom:10px;">
+                <input
+                  type="text"
+                  class="detail-title"
+                  value={nameDraft}
+                  onInput={(e: any) => setNameDraft((e.target as HTMLInputElement).value)}
+                  onBlur={(e: FocusEvent) => {
+                    const next = e.relatedTarget as HTMLElement | null;
+                    if (next && renameSaveRef.current && (next === renameSaveRef.current || renameSaveRef.current.contains(next))) return;
+                    const trimmed = nameDraft.trim();
+                    if (!trimmed || trimmed === (project?.name || '')) cancelRename();
+                  }}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter') { e.preventDefault(); handleSaveName(); }
+                    if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                  }}
+                  autoFocus
+                  aria-label={t('misc.projectNameAria')}
+                />
+                <button class="btn-primary sm" ref={renameSaveRef} onClick={handleSaveName}>{t('common.save')}</button>
+              </span>
             ) : (
               <h1 class="detail-title" style="display:inline-flex;align-items:center;gap:6px; margin-bottom:10px;">
                 {project?.name || t('common.loading')}
@@ -544,6 +576,7 @@ export function Project({ params }: { params: { slug: string } }) {
                     style="padding:8px; margin-left:6px"
                     title={t('misc.renameProject')}
                     aria-label={t('misc.renameProject')}
+                    ref={renameTriggerRef}
                     onClick={() => { setNameDraft(project?.name || ''); setRenaming(true); }}
                   >
                     <Pencil width={13} height={13} class="icon" />
@@ -561,8 +594,10 @@ export function Project({ params }: { params: { slug: string } }) {
               >
                 {copied ? <><Check width={13} height={13} class="icon" /> {t('project.copied')}</> : t('project.copy')}
               </button>
-              <span class={`status-badge ${project?.status || 'missing'}`}>{project ? t(`status.${project.status}`) : '…'}</span>
-              {project?.crash && <CrashBadge crash={project.crash} />}
+              <span aria-live="polite" style="display:inline-flex; align-items:center; gap:8px">
+                <span class={`status-badge ${project?.status || 'missing'}`}>{project ? t(`status.${project.status}`) : '…'}</span>
+                {project?.crash && <span aria-hidden="true"><CrashBadge crash={project.crash} /></span>}
+              </span>
               {wsConnected && <span class="ws-live-dot" role="status" title={t('misc.liveUpdates')} aria-label={t('misc.liveUpdates')} />}
                {onlineUsers.length > 0 && (
                  <div class="presence-indicator" role="status">
@@ -615,30 +650,10 @@ export function Project({ params }: { params: { slug: string } }) {
                )}
              </span>
            </div>
-          <span class="header-more-wrap" ref={headerMoreWrap}>
-            <button
-              class="btn-ghost sm icon-only header-more"
-              aria-label={t('common.more')}
-              aria-haspopup="menu"
-              aria-expanded={moreOpen}
-              onClick={() => setMoreOpen(!moreOpen)}
-            >
-              <Ellipsis width={15} height={15} class="icon" />
-            </button>
-            {moreOpen && (
-              <div class="header-menu" role="menu">
-                <button role="menuitem" onClick={() => { setMoreOpen(false); openIde(); }}><VSCodeIcon width={13} height={13} class="icon" /> {t('project.openWith')}</button>
-                <div class="header-menu-sep" role="separator" />
-                <button role="menuitem" onClick={() => { setMoreOpen(false); handleExport(); }} disabled={exporting || readOnly} title={t('misc.downloadSnapshot')}>
-                  <Download width={13} height={13} class="icon" /> {exporting ? t('project.backingUp') : t('project.backup')}
-                </button>
-              </div>
-            )}
-          </span>
           <button
             class={project?.status === 'running' ? 'btn-danger sm' : 'btn-primary sm'}
             onClick={() => (project?.status === 'running' ? handleStop() : handleStart())}
-            disabled={readOnly}
+            disabled={readOnly || !project}
             title={readOnly ? t('project.viewerNoStart') : undefined}
           >
             {project?.status === 'running' ? t('common.stop') : t('common.start')}
@@ -650,7 +665,7 @@ export function Project({ params }: { params: { slug: string } }) {
       </div>
 
       {project?.crash && (
-        <div class="panel" style="margin-bottom: 16px; border-left: 3px solid var(--red); background: rgba(248,81,73,0.06);">
+        <div class="panel" role="alert" style="margin-bottom: 16px; border-left: 3px solid var(--red); background: rgba(248,81,73,0.06);">
           <div style="display:flex; align-items:center; gap:8px; color: var(--red); font-weight: 600;">
             <span style="display:flex; align-items:center; gap:8px; flex:1">
               <TriangleAlert width={15} height={15} class="icon" />
@@ -687,7 +702,7 @@ export function Project({ params }: { params: { slug: string } }) {
               tabIndex={tab === tb ? 0 : -1}
               aria-controls={`pane-${tb}`}
               data-tab={tb}
-              onClick={() => setTab(tb)}
+              onClick={() => selectTab(tb)}
             >
               <span class="tab-icon" aria-hidden="true"><Ic width={13} height={13} class="icon" /></span>
               {t(TAB_KEYS[tb])}
@@ -1168,11 +1183,6 @@ function OverviewPanel({
 
   const host = window.location.hostname;
 
-  const msgRole = (m: string | null): 'alert' | 'status' | undefined =>
-    // Localized failure copy starts with the fail/error prefix in both langs
-    // (فشل/خطأ/منافذ غير صالحة/لا توجد/تعذّر) — match either language.
-    m && /^(Failed|No valid|Invalid|Save failed|Clone failed|Error|In use|Ports already|فشل|خطأ|تعذّر|منافذ غير صالحة|لا توجد)/i.test(m) ? 'alert' : m ? 'status' : undefined;
-
   return (
     <div class="overview-stack overview">
       {/* ── At a glance ── */}
@@ -1283,99 +1293,6 @@ function OverviewPanel({
               );
             })()}
 
-            {/* Published ports editing (moved into Links & health) */}
-            <div class="ov-section" style="margin-top: 14px">
-              <div class="ov-row-actions" style="align-items:center;gap:8px">
-                <span class="ov-section-label" style="margin:0">{t('project.publishedPorts')}</span>
-                {!readOnly && !editPortsOpen && (
-                  <button class="btn-ghost sm" onClick={() => setEditPortsOpen(true)}>{t('project.edit')}</button>
-                )}
-              </div>
-              {editPortsOpen ? (
-                <>
-                  <div class="ov-field" style="margin-top:8px">
-                    <input
-                      class="modern-input mono"
-                      style="flex:1"
-                      aria-label={t('project.publishedPorts')}
-                      aria-describedby="portsFormatHint"
-                      placeholder={t('cfg.portsPlaceholder')}
-                      value={portsText}
-                      ref={portsInputRef}
-                      onInput={(e: any) => setPortsText(e.target.value)}
-                      onKeyDown={(e: any) => e.key === 'Enter' && savePorts()}
-                    />
-                    <span class="sr-only" id="portsFormatHint">{t('cfg.portsFormatHint')}</span>
-                  </div>
-                  <div class="ov-row-actions" style="margin-top:8px">
-                    <button class="btn-ghost sm" onClick={savePorts} disabled={savingPorts}>
-                      {savingPorts ? t('project.saving') : t('project.savePorts')}
-                    </button>
-                    <button class="btn-ghost sm" onClick={() => { setEditPortsOpen(false); setPortsText((project?.ports || []).join(', ')); }}>{t('common.cancel')}</button>
-                    {portsMsg && <span class="dim" style="color: var(--text-3)" role={msgRole(portsMsg)}>{portsMsg}</span>}
-                  </div>
-                </>
-              ) : (
-                !readOnly && (
-                  <div class="ov-value">
-                    {project?.ports && project.ports.length > 0 ? project.ports.join(', ') : <span class="ov-value-empty">{t('project.noPublishedPorts')}</span>}
-                  </div>
-                )
-              )}
-            </div>
-
-            {/* Tags (moved into Links & health) */}
-            <div class="ov-section" style="margin-top: 14px">
-              <div class="ov-row-actions" style="align-items:center;gap:8px">
-                <span class="ov-section-label" style="margin:0">{t('project.tags')}</span>
-                {!readOnly && !editingTags && (
-                  <button class="btn-ghost sm" onClick={() => setEditingTags(true)}>
-                    {currentTags.length > 0 ? t('project.edit') : t('project.add')}
-                  </button>
-                )}
-              </div>
-              <div class="tag-editor">
-                {currentTags.map((t) => (
-                  <span class="tag-chip" key={t}>
-                    {t}
-                    {!readOnly && editingTags && (
-                      <button type="button" class="tag-remove" aria-label={`Remove tag ${t}`} onClick={() => removeTag(t)}>×</button>
-                    )}
-                  </span>
-                ))}
-                {!readOnly && editingTags && (
-                  <input
-                    class="tag-input"
-                    placeholder={t('project.addTag')}
-                    maxLength={30}
-                    value={tagInput}
-                    aria-label={t('project.addTag')}
-                    ref={tagInputRef}
-                    onInput={(e: any) => setTagInput(e.target.value)}
-                    onKeyDown={handleTagKeyDown}
-                  />
-                )}
-              </div>
-              {!readOnly && editingTags ? (
-                <div class="ov-row-actions" style="margin-top:8px">
-                  <button class="btn-ghost sm" onClick={saveTags} disabled={savingTags}>
-                    {savingTags ? t('project.saving') : t('project.saveTags')}
-                  </button>
-                  <button class="btn-ghost sm" onClick={() => { setEditingTags(false); setCurrentTags(project?.tags ? [...project.tags] : []); }}>{t('common.cancel')}</button>
-                  <span class="dim">{t('project.enterToAdd', { n: currentTags.length })}</span>
-                  {tagsMsg && <span class="dim" role={msgRole(tagsMsg)}>{tagsMsg}</span>}
-                </div>
-              ) : (
-                (readOnly || currentTags.length === 0) && (
-                  <div class="ov-value" style="margin-top:4px">
-                    {currentTags.length > 0
-                      ? currentTags.join(' · ')
-                      : <span class="ov-value-empty">{t('project.noTags')} {readOnly ? '' : t('project.noTagsHint')}</span>}
-                  </div>
-                )
-              )}
-            </div>
-
             {project && project.ports && project.ports.length > 0 && (
               <div class="serve-box" style="margin-top: 16px">
                 <div class="serve-head">
@@ -1446,6 +1363,99 @@ function OverviewPanel({
         ) : (
           <div class="empty-state" style="padding: 16px">{t('project.noPublishedPortsHint')}</div>
         )}
+
+        {/* Published ports editing (moved into Links & health) */}
+        <div class="ov-section" style="margin-top: 14px">
+          <div class="ov-row-actions" style="align-items:center;gap:8px">
+            <span class="ov-section-label" style="margin:0">{t('project.publishedPorts')}</span>
+            {!readOnly && !editPortsOpen && (
+              <button class="btn-ghost sm" onClick={() => setEditPortsOpen(true)}>{t('project.edit')}</button>
+            )}
+          </div>
+          {editPortsOpen ? (
+            <>
+              <div class="ov-field" style="margin-top:8px">
+                <input
+                  class="modern-input mono"
+                  style="flex:1"
+                  aria-label={t('project.publishedPorts')}
+                  aria-describedby="portsFormatHint"
+                  placeholder={t('cfg.portsPlaceholder')}
+                  value={portsText}
+                  ref={portsInputRef}
+                  onInput={(e: any) => setPortsText(e.target.value)}
+                  onKeyDown={(e: any) => e.key === 'Enter' && savePorts()}
+                />
+                <span class="sr-only" id="portsFormatHint">{t('cfg.portsFormatHint')}</span>
+              </div>
+              <div class="ov-row-actions" style="margin-top:8px">
+                <button class="btn-ghost sm" onClick={savePorts} disabled={savingPorts}>
+                  {savingPorts ? t('project.saving') : t('project.savePorts')}
+                </button>
+                <button class="btn-ghost sm" onClick={() => { setEditPortsOpen(false); setPortsText((project?.ports || []).join(', ')); }}>{t('common.cancel')}</button>
+                {portsMsg && <span class="dim" style="color: var(--text-3)" role={msgRole(portsMsg)}>{portsMsg}</span>}
+              </div>
+            </>
+          ) : (
+            !readOnly && (
+              <div class="ov-value">
+                {project?.ports && project.ports.length > 0 ? project.ports.join(', ') : <span class="ov-value-empty">{t('project.noPublishedPorts')}</span>}
+              </div>
+            )
+          )}
+        </div>
+
+        {/* Tags (moved into Links & health) */}
+        <div class="ov-section" style="margin-top: 14px">
+          <div class="ov-row-actions" style="align-items:center;gap:8px">
+            <span class="ov-section-label" style="margin:0">{t('project.tags')}</span>
+            {!readOnly && !editingTags && (
+              <button class="btn-ghost sm" onClick={() => setEditingTags(true)}>
+                {currentTags.length > 0 ? t('project.edit') : t('project.add')}
+              </button>
+            )}
+          </div>
+          <div class="tag-editor">
+            {currentTags.map((tg) => (
+              <span class="tag-chip" key={tg}>
+                {tg}
+                {!readOnly && editingTags && (
+                  <button type="button" class="tag-remove" aria-label={t('project.removeTag', { name: tg })} onClick={() => removeTag(tg)}>×</button>
+                )}
+              </span>
+            ))}
+            {!readOnly && editingTags && (
+              <input
+                class="tag-input"
+                placeholder={t('project.addTag')}
+                maxLength={30}
+                value={tagInput}
+                aria-label={t('project.addTag')}
+                ref={tagInputRef}
+                onInput={(e: any) => setTagInput(e.target.value)}
+                onKeyDown={handleTagKeyDown}
+              />
+            )}
+          </div>
+          {!readOnly && editingTags ? (
+            <div class="ov-row-actions" style="margin-top:8px">
+              <button class="btn-ghost sm" onClick={saveTags} disabled={savingTags}>
+                {savingTags ? t('project.saving') : t('project.saveTags')}
+              </button>
+              <button class="btn-ghost sm" onClick={() => { setEditingTags(false); setCurrentTags(project?.tags ? [...project.tags] : []); }}>{t('common.cancel')}</button>
+              <span class="dim">{t('project.enterToAdd', { n: currentTags.length })}</span>
+              {tagsMsg && <span class="dim" role={msgRole(tagsMsg)}>{tagsMsg}</span>}
+            </div>
+          ) : (
+            (readOnly || currentTags.length === 0) && (
+              <div class="ov-value" style="margin-top:4px">
+                {currentTags.length > 0
+                  ? currentTags.join(' · ')
+                  : <span class="ov-value-empty">{t('project.noTags')} {readOnly ? '' : t('project.noTagsHint')}</span>}
+              </div>
+            )
+          )}
+        </div>
       </div>
       )}
 
@@ -1513,12 +1523,12 @@ function OverviewPanel({
             <div class="ov-stat-grid">
               <div class="ov-stat">
                 <div class="ov-stat-label">CPU</div>
-                <div class="ov-stat-value" aria-live="polite">{effectiveStats.cpuPct}%</div>
+                <div class="ov-stat-value">{effectiveStats.cpuPct}%</div>
                 <div class="stat-bar" style="margin-top:8px"><div class="stat-fill" style={`width: ${Math.min(100, effectiveStats.cpuPct)}%`} /></div>
               </div>
               <div class="ov-stat">
                 <div class="ov-stat-label">{t('project.memory')}</div>
-                <div class="ov-stat-value" aria-live="polite">{fmtBytes(effectiveStats.memBytes)}</div>
+                <div class="ov-stat-value">{fmtBytes(effectiveStats.memBytes)}</div>
                 <div class="ov-stat-sub">{t('project.of')} {fmtBytes(effectiveStats.memLimit)} · {effectiveStats.memPct}%</div>
                 <div class="stat-bar" style="margin-top:8px"><div class="stat-fill" style={`width: ${Math.min(100, effectiveStats.memPct)}%`} /></div>
               </div>
@@ -1803,6 +1813,24 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   const loadSeqRef = useRef(0);
   const newFileInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const previewCardRef = useRef<HTMLDivElement | null>(null);
+  const openerFocusRef = useRef<HTMLElement | null>(null);
+  const discardAfterRef = useRef<(() => void) | null>(null);
+  const [pendingDiscard, setPendingDiscard] = useState(false);
+
+  // Live mirrors for the window keydown handler — the effect's [preview] deps
+  // would otherwise read stale state and either skip the unsaved-changes
+  // prompt after typing or fire during a sibling ConfirmModal.
+  const previewRef = useRef<FilePreview | null>(null);
+  const editContentRef = useRef<string | null>(null);
+  const savingFileRef = useRef(false);
+  const pendingDiscardRef = useRef(false);
+  const confirmDeleteFileRef = useRef(false);
+  previewRef.current = preview;
+  editContentRef.current = editContent;
+  savingFileRef.current = savingFile;
+  pendingDiscardRef.current = pendingDiscard;
+  confirmDeleteFileRef.current = !!confirmDeleteFile;
 
   const imgUrlRef = useRef<string | null>(null);
   const setImgUrlSafe = (url: string | null) => {
@@ -1830,7 +1858,30 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
     document.body.style.overflow = 'hidden';
     popupCloseRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closePreview();
+      // Sibling ConfirmModals (discard / file delete) own Escape + Tab while
+      // open — step aside so their window handlers run unopposed.
+      if (pendingDiscardRef.current || confirmDeleteFileRef.current) return;
+      if (e.key === 'Escape') { closePreview(); return; }
+      if (e.key !== 'Tab' || !previewCardRef.current) return;
+      const nodes = previewCardRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      );
+      if (nodes.length === 0) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      const act = document.activeElement;
+      if (!previewCardRef.current.contains(act)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
+      if (e.shiftKey && act === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && act === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -1864,6 +1915,8 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
 
   const openFile = async (name: string) => {
     const p = cwd ? `${cwd}/${name}` : name;
+    const ae = document.activeElement;
+    openerFocusRef.current = ae instanceof HTMLElement && ae !== document.body ? ae : null;
     try {
       const fp = await getProjectFile(slug, p);
       setPreview(fp);
@@ -1905,25 +1958,67 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
     }
   };
 
-  const closePreview = () => {
+  const doClosePreview = () => {
     setImgUrlSafe(null);
     setPreview(null);
     setPreviewName('');
     setEditContent(null);
     setFileMsg(null);
+    if (openerFocusRef.current && openerFocusRef.current.isConnected) {
+      try { openerFocusRef.current.focus(); } catch { /* noop */ }
+    }
+    openerFocusRef.current = null;
+  };
+
+  const closePreview = (after?: () => void) => {
+    // Don't drop the modal while a save is in flight — the result (ok/fail
+    // message) must stay visible; the save completes in milliseconds.
+    if (savingFileRef.current) return;
+    const dirty = previewRef.current && editContentRef.current !== null && editContentRef.current !== previewRef.current.content && !savingFileRef.current;
+    if (dirty) {
+      discardAfterRef.current = after || null;
+      setPendingDiscard(true);
+      return;
+    }
+    discardAfterRef.current = null;
+    doClosePreview();
+    after?.();
+  };
+
+  const confirmDiscard = () => {
+    if (savingFileRef.current) return;
+    const after = discardAfterRef.current;
+    discardAfterRef.current = null;
+    setPendingDiscard(false);
+    doClosePreview();
+    after?.();
+  };
+
+  const cancelDiscard = () => {
+    discardAfterRef.current = null;
+    setPendingDiscard(false);
   };
 
   const saveFile = async () => {
-    if (!preview || editContent === null) return;
+    if (readOnly || !preview || editContent === null) return;
+    savingFileRef.current = true;
     setSavingFile(true);
     setFileMsg(null);
     try {
       await saveProjectFile(slug, previewName, editContent);
+      const saved = editContent;
+      // Sync the "last saved" baseline so a later close never re-prompts and
+      // the unsaved chip clears — mirrors updated synchronously too, so even
+      // an immediate close in the same frame reads a clean baseline.
+      if (previewRef.current) previewRef.current = { ...previewRef.current, content: saved };
+      editContentRef.current = saved;
+      setPreview((p) => (p ? { ...p, content: saved } : p));
       setFileMsg(t('files.savedOk'));
       setTimeout(() => setFileMsg(null), 4000);
     } catch (err: any) {
       setFileMsg(t('files.saveFail', { error: err.message }));
     } finally {
+      savingFileRef.current = false;
       setSavingFile(false);
     }
   };
@@ -2032,10 +2127,14 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
             style="display:none"
             onChange={(e: any) => doUpload(Array.from(e.target.files || []))}
           />
-          <button class="btn-ghost sm" onClick={newFile} aria-expanded={showNewFile}>{t('files.newFile')}</button>
-          <button class="btn-primary sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-            {uploading ? t('files.uploading') : cwd ? t('files.uploadTo', { dir: cwd }) : t('files.upload')}
-          </button>
+          {!readOnly && (
+            <>
+              <button class="btn-ghost sm" onClick={newFile} aria-expanded={showNewFile}>{t('files.newFile')}</button>
+              <button class="btn-primary sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
+                {uploading ? t('files.uploading') : cwd ? t('files.uploadTo', { dir: cwd }) : t('files.upload')}
+              </button>
+            </>
+          )}
         </div>
       </div>
       {showNewFile && (
@@ -2108,9 +2207,13 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
                     }}
                   />
                 ) : (
-                  <button class="btn-ghost sm" onClick={() => startRename(e.path)}>{t('files.rename')}</button>
+                  !readOnly && (
+                    <button class="btn-ghost sm" onClick={() => startRename(e.path)}>{t('files.rename')}</button>
+                  )
                 )}
-                <button class="btn-danger sm" onClick={() => remove(e.path)}>{t('files.delete')}</button>
+                {!readOnly && (
+                  <button class="btn-danger sm" onClick={() => remove(e.path)}>{t('files.delete')}</button>
+                )}
               </div>
             </div>
           );
@@ -2127,6 +2230,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
             role="dialog"
             aria-modal="true"
             aria-label={`Preview ${previewName}`}
+            ref={previewCardRef}
           >
             <div class="file-preview-head">
               <h3 class="file-preview-name"><span class="mono">{previewName}</span></h3>
@@ -2136,17 +2240,16 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
               <span class="dim" style="color: var(--text-3); font-size:0.72rem">
                 {preview.binary ? `${fmtBytes(preview.size)} · ${t('files.binary')}` : `${fmtBytes(preview.size)}${preview.truncated ? ` · ${t('files.readOnlyLarge')}` : ''}`}
               </span>
-              {editContent !== null && (
+              {!readOnly && editContent !== null && (
                 <button class="btn-primary sm" onClick={saveFile} disabled={savingFile}>
                   {savingFile ? t('project.saving') : t('common.save')}
                 </button>
               )}
               <button
                 class="btn-ghost sm"
-                onClick={() => {
-                  closePreview();
+                onClick={() => closePreview(() => {
                   window.location.hash = `/project/${slug}?tab=reviews&path=${encodeURIComponent(previewName)}`;
-                }}
+                })}
                 disabled={readOnly}
                 title={readOnly ? t('files.reviewViewer') : t('files.reviewTitle')}
                 aria-label={t('files.reviewAria')}
@@ -2156,13 +2259,13 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
               <button class="btn-ghost sm" onClick={() => downloadFile(previewName)} title={t('files.downloadFile')} aria-label={t('files.downloadFile')}>
                 <Download width={12} height={12} class="icon" /> {t('files.download')}
               </button>
-              <button class="btn-ghost sm" ref={popupCloseRef} onClick={closePreview}>{t('common.close')}</button>
+              <button class="btn-ghost sm" ref={popupCloseRef} onClick={() => closePreview()}>{t('common.close')}</button>
             </div>
             {fileMsg && (
               <div
                 class="terminal-line"
                 style="margin: 6px 0"
-                role={fileMsg.startsWith('Save failed') ? 'alert' : 'status'}
+                role={msgRole(fileMsg)}
               >{fileMsg}</div>
             )}
             {preview.binary ? (
@@ -2181,6 +2284,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
               <textarea
                 class="file-editor mono scrollbar"
                 value={editContent}
+                readOnly={readOnly}
                 onInput={(e: any) => setEditContent(e.target.value)}
                 onKeyDown={(e: any) => {
                   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -2205,6 +2309,15 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
         confirmLabel={t('files.deleteConfirm')}
         onConfirm={runRemoveFile}
         onCancel={() => setConfirmDeleteFile(null)}
+      />
+      <ConfirmModal
+        open={pendingDiscard}
+        danger
+        title={t('files.discardTitle', { path: previewName })}
+        message={t('files.discardMessage')}
+        confirmLabel={t('files.discardConfirm')}
+        onConfirm={confirmDiscard}
+        onCancel={cancelDiscard}
       />
     </div>
   );

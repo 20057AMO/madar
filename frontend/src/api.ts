@@ -1163,6 +1163,7 @@ export const saveProjectFile = (slug: string, path: string, content: string) =>
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
+      signal: AbortSignal.timeout(30000),
     }
   );
 export const renameProjectPath = (slug: string, from: string, to: string) =>
