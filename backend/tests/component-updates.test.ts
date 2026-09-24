@@ -33,15 +33,15 @@
  *       supervised child so the entrypoint revives the ORIGINAL binary;
  *     • recreates the container with the DEFAULT env (WSD_UPDATE_*=, WSD_TESTING=0);
  *     • clears updates state, deletes the temp admin, and asserts a final
- *       4.96.x code-server + healthy /api/updates so the box is left as found.
+ *       image-baseline code-server + healthy /api/updates so the box is left as found.
  *
  * Cases:
  *  1. GET /api/updates shape (anonymous 401, 2 components, idle flags)
  *  2. Access matrix + password gates (401/403/403, missing/incorrect applied)
  *  3. POST /api/updates/check → checkedAt bump + `updates-check` audit row
- *  4. code-server happy path: 202 → `ok` → 4.99.0 live + state file + audit
- *  5. Real boot-failure rollback: broken 4.99.1 → `failed` rolledBack → back on 4.99.0
- *  6. Synchronous downgrade gate: 4.95.0 → immediate 400 "already up to date",
+ *  4. code-server happy path: 202 → `ok` → baseline+1 live + state file + audit
+ *  5. Real boot-failure rollback: broken baseline+2 → `failed` rolledBack → back on baseline+1
+ *  6. Synchronous downgrade gate: baseline → immediate 400 "already up to date",
  *     state file untouched, zero downloads
  *  7. Single-flight: second apply during a running one → 409
  *  8. opencode npm status: channelUnlocked true when supported / false on 99.x
@@ -80,14 +80,28 @@ const CONTAINER = 'wsd-pro';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MOCK_PORTS = Array.from({ length: 11 }, (_, i) => 8987 + i);
 
-const HAPPY_VERSION = '4.99.0';   // newest success target
-const BROKEN_VERSION = '4.99.1';  // newest, fails to boot → rollback
-const BASELINE_VERSION = '4.96.4'; // the really installed code-server
-const DOWNGRADE_VERSION = '4.95.0'; // not newer → gate
+// Mock code-server targets. Never hardcoded: they are DERIVED from the live
+// image baseline in before() — the Dockerfile resolves `latest` at build time,
+// so a constant like 4.99.0 can end up numerically OLDER than the installed
+// baseline (4.138.0 > 4.99.0 today), which would make the backend's downgrade
+// gate reject every apply with 400.
+let HAPPY_VERSION = '';     // newest success target (baseline + 0.0.1)
+let BROKEN_VERSION = '';    // newest, fails to boot → rollback (baseline + 0.0.2)
+let DOWNGRADE_VERSION = ''; // = baseline → not strictly newer → immediate 400
+// The really-installed code-server baseline. Read from the recreated container
+// in before() — the image version moves between builds (the Dockerfile now
+// resolves `latest` at build time), so it must never be hardcoded.
+let BASELINE_VERSION = '';
 const FAKE_COMMIT = 'b'.repeat(40);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const debName = (v: string) => `code-server_${v}_amd64.deb`;
+
+/** Bump the patch component of an `x.y.z` semver by n (4.138.0 + 1 → 4.138.1). */
+function bumpVersion(v: string, n: number): string {
+  const p = v.split('.').map(Number);
+  return `${p[0]}.${p[1]}.${p[2] + n}`;
+}
 
 /** Strict semver tuple compare: >0 when `a` is strictly newer than `b`. */
 function verCmp(a: string, b: string): number {
@@ -434,10 +448,10 @@ async function ensureContainerConfigured(mockPort: number): Promise<void> {
 
   console.log(`[container] recreating for mock env (envOk=${envOk}, binary=${currentVersion || 'unknown'})`);
   // Clear persisted updates state on the OLD container BEFORE the recreate: a
-  // stale {applyState:'ok', currentVersion:'4.99.0'} (left by an aborted run)
+  // stale {applyState:'ok', currentVersion:'<target>'} (left by an aborted run)
   // would trigger the boot-time re-apply during this very recreate and could
   // reinstall a cached fake deb — this container must start from its pristine
-  // image baseline (test 1 asserts the 4.96.x shape).
+  // image baseline (test 1 asserts the image-baseline shape).
   await clearUpdatesState();
   await composeUp(want, envOk && !binaryOk);
   await pollHealth(240_000);
@@ -630,7 +644,8 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
     hostTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'madar-upd-'));
     await startMock();
-    mock.csLatest = HAPPY_VERSION;
+    // mock.csLatest is derived from the live baseline in 1b below — the mock
+    // targets must be strictly newer than whatever the image ships.
     mock.npmLatest = '1.18.22';
 
     // 1. container pointed at the mock
@@ -639,10 +654,27 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     const hostIde = await resolveIdeHostPort();
     console.log(`[container] healthy; IDE host port ${hostIde}`);
 
+    // 1b. the code-server "baseline" must equal what the image actually ships —
+    //     read it from the recreated container rather than hardcoding (the image
+    //     version moves between builds; the recreate above guarantees the
+    //     pristine image baseline).
+    BASELINE_VERSION = await waitForCodeServerVersion(60_000);
+    console.log(`[mock] code-server baseline set to ${BASELINE_VERSION}`);
+
+    // 1c. derive the mock targets from that baseline: every apply in this suite
+    //     must target a version strictly NEWER than the installed one (and a
+    //     strictly equal one for the downgrade gate), so a `latest`-installed
+    //     image can never make the whole suite fail on the 400 gate.
+    HAPPY_VERSION = bumpVersion(BASELINE_VERSION, 1);
+    BROKEN_VERSION = bumpVersion(BASELINE_VERSION, 2);
+    DOWNGRADE_VERSION = BASELINE_VERSION;
+    mock.csLatest = HAPPY_VERSION;
+    console.log(`[mock] code-server targets derived: happy=${HAPPY_VERSION} broken=${BROKEN_VERSION} downgrade=${DOWNGRADE_VERSION}`);
+
     // 2. fresh updates state (volume persists; stale applyState would poison tests)
     try { await clearUpdatesState(); } catch { /* maybe mid-restart */ }
 
-    // 3. backups + fake debs (baseline too, so the mock can serve /download/v4.96.4/…)
+    // 3. backups + fake debs (baseline too, so the mock can serve /download/v${BASELINE_VERSION}/…)
     fsBackup = await backupCodeServer(hostTmp);
     await buildFakeDeb(BASELINE_VERSION, 'good', hostTmp);
     await buildFakeDeb(HAPPY_VERSION, 'good', hostTmp);
@@ -676,9 +708,9 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
     const cs = byId(j, 'code-server');
     assert.match(cs.current, /^\d+\.\d+\.\d+$/);
-    assert.equal(cs.current.startsWith('4.96.'), true, `current is the installed 4.96.x (${cs.current})`);
-    assert.equal(cs.latest, HAPPY_VERSION, 'mock latest serves 4.99.0');
-    assert.equal(cs.upToDate, false, '4.96.4 < 4.99.0');
+    assert.equal(cs.current, BASELINE_VERSION, 'current is the installed image baseline');
+    assert.equal(cs.latest, HAPPY_VERSION, `mock latest serves ${HAPPY_VERSION}`);
+    assert.equal(cs.upToDate, false, `${BASELINE_VERSION} < ${HAPPY_VERSION}`);
     assert.equal(cs.channelUnlocked, true);
     assert.equal(cs.applyState, 'idle');
     assert.equal(cs.updateRunning, false);
@@ -740,7 +772,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     assert.ok(rows.some((r: any) => r.event === 'updates-check' && r.ok === true), 'audit has updates-check');
   });
 
-  test('4. code-server happy path: 202 → ok → live 4.99.0 (dpkg + supervisor revive)', async () => {
+  test('4. code-server happy path: 202 → ok → live baseline+1 (dpkg + supervisor revive)', async () => {
     assert.ok(tempAdmin);
     const h = tempAdmin!.headers;
 
@@ -754,7 +786,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     assert.equal(cs.updateRunning, false);
 
     const live = await liveCodeServerVersion();
-    assert.equal(live, HAPPY_VERSION, `live binary is 4.99.0 (got ${live})`);
+    assert.equal(live, HAPPY_VERSION, `live binary is ${HAPPY_VERSION} (got ${live})`);
 
     const state = await readCodeServerState();
     assert.equal(state.applyState, 'ok');
@@ -777,8 +809,9 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     await piWaitCsSettled(240_000, 'before boot-reapply test');
 
     // Seed BOTH state files as the shape a pre-rebuild successful update leaves:
-    // {applyState:'ok'} + the installed version. 4.99.0 is cacheable (test 4
-    // cached the fake deb into $DATA_DIR/updates/debs/ on the shared volume);
+    // {applyState:'ok'} + the installed version. The happy version is cacheable
+    // (test 4 cached the fake deb into $DATA_DIR/updates/debs/ on the shared
+    // volume);
     // 1.99.99 exists NOWHERE — the mock never serves it and the boot npm
     // install talks to the REAL registry (WSD_UPDATE_NPM_REGISTRY only feeds
     // the probe/apply latest fetch), so the opencode reapply must fail fast —
@@ -794,14 +827,14 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     }), OC_STATE);
 
     // Discard the writable layer: the fresh container boots the image baseline
-    // (4.96.4 / installedOpencode) while the state files still claim the newer
+    // (BASELINE_VERSION / installedOpencode) while the state files still claim the newer
     // versions → the boot-time re-apply must kick in on start.
     await composeUp(UPDATES_ENV(mock.port), true);
     await pollHealth(240_000);
 
-    // code-server: re-applied 4.99.0 from the deb cache, verifiably booted.
+    // code-server: re-applied the happy version from the deb cache, verifiably booted.
     const csLive = await waitForCodeServerVersion(120_000);
-    assert.equal(csLive, HAPPY_VERSION, `boot re-applied 4.99.0 from cache (got ${csLive})`);
+    assert.equal(csLive, HAPPY_VERSION, `boot re-applied ${HAPPY_VERSION} from cache (got ${csLive})`);
     const csState = await piWaitCsState(
       (s: any) => s.applyState === 'ok' && s.bootReapply === 'ok',
       90_000,
@@ -906,7 +939,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     installedOpencode = SEED;
   });
 
-  test('5. real boot-failure rollback: broken 4.99.1 → failed + rolled back to 4.99.0', async () => {
+  test('5. real boot-failure rollback: broken baseline+2 → failed + rolled back to baseline+1', async () => {
     assert.ok(tempAdmin);
     const h = tempAdmin!.headers;
     await piWaitCsSettled(240_000, 'before test 5');
@@ -927,14 +960,14 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     const state = await piWaitCsState(
       (s: any) => s.applyState === 'failed' && s.rolledBack === true && s.targetVersion === BROKEN_VERSION,
       30_000,
-      'failed + rolledBack for 4.99.1',
+      'failed + rolledBack for ${BROKEN_VERSION}',
     );
-    assert.equal(state.currentVersion, HAPPY_VERSION, 'state records the pre-update current (4.99.0)');
+    assert.equal(state.currentVersion, HAPPY_VERSION, `state records the pre-update current (${HAPPY_VERSION})`);
     assert.equal(typeof state.error, 'string', 'state file records the failure reason');
     assert.match(String(state.error), /failed to boot.*rolled back to/i, `state error names the rollback (${state.error})`);
 
     const live = await liveCodeServerVersion();
-    assert.equal(live, HAPPY_VERSION, `survives on 4.99.0 (got ${live})`);
+    assert.equal(live, HAPPY_VERSION, `survives on ${HAPPY_VERSION} (got ${live})`);
 
     // the status surface exposes the same facts (regression guard for the
     // rolledBack/error surfacing fix)
@@ -950,13 +983,13 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
     const stats = await piMockStats();
     assert.equal(stats.counters.deb[debName(BROKEN_VERSION)] ?? 0, 1, 'broken release fetched once');
-    // The rollback baseline (4.99.0) is served from the persistent deb cache
+    // The rollback baseline (${HAPPY_VERSION}) is served from the persistent deb cache
     // (the cache holds the most recently applied version — seeded by test 4b),
     // so the mock download counter must stay at ZERO, not 1.
-    assert.equal(stats.counters.download[debName(HAPPY_VERSION)] ?? 0, 0, 'rollback baseline (4.99.0) served from the deb cache — never re-downloaded');
+    assert.equal(stats.counters.download[debName(HAPPY_VERSION)] ?? 0, 0, `rollback baseline (${HAPPY_VERSION}) served from the deb cache — never re-downloaded`);
   });
 
-  test('6. synchronous downgrade gate: 4.95.0 → immediate 400, state untouched, zero downloads',
+  test('6. synchronous downgrade gate: baseline → immediate 400, state untouched, zero downloads',
     async () => {
       assert.ok(tempAdmin);
       const h = tempAdmin!.headers;
@@ -966,7 +999,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
       // The router now runs a synchronous downgrade gate (fresh registry read,
       // before beginApply/202; skipped only while an update is already in
-      // flight — nothing is running here): latest 4.95.0 <= installed 4.99.0
+      // flight — nothing is running here): latest ${DOWNGRADE_VERSION} <= installed ${HAPPY_VERSION}
       // → plain 400.
       const r = await piPostApply(h, { component: 'code-server', accountPassword: tempAdmin!.password });
       assert.equal(r.status, 400, `synchronous downgrade gate rejects with 400, got ${r.status}`);
@@ -984,8 +1017,8 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
       assert.equal(live, HAPPY_VERSION, 'version untouched');
 
       const stats = await piMockStats();
-      assert.equal(stats.counters.deb[debName(DOWNGRADE_VERSION)] ?? 0, 0, 'no release asset fetch for 4.95.0');
-      assert.equal(stats.counters.download[debName(DOWNGRADE_VERSION)] ?? 0, 0, 'no download for 4.95.0');
+      assert.equal(stats.counters.deb[debName(DOWNGRADE_VERSION)] ?? 0, 0, `no release asset fetch for ${DOWNGRADE_VERSION}`);
+      assert.equal(stats.counters.download[debName(DOWNGRADE_VERSION)] ?? 0, 0, `no download for ${DOWNGRADE_VERSION}`);
     });
 
   test('7. single-flight: a second apply while one is running → 409', async () => {
@@ -1010,12 +1043,12 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     const state = await piWaitCsState(
       (s: any) => s.applyState === 'failed' && s.rolledBack === true && s.targetVersion === BROKEN_VERSION,
       240_000,
-      'first run failed with rolledBack for 4.99.1',
+      'first run failed with rolledBack for ${BROKEN_VERSION}',
     );
     assert.equal(typeof state.error, 'string', 'state file carries the failure reason');
 
     const live = await liveCodeServerVersion();
-    assert.equal(live, HAPPY_VERSION, 'finished on 4.99.0 again');
+    assert.equal(live, HAPPY_VERSION, `finished on ${HAPPY_VERSION} again`);
   });
 
   test('8. opencode npm status: channelUnlocked true/false and upToDate', async () => {
@@ -1202,15 +1235,15 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
       if (!fsBackup) throw new Error('no fs backup');
       await restoreCodeServer(fsBackup);
       const v = await waitForCodeServerVersion(90_000);
-      if (!v.startsWith('4.96.')) throw new Error(`restored binary is ${v}, expected 4.96.x`);
+      if (v !== BASELINE_VERSION) throw new Error(`restored binary is ${v}, expected ${BASELINE_VERSION}`);
     });
 
     await tryStep('clear updates state before the restore recreate', async () => {
       // The boot-reapply test deliberately leaves {applyState:'ok',
-      // currentVersion:'4.99.0'} + the cached deb on this (mock) container;
+      // currentVersion:'<happy>'} + the cached deb on this (mock) container;
       // without this pre-clear the DEFAULT-env recreate below would trigger the
       // boot-time re-apply and reinstall the cached fake deb, breaking the
-      // final 4.96.x verification.
+      // final image-baseline verification.
       await clearUpdatesState();
     });
 
@@ -1238,7 +1271,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
     await tryStep('final verification', async () => {
       const v = await liveCodeServerVersion();
-      if (!v.startsWith('4.96.')) throw new Error(`final version ${v}, expected 4.96.x`);
+      if (v !== BASELINE_VERSION) throw new Error(`final version ${v}, expected ${BASELINE_VERSION}`);
       const r = await reqAuth('GET', '/updates');
       if (r.status !== 200) throw new Error(`final GET /updates -> ${r.status}`);
       console.log(`   → container final: code-server ${v}, GET /api/updates ${r.status}`);
