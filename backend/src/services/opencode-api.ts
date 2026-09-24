@@ -743,10 +743,13 @@ export function waitForOpencodeBoot(
 /**
  * Process identity guard (project-serve pattern) for the supervised opencode
  * child: a stale/rewritten pid file must never make us SIGTERM an unrelated
- * process. opencode's native binary reports comm `opencode`; the npm shim
- * (and the JS fallback) run as `node` with the component path in args. The
- * Madar backend itself is also a `node dist/index.js` process, so a bare
- * `comm === 'node'` would let a reused PID kill OUR OWN server — that exact
+ * process. comm is not a stable identity across Node versions — opencode's
+ * native binary reports comm `opencode`; the npm shim (and the JS fallback)
+ * run under node whose >=24 builds name the main thread 'MainThread' rather
+ * than 'node'. The ARGS are authoritative: the component path always appears
+ * on the supervised child's command line. The Madar backend itself is also a
+ * `node dist/index.js` process, so a bare `comm === 'node'` (or a reused
+ * MainThread pid) would let a reused PID kill OUR OWN server — that exact
  * shape is refused. Returns true only for a plausible opencode child.
  */
 function isOpencodeProcess(pid: number): Promise<boolean> {
@@ -758,7 +761,6 @@ function isOpencodeProcess(pid: number): Promise<boolean> {
       const [comm, ...rest] = line.split(/\s+/);
       const args = rest.join(' ');
       if (comm === 'opencode') return resolve(true);
-      if (comm !== 'node') return resolve(false);
       if (args.includes('dist/index.js')) return resolve(false); // the Madar backend
       resolve(args.includes('opencode'));
     });

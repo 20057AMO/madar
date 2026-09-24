@@ -333,11 +333,14 @@ function currentPid(): number | undefined {
 
 /**
  * Process identity guard (project-serve pattern): the pid file must point at
- * a genuine live code-server child before we SIGTERM it. code-server 4.x
- * runs as `node <bin>/code-server` (shebang exec), and the container-test
- * fakes are `node -e '...http server...'` — so comm alone is insufficient:
- * a `node dist/index.js` (the Madar backend itself) is the exact process a
- * reused pid must NEVER kill, and is refused by its args.
+ * a genuine live code-server child before we SIGTERM it. comm is NOT a stable
+ * identity across Node versions: the code-server deb bundles its own node
+ * (lib/node), and Node >=24 names its main thread 'MainThread' (Node 24 thread
+ * names) while node 18-22 report 'node'. The ARGS are authoritative — the
+ * supervised child's command line always carries the code-server binary path,
+ * and the container-test fakes are `node -e '...http server...'` (rest[1]
+ * === '-e'). A `node dist/index.js` (the Madar backend itself) is refused by
+ * its args.
  */
 function isCodeServerProcess(pid: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -348,7 +351,6 @@ function isCodeServerProcess(pid: number): Promise<boolean> {
       const [comm, ...rest] = line.split(/\s+/);
       const args = rest.join(' ');
       if (comm === 'code-server') return resolve(true);
-      if (comm !== 'node') return resolve(false);
       if (args.includes('dist/index.js')) return resolve(false); // the Madar backend
       // `ps args` repeats argv[0] — for the real bin `/usr/bin/code-server…`
       // matches the include; `node -e '…'` container-test fakes put `-e` in
