@@ -8,5 +8,6 @@
     }
   },
   "model": "opencode/big-pickle",
-  "subagent_depth": 2
+  "subagent_depth": 2,
+  "default_agent": "orchestrator"
 }

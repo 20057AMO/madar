@@ -67,7 +67,8 @@ describe('Opencode Studio API', () => {
     assert.equal(agents.status, 200);
     const { agents: list } = await agents.json();
     const names = list.map((a: any) => a.name);
-    // Full v2 roster: originals + lifecycle specialists + language experts
+    // Full v3 roster: originals + lifecycle specialists + language experts + orchestrator
+    // (platform agent renamed to madar-expert)
     for (const expected of [
       'architect',
       'backend-developer',
@@ -90,7 +91,8 @@ describe('Opencode Studio API', () => {
       'security-auditor',
       'test-writer',
       'ux-designer',
-      'wsd-expert',
+      'madar-expert',
+      'orchestrator',
       'api-designer',
       'observability-engineer',
       'accessibility-auditor',
@@ -116,6 +118,16 @@ describe('Opencode Studio API', () => {
       'api-design-guidelines',
       'performance-profiling',
       'wsd-workflow',
+      'frontend-implementation',
+      'backend-implementation',
+      'database-design',
+      'websocket-implementation',
+      'code-review',
+      'refactoring',
+      'accessibility',
+      'git-workflow',
+      'documentation',
+      'typescript-practices',
     ]) {
       assert.ok(snames.includes(expected), `preset skill '${expected}' present`);
     }

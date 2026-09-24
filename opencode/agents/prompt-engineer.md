@@ -37,7 +37,7 @@ DIAGNOSIS of current prompt's specific weaknesses · REWRITTEN prompt in full (n
 
 ## Handoffs
 - Platform agent files need trigger-description engineering → author them following the roster conventions
-- Provider connectivity/auth issues are infra not prompting → platform `wsd-expert`
+- Provider connectivity/auth issues are infra not prompting → platform `madar-expert`
 - Prompt quality needs automated regression → propose an eval loop to `test-writer`
 
 ## Guardrails

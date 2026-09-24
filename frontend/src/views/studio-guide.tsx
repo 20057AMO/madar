@@ -28,12 +28,12 @@ const SECTIONS: Section[] = [
     points: {
       ar: [
         'كل جلسة تبدأ بوكيل أساسي واحد (build) يقرأ رسالتك ويخطط ويعدل الملفات وينفذ الأوامر.',
-        'خلفه 27 متخصصًا (Subagents). الوكيل الأساسي يسلمهم مهمة محددة النطاق ثم يدمج تقريرهم في عمله.',
+        'خلفه 28 متخصصًا (Subagents). الوكيل الأساسي يسلمهم مهمة محددة النطاق ثم يدمج تقريرهم في عمله.',
         'المتخصص لا يستبدل الأساسي — بل يعززه. أنت تحاور الأساسي دائمًا.',
       ],
       en: [
         'Every session starts with one primary agent (build) that reads your message, plans, edits files and runs commands.',
-        'Behind it stand 27 specialists (subagents). The primary hands them a tightly-scoped job and folds their report back into the work.',
+        'Behind it stand 28 specialists (subagents). The primary hands them a tightly-scoped job and folds their report back into the work.',
         'Specialists never replace the primary — they reinforce it. You always talk to the primary.',
       ],
     },
