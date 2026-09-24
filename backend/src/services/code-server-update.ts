@@ -339,8 +339,10 @@ function currentPid(): number | undefined {
  * names) while node 18-22 report 'node'. The ARGS are authoritative — the
  * supervised child's command line always carries the code-server binary path,
  * and the container-test fakes are `node -e '...http server...'` (rest[1]
- * === '-e'). A `node dist/index.js` (the Madar backend itself) is refused by
- * its args.
+ * === '-e'). That `-e` acceptance is deliberate for the container test
+ * environment ONLY — no production path launches a `node -e` server today,
+ * so do not let it spread into a generic escape hatch. A `node dist/index.js`
+ * (the Madar backend itself) is refused by its args.
  */
 function isCodeServerProcess(pid: number): Promise<boolean> {
   return new Promise((resolve) => {

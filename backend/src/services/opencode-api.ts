@@ -761,6 +761,7 @@ function isOpencodeProcess(pid: number): Promise<boolean> {
       const [comm, ...rest] = line.split(/\s+/);
       const args = rest.join(' ');
       if (comm === 'opencode') return resolve(true);
+      if (args.includes('opencode-purge.py')) return resolve(false); // opencode-store purge helper
       if (args.includes('dist/index.js')) return resolve(false); // the Madar backend
       resolve(args.includes('opencode'));
     });
