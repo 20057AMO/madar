@@ -479,7 +479,7 @@ async function provisionTempAdmin(): Promise<TempAdmin> {
 let hostTmp = '';
 let fsBackup: { lib: string; bin: string } | null = null;
 let tempAdmin: TempAdmin | null = null;
-let installedOpencode = '1.18.22';
+let installedOpencode = ''; // live-read from the container in before() — never hardcode
 const applyPosts: number[] = [];
 const checkPosts: number[] = [];
 
@@ -645,8 +645,17 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     hostTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'madar-upd-'));
     await startMock();
     // mock.csLatest is derived from the live baseline in 1b below — the mock
-    // targets must be strictly newer than whatever the image ships.
-    mock.npmLatest = '1.18.22';
+    // targets must be strictly newer than whatever the image ships. The same
+    // applies to opencode — and EARLIER: the server caches the registry answer
+    // during its first boot inside ensureContainerConfigured, so mock.npmLatest
+    // must equal the installed version BEFORE that composeUp (the container is
+    // still on its normal env here, so read the live binary directly).
+    const ocInstalled = (await dockerExec(['sh', '-c', 'opencode --version 2>/dev/null | head -1'])).trim();
+    const ocParsed = ocInstalled.match(/\d+\.\d+\.\d+/);
+    if (!ocParsed) throw new Error(`cannot read the image opencode baseline (got ${JSON.stringify(ocInstalled)})`);
+    installedOpencode = ocParsed[0];
+    mock.npmLatest = installedOpencode;
+    console.log(`[mock] opencode baseline read pre-reconfig: ${installedOpencode}`);
 
     // 1. container pointed at the mock
     await ensureContainerConfigured(mock.port);
@@ -685,14 +694,14 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     tempAdmin = await provisionTempAdmin();
     console.log(`[auth] temp admin provisioned: ${tempAdmin.username}`);
 
-    // 5. the opencode "latest" baseline must equal what the image actually ships,
-    //    so `upToDate` starts true. Read it from the fresh container rather than
-    //    hardcoding (the image version moves between builds).
+    // 5. the opencode "latest" baseline was already set pre-reconfig (1a above)
+    //    so the server cannot cache a stale npm answer during first boot; this
+    //    live read back is a belt-and-braces safety net that must agree.
     const st = await piGet(tempAdmin.headers);
     const oc = st.components.find((c: any) => c.id === 'opencode');
     installedOpencode = String(oc?.current ?? installedOpencode);
     mock.npmLatest = installedOpencode;
-    console.log(`[mock] opencode baseline set to ${installedOpencode}`);
+    console.log(`[mock] opencode baseline confirmed: ${installedOpencode}`);
   });
 
   test('1. GET /api/updates: anonymous 401, two components, idle shape', async () => {
@@ -994,6 +1003,16 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
       assert.ok(tempAdmin);
       const h = tempAdmin!.headers;
       await piWaitCsSettled(240_000, 'before test 6');
+
+      // Reset the mock counters first: the rollback paths in tests 4b/5 may
+      // legitimately fetch the baseline deb once (it was the pre-update
+      // current), outside this test's scope. This test only asserts that a
+      // REJECTED apply causes no registry/asset/download traffic at all.
+      mock.counters.deb = {};
+      mock.counters.download = {};
+      mock.counters.npm = 0;
+      mock.counters.release = 0;
+
       const prev = await piReadCsState();
       await mockControl({ codeServer: DOWNGRADE_VERSION });
 
