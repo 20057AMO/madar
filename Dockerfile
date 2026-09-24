@@ -26,10 +26,31 @@ RUN apt-get update \
         python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# code-server — unified Web IDE rooted at /workspaces
-ARG CODE_SERVER_VERSION=4.96.4
-RUN curl -fsSLo /tmp/code-server.deb \
+# code-server — unified Web IDE rooted at /workspaces.
+# Defaults to the newest release resolved at build time via the GitHub API; pin
+# a specific version with --build-arg CODE_SERVER_VERSION=<ver> for
+# reproducible builds. The resolved tag is regex-guarded (semver-shaped) and
+# its SHA-256 digest — published by the release — is verified before install;
+# on API failure/rate-limit it falls back to the last-known-good 4.96.4, so the
+# build never fails on resolve.
+# NOTE: BuildKit caches this layer — rebuild with --no-cache to re-resolve latest.
+ARG CODE_SERVER_VERSION=latest
+RUN if [ "${CODE_SERVER_VERSION}" = "latest" ]; then \
+      RELEASE_JSON="$(curl -fsSL https://api.github.com/repos/coder/code-server/releases/latest || true)"; \
+      CODE_SERVER_VERSION="$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name // empty' | sed 's/^v//' || true)"; \
+      if ! printf '%s' "$CODE_SERVER_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.a-z0-9]+)?$'; then \
+        echo "warning: invalid latest code-server version '$CODE_SERVER_VERSION', falling back to 4.96.4" >&2; \
+        CODE_SERVER_VERSION=4.96.4; \
+      fi; \
+    fi \
+    && CS_SHA256="$(if [ -n "${RELEASE_JSON:-}" ]; then printf '%s' "$RELEASE_JSON" | jq -r --arg v "$CODE_SERVER_VERSION" '.assets[] | select(.name == "code-server_"+$v+"_amd64.deb") | .digest // empty' || true; fi)" \
+    && echo "Installing code-server ${CODE_SERVER_VERSION}" \
+    && curl -fsSLo /tmp/code-server.deb \
       "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_amd64.deb" \
+    && if [ -n "${CS_SHA256}" ]; then \
+         echo "Verifying code-server sha256 digest: ${CS_SHA256}"; \
+         echo "${CS_SHA256#sha256:}  /tmp/code-server.deb" | sha256sum -c -; \
+       fi \
     && dpkg -i /tmp/code-server.deb \
     && rm -f /tmp/code-server.deb
 
@@ -47,9 +68,15 @@ RUN code-server --install-extension dbaeumer.vscode-eslint \
     && code-server --install-extension PKief.material-icon-theme \
     && code-server --install-extension Gruntfuggly.todo-tree
 
-# opencode CLI (project building agent, web UI on port 4096) — pinned
-# baseline; the Studio Update button upgrades it inside the running container.
-RUN npm install -g opencode-ai@1.18.22 --no-fund --no-audit
+# opencode CLI (project building agent, web UI on port 4096) — resolved at
+# build time to the newest version and gated to the supported major: the
+# backend's SUPPORTED_MAJORS=[1] (backend/src/services/opencode-api.ts) only
+# speaks v1, so a major-2 install would break agents/chat/Studio on the next
+# rebuild. A failed lookup or a non-1 major pins the last-known-good 1.18.22.
+# The Studio Update button still upgrades inside the running container.
+RUN V="$(npm view opencode-ai version 2>/dev/null || true)" \
+  && case "$V" in 1.*) ;; *) echo "warning: opencode $V outside supported major 1, pinning 1.18.22" >&2; V=1.18.22;; esac \
+  && npm install -g opencode-ai@$V --no-fund --no-audit
 
 # Headless container: opencode tries to auto-open a browser via xdg-open on
 # `opencode web`; provide a no-op stub so it never errors out.
