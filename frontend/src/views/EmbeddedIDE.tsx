@@ -6,6 +6,7 @@ import { VSCodeIcon } from '../components/brand-icons';
 import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
 import { useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
+import { projectOptionLabel } from '../lib/project-label';
 import { startFrameTimer } from '../lib/perf-metrics';
 
 const FOLDER_KEY = 'wsd.ide.folder';
@@ -259,7 +260,7 @@ export function EmbeddedIDE() {
           >
             <option value="">{t('ide.allProjects')}</option>
             {projects.map((p) => (
-              <option key={p.slug} value={p.slug}>{p.name}</option>
+              <option key={p.slug} value={p.slug} title={p.slug}>{projectOptionLabel(p.name, p.slug)}</option>
             ))}
           </select>
         </span>

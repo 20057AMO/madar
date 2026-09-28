@@ -26,6 +26,7 @@ import { ReAuthModal } from '../components/ReAuthModal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { fmtDate, type Msg, AuditLog } from './settings-shared';
 import { useI18n } from '../i18n';
+import { clearPostLoginRoute } from '../lib/post-login-route';
 
 type SensitiveAction = 'revoke-all' | '2fa-disable';
 type IdleChoice = 'off' | '30' | '60' | '120';
@@ -162,6 +163,7 @@ export function Profile() {
   };
 
   const handleLogout = () => {
+    clearPostLoginRoute();
     logout();
     window.location.hash = '/login';
   };
@@ -219,6 +221,7 @@ export function Profile() {
       switch (pendingAction) {
         case 'revoke-all': {
           await apiLogoutAll(accountPassword);
+          clearPostLoginRoute();
           logout();
           window.location.hash = '/login';
           break;

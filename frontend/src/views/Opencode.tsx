@@ -7,6 +7,7 @@ import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
 import { useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
 import { buildOpencodeUrl } from '../lib/opencode-link';
+import { projectOptionLabel } from '../lib/project-label';
 import { startFrameTimer } from '../lib/perf-metrics';
 
 const PROJECT_KEY = 'wsd.opencode.project';
@@ -293,7 +294,7 @@ export function Opencode() {
           >
             <option value="">{t('opencode.pickerHome')}</option>
             {openableProjects.map((p) => (
-              <option key={p.slug} value={p.slug}>{p.name}</option>
+              <option key={p.slug} value={p.slug} title={p.slug}>{projectOptionLabel(p.name, p.slug)}</option>
             ))}
           </select>
         </span>

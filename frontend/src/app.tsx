@@ -39,6 +39,12 @@ import {
 } from './api';
 import { UPDATE_RUNNING_STATES } from './views/settings-shared';
 import { Avatar } from './components/Avatar';
+import { claimChunkReload, isStaleChunkError } from './lib/chunk-reload';
+import {
+  capturePostLoginRoute,
+  clearPostLoginRoute,
+  consumePostLoginRoute,
+} from './lib/post-login-route';
 
 /**
  * Import wrappers with a side-effect-free prefetch seam: the chunk-network
@@ -104,26 +110,66 @@ function prefetchLikelyChunks() {
 
 
 interface ErrorBoundaryProps { children: ComponentChildren; }
-interface ErrorBoundaryState { error: Error | null; }
+interface ErrorBoundaryState { error: Error | null; reloading: boolean; }
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null };
+  state: ErrorBoundaryState = { error: null, reloading: false };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { error };
+    return { error, reloading: false };
+  }
+
+  /**
+   * Fallback trigger for the stale-chunk self-heal. In practice the inline
+   * listener in index.html gets there first — every route loader goes through
+   * Vite's preload helper, which dispatches vite:preloadError — so this only
+   * runs if that inline script is unavailable or a future import bypasses the
+   * helper. It claims the same one-shot guard, so whichever path fires first
+   * the reload still happens at most once per shell.
+   */
+  componentDidCatch(error: Error) {
+    if (this.state.reloading || !isStaleChunkError(error)) return;
+    if (!claimChunkReload(error.message)) return;
+    this.setState({ reloading: true });
+    window.location.reload();
   }
 
   render() {
-    if (this.state.error) {
+    const { error, reloading } = this.state;
+    if (error) {
+      if (reloading) {
+        return (
+          <div class="error-boundary">
+            <div class="error-boundary-box">
+              <div class="error-boundary-icon">⚠</div>
+              <h2>Updating Madar</h2>
+              <p class="error-boundary-msg">Loading the files this update replaced — this takes a second.</p>
+            </div>
+          </div>
+        );
+      }
+      const stale = isStaleChunkError(error);
       return (
         <div class="error-boundary">
           <div class="error-boundary-box">
             <div class="error-boundary-icon">⚠</div>
-            <h2>Something went wrong</h2>
-            <p class="error-boundary-msg">{this.state.error.message}</p>
-            <button class="error-boundary-btn" onClick={() => { this.setState({ error: null }); window.location.hash = '/'; }}>
-              Reload
-            </button>
+            <h2>{stale ? 'Madar was updated' : 'Something went wrong'}</h2>
+            <p class="error-boundary-msg">
+              {stale
+                ? 'The app was updated while this tab was open — reload to continue. The page you were on is kept.'
+                : error.message}
+            </p>
+            <div class="error-boundary-actions">
+              <button class="error-boundary-btn" onClick={() => window.location.reload()}>
+                Reload
+              </button>
+              <button
+                class="error-boundary-btn secondary"
+                onClick={() => { this.setState({ error: null, reloading: false }); navigate('/'); }}
+              >
+                Go to Dashboard
+              </button>
+            </div>
           </div>
         </div>
       );
@@ -411,7 +457,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
             class="nav-icon-btn"
             title={t('common.signOut')}
             aria-label={t('common.signOut')}
-            onClick={(e: Event) => { e.stopPropagation(); logout(); window.location.hash = '/login'; }}
+            onClick={(e: Event) => { e.stopPropagation(); clearPostLoginRoute(); logout(); window.location.hash = '/login'; }}
           >
             <LogOut width={15} height={15} class="icon" />
           </button>
@@ -464,6 +510,15 @@ function Shell() {
   const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // The route the /login bounce interrupted, held for as long as the login
+  // render lasts. consumePostLoginRoute() is one-shot, and the shell can
+  // re-render before the hash write is observed — replaying the consume would
+  // lose the route, so the value is pinned here and released on the next
+  // non-/login location.
+  const landingRef = useRef('');
+  useEffect(() => {
+    if (location !== '/login') landingRef.current = '';
+  }, [location]);
   // One-shot speculative chunk prefetch once the shell is up and the user is
   // known — never during the login/setup flow (no wasted bytes there).
   const prefetchedRef = useRef(false);
@@ -504,13 +559,16 @@ function Shell() {
   // Not logged in → redirect to login
   if (!user) {
     if (location === '/login') return <Login />;
+    capturePostLoginRoute();
     window.location.hash = '/login';
     return null;
   }
 
-  // Logged in, but on /login → redirect to home
+  // Logged in, but on /login → back to the page the bounce interrupted, with
+  // its ?folder= / ?project= query intact (falls back to the dashboard).
   if (location === '/login') {
-    window.location.hash = '/';
+    if (!landingRef.current) landingRef.current = consumePostLoginRoute() || '/';
+    window.location.hash = landingRef.current;
     return null;
   }
 

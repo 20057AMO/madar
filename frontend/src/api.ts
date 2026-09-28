@@ -1,3 +1,5 @@
+import { capturePostLoginRoute } from './lib/post-login-route';
+
 export interface ProjectLimits {
   cpu?: string | null;
   memory?: string | null;
@@ -343,6 +345,19 @@ export type ApiError = Error & { status?: number; code?: string };
 
 type ApiInit = RequestInit & { skipAuthRedirect?: boolean };
 
+/**
+ * The session is gone: remember the interrupted route, drop the token and
+ * bounce to /login. `wsd:session-expired` clears the in-memory session in
+ * AuthProvider — without it the shell keeps a signed-out user in memory and
+ * ping-pongs the dead route against /login instead of ever showing the login.
+ */
+function sessionExpired(): void {
+  capturePostLoginRoute();
+  localStorage.removeItem('wsd.token');
+  window.dispatchEvent(new Event('wsd:session-expired'));
+  window.location.hash = '/login';
+}
+
 async function api<T>(path: string, init?: ApiInit): Promise<T> {
   const merged: RequestInit = { ...init };
   const existingHeaders = new Headers(merged.headers || {});
@@ -377,8 +392,7 @@ async function api<T>(path: string, init?: ApiInit): Promise<T> {
     // skipAuthRedirect so a wrong password surfaces inline instead of
     // logging the whole app out.
     if (res.status === 401 && !init?.skipAuthRedirect) {
-      localStorage.removeItem('wsd.token');
-      window.location.hash = '/login';
+      sessionExpired();
       throw new Error('Session expired');
     }
     const err = new Error(data?.error || `Request failed (HTTP ${res.status})`) as ApiError;
@@ -443,8 +457,7 @@ export async function exportProjectSnapshot(slug: string): Promise<{ blob: Blob;
       /* non-JSON body */
     }
     if (res.status === 401) {
-      localStorage.removeItem('wsd.token');
-      window.location.hash = '/login';
+      sessionExpired();
     }
     const err = new Error(msg) as ApiError;
     err.status = res.status;
@@ -473,8 +486,7 @@ export async function exportProjectZip(slug: string): Promise<{ blob: Blob; file
       /* non-JSON body */
     }
     if (res.status === 401) {
-      localStorage.removeItem('wsd.token');
-      window.location.hash = '/login';
+      sessionExpired();
     }
     const err = new Error(msg) as ApiError;
     err.status = res.status;
@@ -545,8 +557,7 @@ export async function downloadStoredSnapshot(slug: string, file: string): Promis
       /* non-JSON body */
     }
     if (res.status === 401) {
-      localStorage.removeItem('wsd.token');
-      window.location.hash = '/login';
+      sessionExpired();
     }
     const err = new Error(msg) as ApiError;
     err.status = res.status;

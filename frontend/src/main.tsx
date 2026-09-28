@@ -2,6 +2,7 @@ import { render } from 'preact';
 import { App } from './app';
 import './index.css';
 import { initPerfMetrics } from './lib/perf-metrics';
+import { clearChunkReloadGuard } from './lib/chunk-reload';
 
 /**
  * Boot shim for the hash router: the server hands out the SPA shell for every
@@ -29,5 +30,11 @@ normalizeBootPath();
 // Real timing capture for Settings → Performance: shell Navigation Timing +
 // FCP. Must never delay or break boot (initPerfMetrics is fully guarded).
 initPerfMetrics();
+
+// Reaching this line means the entry chunk parsed. Drop a stale-chunk guard
+// left by a shell this document is NOT (a newer build is on disk, so a later
+// failure may heal once more); a guard for this very shell stays spent, which
+// is what keeps a broken build from reloading forever.
+clearChunkReloadGuard();
 
 render(<App />, document.getElementById('app')!);

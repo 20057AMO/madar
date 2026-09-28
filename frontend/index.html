@@ -18,12 +18,46 @@
     <div id="app"></div>
     <script type="module" src="/src/main.tsx"></script>
     <!-- App-shell service worker: repeat boots of the SPA shell (including
-         the /#/ide and /#/opencode deep links) are answered from cache while
-         the network copy refreshes in the background. API/WebSocket traffic
-         is bypassed entirely by the worker. Registered post-load so it can
-         never contend with the first paint; failures are silently ignored
-         (private mode, file://, older browsers). -->
+         the /#/ide and /#/opencode deep links) are answered from the network
+         with the cached shell kept only as the offline fallback, so a boot
+         right after a rebuild can never start from a pre-rebuild shell.
+         API/WebSocket traffic is bypassed entirely by the worker. Registered
+         post-load so it can never contend with the first paint; failures are
+         silently ignored (private mode, file://, older browsers).
+
+         The same script carries the stale-chunk self-heal. It has to live here,
+         in the inline classic script: this is the only code that runs even when
+         the entry chunk or the cached shell itself is from a previous build.
+         Vite's preload helper dispatches a cancelable vite:preloadError with
+         the original error as `payload` and re-throws unless preventDefault()
+         ran — so swallowing it and reloading is enough.
+
+         The sessionStorage guard (key + logic mirrored in
+         src/lib/chunk-reload.ts) holds `<entry chunk>|<failure>`: while ANY
+         guard is present this shell has already spent its one automatic
+         reload, which is what makes a reload loop impossible — a genuinely
+         newer shell gets a fresh attempt because the boot hook in main.tsx
+         drops a guard written by a different shell. When the guard refuses we
+         do nothing at all, so the error travels on to the error boundary and
+         the user gets honest copy. Without a persistable guard (private mode)
+         we never reload either. -->
     <script>
+      (function () {
+        var KEY = 'wsd.chunkReload';
+        window.addEventListener('vite:preloadError', function (e) {
+          var entry = document.querySelector('script[type="module"][src]');
+          var shell = (entry && entry.getAttribute('src')) || window.location.pathname;
+          var failure = (e.payload && e.payload.message) || shell;
+          try {
+            if (window.sessionStorage.getItem(KEY)) return;
+            window.sessionStorage.setItem(KEY, shell + '|' + failure);
+          } catch (err) {
+            return;
+          }
+          e.preventDefault();
+          window.location.reload();
+        });
+      })();
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
           navigator.serviceWorker.register('/sw.js').catch(function () {});

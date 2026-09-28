@@ -1,6 +1,7 @@
 import { createContext, type ComponentChildren } from 'preact';
 import { useState, useEffect, useContext, useCallback } from 'preact/hooks';
 import { relockProviders, clearProvidersUnlock, type UserProfile } from './api';
+import { capturePostLoginRoute } from './lib/post-login-route';
 
 interface AuthUser {
   id: string;
@@ -156,6 +157,14 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
     setUser(null);
   }, []);
 
+  // A 401 anywhere in the app drops the session for real: the api helper owns
+  // the token + redirect, this event is what makes the in-memory session match.
+  useEffect(() => {
+    const drop = () => logout();
+    window.addEventListener('wsd:session-expired', drop);
+    return () => window.removeEventListener('wsd:session-expired', drop);
+  }, [logout]);
+
   // ── Auto-logout on inactivity ─────────────────────────────────
   // Reads the idle timeout (minutes) from localStorage ('wsd.idleTimeout':
   // 'off' | '30' | '60' | '120'). Activity events throttle-refresh the clock.
@@ -199,6 +208,7 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
         localStorage.removeItem('wsd.token');
         setToken(null);
         setUser(null);
+        capturePostLoginRoute();
         window.location.hash = '/login';
       }
     }, 15_000);

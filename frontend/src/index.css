@@ -1782,6 +1782,8 @@ textarea.agent-prompt-input {
   cursor: pointer; transition: all 0.15s;
 }
 .error-boundary-btn:hover { border-color: var(--text-3); background: var(--bg-3); }
+.error-boundary-actions { display: flex; gap: 8px; justify-content: center; }
+.error-boundary-btn.secondary { background: transparent; }
 
 /* â”€â”€ Agents page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .agents-page {

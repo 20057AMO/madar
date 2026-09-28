@@ -21,6 +21,7 @@ import {
 import { useChatSocket } from '../useChatSocket';
 import { useChatAttachments, formatSize } from '../useChatAttachments';
 import { renderMarkdown } from '../lib/markdown';
+import { projectOptionLabel } from '../lib/project-label';
 import { AgentSettingsModal } from '../components/AgentSettingsModal';
 import { ConfirmModal } from '../components/ConfirmModal';
 
@@ -411,7 +412,7 @@ export function Agents() {
                       <option value="">None</option>
                       <option value="all">All projects</option>
                       {projects.map((p) => (
-                        <option key={p.slug} value={p.slug}>{p.name}</option>
+                        <option key={p.slug} value={p.slug} title={p.slug}>{projectOptionLabel(p.name, p.slug)}</option>
                       ))}
                     </select>
                   </label>
