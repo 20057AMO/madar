@@ -36,6 +36,7 @@ import {
   startServe,
   stopServe,
   clearProjectCrash,
+  canOpenProjectWorkspace,
 } from '../api';
 import type {
   Project,
@@ -194,12 +195,20 @@ export function Project({ params }: { params: { slug: string } }) {
   const readOnly = !!project && !!user && user.role !== 'admin' && user.role !== 'editor' && project.ownerId !== user.id &&
     (project.members?.find((m) => m.userId === user.id)?.role ?? 'viewer') === 'viewer';
 
-  // Transient notices fade out on their own.
+  // Opening a workspace calls the editor-gated POST /api/opencode/open, so a
+  // viewer gets a disabled button instead of a button that can only 403. The
+  // IDE button is deliberately NOT gated: code-server is a single shared
+  // service rooted at /workspaces and the /ide route has no per-project gate.
+  const canOpenOpencode = !!project && canOpenProjectWorkspace(user, project);
+
+  // This notice reports a FAILURE ("VS Code is not running yet"), so it is not
+  // auto-dismissed: it is a persistent live region that clears only once the
+  // condition it reports is actually gone, letting a screen reader announce it
+  // once and leaving it readable afterwards. A 4s timeout removed the text from
+  // the tree before assistive tech could announce it.
   useEffect(() => {
-    if (!ideNotice) return;
-    const t = setTimeout(() => setIdeNotice(null), 4000);
-    return () => clearTimeout(t);
-  }, [ideNotice]);
+    if (ideRunning) setIdeNotice(null);
+  }, [ideRunning]);
 
   /** Localized copy for the WS 'missing' status (outside JSX scope). */
   const t2ProjectDeleted = (): string =>
@@ -457,8 +466,12 @@ export function Project({ params }: { params: { slug: string } }) {
   };
 
   const openOpencode = () => {
-    const folder = subdirInfo?.hostPath || `/workspaces/${slug}`;
-    window.location.hash = `/opencode?folder=${encodeURIComponent(folder)}`;
+    // Same reason as openIde: set the hash directly so the query stays INSIDE
+    // the hash — wouter's navigate() would push it into location.search and the
+    // opencode keep-alive layer (which watches hashchange) would never see it.
+    // Opencode's handler looks up ?project=<slug> against the project list, so
+    // it needs the slug — a host path would silently fall back to its home.
+    window.location.hash = `/opencode?project=${encodeURIComponent(slug)}`;
   };
 
   const copy = async (text: string) => {
@@ -539,7 +552,16 @@ export function Project({ params }: { params: { slug: string } }) {
   return (
     <div class="view">
       {error && <div class="login-error" style="margin-bottom: 12px">{error}</div>}
-      {ideNotice && <div class="chat-save-msg unlock-info-note" style="margin-bottom: 12px">{ideNotice}</div>}
+      {ideNotice && (
+        <div
+          class="chat-save-msg unlock-info-note"
+          style="margin-bottom: 12px"
+          role="status"
+          aria-live="polite"
+        >
+          {ideNotice}
+        </div>
+      )}
 
       <div class="detail-topbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/projects')}>{t('project.backToProjects')}</button>
@@ -622,10 +644,15 @@ export function Project({ params }: { params: { slug: string } }) {
         </div>
         <div class="detail-actions">
            <div class="header-overflow">
-             <button class="btn-ghost sm" onClick={openIde} >
+             <button class="btn-ghost sm" onClick={openIde} aria-label={`${t('project.openWith')} — VS Code`}>
                <VSCodeIcon width={13} height={13} class="icon" /> {t('project.openWith')}
              </button>
-             <button class="btn-ghost sm" onClick={openOpencode} >
+             <button
+               class="btn-ghost sm"
+               onClick={openOpencode}
+               disabled={!canOpenOpencode}
+               title={canOpenOpencode ? undefined : 'Opening a project workspace needs editor access'}
+             >
                <OpencodeIcon width={13} height={13} class="icon" /> Opencode
              </button>
              <span class="detail-action-sep" aria-hidden="true" />

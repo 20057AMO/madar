@@ -106,9 +106,28 @@ export interface ProjectInfo {
   serve?: ServeState;
 }
 
+/**
+ * Fold any input to the canonical project-slug form, WITHOUT throwing.
+ *
+ * `validateProjectSlug` is the enforcing wrapper (it rejects empty + reserved
+ * values); routes that must authorise on the SAME string the rest of the
+ * pipeline acts on need the fold itself: evaluating the access gate against a
+ * raw, unfurled value lets a near-miss ("my-project!") miss the meta store,
+ * trip the legacy no-meta fallback, and still resolve to the real project
+ * downstream. Returns '' when nothing usable remains — the caller decides
+ * whether that is a 400 (malformed) or a 404 (no such project).
+ */
+export function canonicalProjectSlug(slug: unknown): string {
+  return String(slug ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+}
+
 function validateProjectSlug(slug: string): string {
-  const value = String(slug ?? '').trim().toLowerCase();
-  const clean = value.replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+  const clean = canonicalProjectSlug(slug);
   if (!clean) throw new HttpError(400, 'Project slug is invalid');
 
   const RESERVED_SLUGS = ['wsd', 'ide', 'admin', 'api', 'system', 'root', 'workspace'];
@@ -274,8 +293,22 @@ function ensureWorkspaceDir(slug: string): string {
 // opencode runtime integration (sessions, version, updates) lives in
 // services/opencode-api.ts — this module only forwards to it.
 
-function registerOpencodeProject(slug: string): void {
-  createOpencodeSession(slug);
+/**
+ * Register a freshly created workspace with opencode and WAIT for the outcome.
+ *
+ * This used to be fire-and-forget, which let a 3s client-side abort masquerade
+ * as "no session was created" while opencode went on creating it — the caller
+ * and opencode then disagreed about the project indefinitely, and nothing
+ * detected it. Awaiting a bounded call is cheap on a healthy opencode (it
+ * answers in milliseconds, next to the image pull and container start this
+ * path already does), never throws when opencode is offline, and hands the
+ * unconfirmed case to opencode-api's reconciler so the state converges rather
+ * than lies.
+ */
+async function registerOpencodeProject(slug: string): Promise<void> {
+  await createOpencodeSession(slug).catch((e) =>
+    console.warn(`[opencode] could not register '${slug}':`, e?.message || e),
+  );
 }
 
 /** Ensure a project has at least one opencode session (no duplicates). */
@@ -462,7 +495,7 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
     throw err;
   }
 
-  registerOpencodeProject(slug);
+  await registerOpencodeProject(slug);
 
   const info: ProjectInfo = {
     id: container.id,

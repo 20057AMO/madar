@@ -66,7 +66,65 @@ RUN code-server --install-extension dbaeumer.vscode-eslint \
     && code-server --install-extension usernamehw.errorlens \
     && code-server --install-extension streetsidesoftware.code-spell-checker \
     && code-server --install-extension PKief.material-icon-theme \
-    && code-server --install-extension Gruntfuggly.todo-tree
+    && code-server --install-extension Gruntfuggly.todo-tree \
+    && code-server --install-extension ms-vscode.references-view
+
+# Slim the built-in VS Code extensions (first-frame load time): the stock
+# bundle ships a 170 MB Copilot extension (which also spawns a ~270 MB RAM
+# sidecar process on every boot) plus ~45 unused language/theme packs.
+# Deleting their dirs removes them from the runtime scan — there is no
+# extensions.json for built-ins, so a directory is the source of truth.
+# KEEP LIST: the project stack (web TS/JS/JSON/CSS/HTML + Python + Rust),
+# Markdown/notebook/tooling basics, js-debug, default themes + seti icons.
+RUN cd /usr/lib/code-server/lib/vscode/extensions \
+    && rm -rf \
+      copilot \
+      mermaid-markdown-features \
+      ipynb \
+      vscode-js-profile-table \
+      js-debug-companion \
+      simple-browser \
+      diff \
+      media-preview \
+      extension-editing \
+      configuration-editing \
+      prompt-basics \
+      search-result \
+      tunnel-forwarding \
+      debug-auto-launch \
+      debug-server-ready \
+      git-base \
+      github \
+      github-authentication \
+      microsoft-authentication \
+      groovy grunt gulp jake perl \
+      clojure coffeescript dart fsharp julia lua r objective-c \
+      razor vb powershell swift \
+      shaderlab hlsl \
+      php pug dotenv ini bat \
+      csharp go java ruby rust \
+      latex restructuredtext \
+      theme-abyss theme-kimbie-dark theme-monokai theme-monokai-dimmed \
+      theme-quietlight theme-red theme-solarized-dark theme-solarized-light \
+      theme-tomorrow-night-blue \
+    && code-server --list-extensions > /dev/null \
+    && echo "built-in slimming OK: $(ls | wc -l) dirs left"
+
+# COPILOT SIDE-CAR REMOVAL — the prebuilt agentHost code in VS Code 1.138
+# statically imports @github/copilot + @github/copilot-sdk (deleting the whole
+# @github tree makes every boot log a fatal ERR_MODULE_NOT_FOUND), so those two
+# 1 MB JS packages become empty stubs and only the 139 MB native binary package
+# (copilot-linux-x64, the ~270 MB RAM sidecar process) is gutted: its stub
+# entry exits 0 immediately, so even a forced spawn dies instantly.
+RUN cd /usr/lib/code-server/lib/vscode/node_modules/@github \
+    && rm -rf copilot-linux-x64 \
+    && mkdir -p copilot-linux-x64 \
+    && printf '{"name":"@github/copilot-linux-x64","version":"0.0.0","bin":{"github-copilot":"index.js"},"main":"index.js"}' > copilot-linux-x64/package.json \
+    && printf '#!/usr/bin/env node\nprocess.exit(0)\n' > copilot-linux-x64/index.js \
+    && printf '{"name":"@github/copilot","version":"0.0.0","main":"index.js"}' > copilot/package.json \
+    && printf 'module.exports={}\n' > copilot/index.js \
+    && printf '{"name":"@github/copilot-sdk","version":"0.0.0","main":"index.js"}' > copilot-sdk/package.json \
+    && printf 'module.exports={}\n' > copilot-sdk/index.js
 
 # opencode CLI (project building agent, web UI on port 4096) — resolved at
 # build time to the newest version and gated to the supported major: the

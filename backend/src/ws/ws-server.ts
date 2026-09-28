@@ -15,6 +15,7 @@ import { handleAgentSocket } from './ws-agent';
 import { handleProjectStatusSocket, shutdownProjectStatusBroadcasters } from './ws-project-status';
 import { handleProjectsStatusSocket, shutdownProjectsStatusBroadcaster } from './ws-projects-status';
 import { handlePresenceSocket } from './ws-presence';
+import { handleCanvasSocket } from './ws-canvas';
 import { handleChatTeamSocket } from './ws-chat-team';
 import { verifyToken } from '../services/user-store';
 import { decideProjectAccess, decideControlAccess, type AccessSnapshot } from '../services/access-core';
@@ -227,6 +228,29 @@ export function attachWebSockets(server: http.Server): void {
         return;
       }
       handlePresenceSocket(ws, slug, token, releaseRoom(room));
+      return;
+    }
+
+    // Canvas live-sync room: any project member (viewer+) may watch the
+    // board. The room carries only "refetch" nudges — never the document —
+    // so viewers stay read-only by construction.
+    const canvasMatch = url.pathname.match(/^\/ws\/projects\/([^/]+)\/canvas$/);
+    if (canvasMatch) {
+      const slug = decodeURIComponent(canvasMatch[1]);
+      if (!isSafeChatId(slug)) {
+        ws.close(1008, 'invalid slug');
+        return;
+      }
+      if (!gateProject(slug, authUser, 'viewer')) {
+        ws.close(1008, 'project access denied');
+        return;
+      }
+      const room = `canvas:${slug}`;
+      if (!acquireRoom(room, STATUS_ROOM_MAX)) {
+        ws.close(1013, 'too many connections for canvas');
+        return;
+      }
+      handleCanvasSocket(ws, slug, authUser, releaseRoom(room));
       return;
     }
 

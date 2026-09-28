@@ -474,10 +474,14 @@ async function provisionTempAdmin(): Promise<TempAdmin> {
   return { id, username, password, headers: { Authorization: `Bearer ${token}` } };
 }
 
-// ── suite-level helpers ─────────────────────────────────────────────────────
+// ── suite-level helpers ─────────────────────────────────────────
 
 let hostTmp = '';
 let fsBackup: { lib: string; bin: string } | null = null;
+/** Set to a short reason when before() aborts early — after() reads it to
+ *  report the ROOT cause instead of a misleading 'no fs backup' failure
+ *  (the backup is null exactly because setup never reached it). */
+let setupFailure: string | null = null;
 let tempAdmin: TempAdmin | null = null;
 let installedOpencode = ''; // live-read from the container in before() — never hardcode
 const applyPosts: number[] = [];
@@ -635,6 +639,29 @@ async function liveCodeServerVersion(): Promise<string> {
 
 describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
   before(async () => {
+    // node:test has NO default timeout on hooks: a stuck docker recreate (slow
+    // disk, hung compose pull, container that never becomes healthy) would hang
+    // the whole suite until an external killer fires and the real error would
+    // never surface. Bound the ENTIRE setup with a hard deadline — and record
+    // the failure so after() can report the root cause (not 'no fs backup').
+    // The losing timer is UNREFved + cleared so a finished/failed setup never
+    // keeps the event loop (and the whole `node --test` process) alive.
+    let budgetTimer: NodeJS.Timeout | undefined;
+    const budget = new Promise<never>((_, reject) => {
+      budgetTimer = setTimeout(() => reject(new Error(`before(): exceeded the 600s setup budget`)), 600_000);
+      (budgetTimer as any).unref?.();
+    });
+    budgetTimer!.unref?.();
+    try {
+      await Promise.race([doBefore(), budget]);
+    } catch (err: any) {
+      clearTimeout(budgetTimer);
+      setupFailure = String(err?.message ?? err);
+      throw err;
+    }
+    clearTimeout(budgetTimer);
+
+    async function doBefore(): Promise<void> {
     // 0. preflight
     await execFileOut('docker', ['version', '--format', '{{.Server.Version}}'], { timeout: 30_000 })
       .catch((e) => { throw new Error(`docker unavailable: ${e.message}`); });
@@ -702,6 +729,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     installedOpencode = String(oc?.current ?? installedOpencode);
     mock.npmLatest = installedOpencode;
     console.log(`[mock] opencode baseline confirmed: ${installedOpencode}`);
+    }
   });
 
   test('1. GET /api/updates: anonymous 401, two components, idle shape', async () => {
@@ -1251,7 +1279,16 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     };
 
     await tryStep('restore code-server fs + revive original', async () => {
-      if (!fsBackup) throw new Error('no fs backup');
+      if (!fsBackup) {
+        // The backup is null exactly because before() never reached step 3 —
+        // surfacing the setup root cause here instead of a baffling 'no fs
+        // backup' (the restore is a no-op when the pristine image is intact).
+        throw new Error(
+          setupFailure
+            ? `skipped — setup never created the backup (root cause: ${setupFailure})`
+            : 'skipped — setup never created the backup'
+        );
+      }
       await restoreCodeServer(fsBackup);
       const v = await waitForCodeServerVersion(90_000);
       if (v !== BASELINE_VERSION) throw new Error(`restored binary is ${v}, expected ${BASELINE_VERSION}`);
@@ -1283,7 +1320,13 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     });
 
     await tryStep('delete temp admin account', async () => {
-      if (!tempAdmin) throw new Error('no temp admin');
+      if (!tempAdmin) {
+        throw new Error(
+          setupFailure
+            ? `skipped — setup never provisioned it (root cause: ${setupFailure})`
+            : 'skipped — setup never provisioned it'
+        );
+      }
       const r = await req('DELETE', `/users/${tempAdmin.id}`, undefined, authHeaders());
       if (r.status !== 200) throw new Error(`DELETE /users/${tempAdmin.id} -> ${r.status}`);
     });
@@ -1297,7 +1340,8 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     });
 
     if (mock.server) mock.server.close();
-    fs.rmSync(hostTmp, { recursive: true, force: true });
+    // hostTmp stays '' when before() aborted before mkdtemp — don't rm cwd.
+    if (hostTmp) fs.rmSync(hostTmp, { recursive: true, force: true });
     console.log(`cleanup summary: ${results.join(' | ')}`);
   });
 });

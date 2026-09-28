@@ -66,6 +66,32 @@ export const MAX_NODES = 200;
 export const MAX_EDGES = 400;
 export const MAX_TEXT = 2000;
 export const MAX_SECTIONS = 12;
+/** Max ops per live-sync batch (≈ one drag, a marquee delete or a paste). */
+export const MAX_OPS = 40;
+
+// ── Live-sync differential ops ─────────────────────────────────
+// Small per-action operations applied atomically to the stored document and
+// broadcast to the canvas room, instead of re-uploading the whole board.
+export interface CanvasNodePatch {
+  text?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  color?: CanvasColor;
+  done?: boolean;
+  /** null clears the section; a string assigns it. */
+  section?: string | null;
+}
+
+export type CanvasOp =
+  | { op: 'node-add'; node: CanvasNode }
+  | { op: 'node-patch'; id: string; patch: CanvasNodePatch }
+  | { op: 'node-del'; id: string }
+  | { op: 'edge-add'; edge: CanvasEdge }
+  | { op: 'edge-del'; id: string }
+  | { op: 'sec-add'; section: CanvasSection }
+  | { op: 'sec-del'; id: string };
 
 const COLORS: CanvasColor[] = ['yellow', 'blue', 'red', 'green'];
 
@@ -159,10 +185,16 @@ export function loadCanvas(slug: unknown): ProjectCanvas {
     // Drop section refs whose section is missing (lean + never dangling).
     for (const n of nodes) if (n.section && !sectionIds.has(n.section)) delete n.section;
     const edges: CanvasEdge[] = [];
+    const seenEdges = new Set<string>();
     for (const e of rawEdges) {
       if (edges.length >= MAX_EDGES) break;
       const edge = normalizeEdge(e, ids);
-      if (edge) edges.push(edge);
+      if (!edge) continue;
+      // Dedupe (same rule as save): legacy docs may hold a repeated pair.
+      const key = `${edge.from}>${edge.to}`;
+      if (seenEdges.has(key)) continue;
+      seenEdges.add(key);
+      edges.push(edge);
     }
     return {
       version: 1,
@@ -207,9 +239,16 @@ export function saveCanvas(slug: unknown, input: unknown): ProjectCanvas {
     const sectionIds = new Set(sections.map((s) => s.id));
     for (const n of nodes) if (n.section && !sectionIds.has(n.section)) delete n.section;
     const edges: CanvasEdge[] = [];
+    const seenEdges = new Set<string>();
     for (const raw of rawEdges) {
       const e = normalizeEdge(raw, ids);
-      if (e) edges.push(e);
+      if (!e) continue;
+      // Dedupe: one arrow per direction — the same from→to pair twice is an
+      // invisible double edge that renders identical hit-testing twice.
+      const key = `${e.from}>${e.to}`;
+      if (seenEdges.has(key)) continue;
+      seenEdges.add(key);
+      edges.push(e);
     }
     const doc: ProjectCanvas = {
       version: 1,
@@ -223,6 +262,134 @@ export function saveCanvas(slug: unknown, input: unknown): ProjectCanvas {
     refreshCanvasMirror(clean);
     invalidateProjectContext(clean);
     return doc;
+  });
+}
+
+/**
+ * Apply a batch of live-sync ops to the stored board atomically (same file
+ * lock as saveCanvas) and return the resulting document. Normalization is
+ * the single source of truth: every op is coerced through normalizeNode /
+ * normalizeEdge / normalizeSection, so an op stream can never store a shape
+ * that a full save couldn't. Rules:
+ *   - node-add on an existing id (or edge-add edge-del on a dead id) is a
+ *     no-op — resends stay idempotent.
+ *   - empty batches throw (the route turns that into a 400).
+ *   - unknown op kinds throw (fail loud, never guess).
+ */
+export function applyCanvasOps(slug: unknown, rawOps: unknown): ProjectCanvas {
+  const clean = cleanSlug(slug);
+  if (!Array.isArray(rawOps) || rawOps.length === 0) {
+    throw new Error('Body must be { ops: [...] } with at least one op');
+  }
+  if (rawOps.length > MAX_OPS) throw new Error(`Too many ops (max ${MAX_OPS})`);
+
+  return withFileLock(`canvas:${clean}`, () => {
+    const doc = loadCanvas(clean);
+    const sections: CanvasSection[] = [...(doc.sections ?? [])];
+    const sectionIds = new Set(sections.map((s) => s.id));
+
+    for (const raw of rawOps) {
+      if (!raw || typeof raw !== 'object') throw new Error('Every op must be an object');
+      const kind = (raw as Record<string, unknown>).op;
+      switch (kind) {
+        case 'node-add': {
+          if (doc.nodes.length >= MAX_NODES) throw new Error(`Too many canvas nodes (max ${MAX_NODES})`);
+          const n = normalizeNode((raw as Record<string, unknown>).node);
+          if (!n) throw new Error('node-add: invalid node');
+          if (n.section && !sectionIds.has(n.section)) delete n.section;
+          if (doc.nodes.some((x) => x.id === n.id)) continue; // idempotent resend
+          doc.nodes.push(n);
+          break;
+        }
+        case 'node-patch': {
+          const r = raw as Record<string, unknown>;
+          const id = nodeId(r.id, '');
+          if (!id) throw new Error('node-patch: missing id');
+          const target = doc.nodes.find((n) => n.id === id);
+          if (!target) continue; // node already gone — patch is a no-op
+          const p = (r.patch && typeof r.patch === 'object' ? r.patch : {}) as Record<string, unknown>;
+          if (p.text !== undefined) target.text = typeof p.text === 'string' ? p.text.slice(0, MAX_TEXT) : '';
+          if (p.x !== undefined) target.x = clampNum(p.x, -100_000, 100_000, target.x);
+          if (p.y !== undefined) target.y = clampNum(p.y, -100_000, 100_000, target.y);
+          if (p.w !== undefined) target.w = clampNum(p.w, 60, 900, target.w);
+          if (p.h !== undefined) target.h = clampNum(p.h, 40, 900, target.h);
+          if (p.color !== undefined && COLORS.includes(p.color as CanvasColor)) target.color = p.color as CanvasColor;
+          if (p.done !== undefined) target.done = p.done === true;
+          if (p.section !== undefined) {
+            if (p.section === null) {
+              delete target.section;
+            } else if (typeof p.section === 'string' && sectionIds.has(p.section) && /^[a-zA-Z0-9_-]{1,48}$/.test(p.section)) {
+              target.section = p.section;
+            } else {
+              delete target.section;
+            }
+          }
+          break;
+        }
+        case 'node-del': {
+          const id = nodeId((raw as Record<string, unknown>).id, '');
+          if (!id) throw new Error('node-del: missing id');
+          const before = doc.nodes.length;
+          doc.nodes = doc.nodes.filter((n) => n.id !== id);
+          if (doc.nodes.length !== before) {
+            // Cascade: edges died with their node (same contract as PUT).
+            doc.edges = doc.edges.filter((e) => e.from !== id && e.to !== id);
+          }
+          break;
+        }
+        case 'edge-add': {
+          if (doc.edges.length >= MAX_EDGES) throw new Error(`Too many canvas edges (max ${MAX_EDGES})`);
+          const e = normalizeEdge((raw as Record<string, unknown>).edge, new Set(doc.nodes.map((n) => n.id)));
+          if (!e) throw new Error('edge-add: invalid edge (missing endpoints?)');
+          if (doc.edges.some((x) => x.from === e.from && x.to === e.to)) continue; // dedupe
+          doc.edges.push(e);
+          break;
+        }
+        case 'edge-del': {
+          const id = nodeId((raw as Record<string, unknown>).id, '');
+          if (!id) throw new Error('edge-del: missing id');
+          doc.edges = doc.edges.filter((e) => e.id !== id);
+          break;
+        }
+        case 'sec-add': {
+          if (sections.length >= MAX_SECTIONS) throw new Error(`Too many canvas sections (max ${MAX_SECTIONS})`);
+          const s = normalizeSection((raw as Record<string, unknown>).section);
+          if (!s) throw new Error('sec-add: invalid section');
+          if (sectionIds.has(s.id)) continue; // idempotent resend
+          sections.push(s);
+          sectionIds.add(s.id);
+          break;
+        }
+        case 'sec-del': {
+          const id = nodeId((raw as Record<string, unknown>).id, '');
+          if (!id) throw new Error('sec-del: missing id');
+          if (sectionIds.delete(id)) {
+            for (let i = sections.length - 1; i >= 0; i -= 1) {
+              if (sections[i].id === id) sections.splice(i, 1);
+            }
+            for (const n of doc.nodes) {
+              if (n.section === id) delete n.section;
+            }
+          }
+          break;
+        }
+        default:
+          throw new Error(`Unknown canvas op: ${String(kind)}`);
+      }
+    }
+
+    const next: ProjectCanvas = {
+      version: 1,
+      nodes: doc.nodes,
+      edges: doc.edges,
+      ...(sections.length ? { sections } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    fs.mkdirSync(path.dirname(canvasFile(clean)), { recursive: true });
+    fs.writeFileSync(canvasFile(clean), JSON.stringify(next, null, 2), 'utf8');
+    refreshCanvasMirror(clean);
+    invalidateProjectContext(clean);
+    return next;
   });
 }
 

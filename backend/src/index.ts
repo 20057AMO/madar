@@ -29,6 +29,7 @@ import {
   cloneIntoWorkspace,
   duplicateProject,
   validatePortSet,
+  canonicalProjectSlug,
   updateProjectPorts,
   updateProjectLimits,
   ensureOpencodeSession,
@@ -46,6 +47,8 @@ import { exportProjectSnapshot, importProjectSnapshot } from './services/project
 import { exportProjectZip } from './services/project-zip';
 import * as snapAuto from './services/project-snapshots-auto';
 import { getIdeStatus } from './services/ide-service';
+import { createStatusCache, resolveEmbeddedPort, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
+import { probeEmbeddedPort } from './services/embedded-status-probe';
 import { detectIp } from './services/server-info';
 import { getChatConfig, updateChatConfig, listModels, type ChatConfig } from './services/chat-config';
 import {
@@ -147,6 +150,7 @@ import type { UserRole } from './services/user-store';
 import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkProjectAccess } from './middleware/auth';
 import { attachWebSockets } from './ws/ws-server';
 import { getPresence } from './ws/ws-presence';
+import { notifyCanvasUpdate, notifyCanvasOps } from './ws/ws-canvas';
 import { saveAvatar, deleteAvatar, getAvatarPath, validAvatarUserId } from './services/avatar-store';
 import { registerChatTeamRoutes } from './services/chat-team-routes';
 import { removeUserChannels, ensureProjectChannel, addChannelMember, removeChannelMember, setChannelMemberRole } from './services/chat-team-store';
@@ -1062,31 +1066,66 @@ app.post('/api/providers/:id/test', requireAdmin, providersManagement, async (re
   res.json({ ok: r.ok, status: r.status, modelCount: r.modelCount, verified: r.verified, error: r.error });
 });
 
-// ── Unified Web IDE status (port + password) ─────────────────
-app.get('/api/ide/status', async (_req, res) => {
+// ── Unified Web IDE status (running + host port) ──────────────
+// `?fresh=1` bypasses the probe cache (same convention as GET /api/storage).
+app.get('/api/ide/status', async (req, res) => {
   try {
-    res.json({ ide: await getIdeStatus() });
+    const fresh = req.query?.fresh === '1' || req.query?.fresh === 'true';
+    res.json({ ide: await getIdeStatus({ fresh }) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // ── opencode web status ──────────────────────────────────────
-const OPENCODE_PORT = Number(process.env.WSD_OPENCODE_PORT) || 4096;
+// resolveEmbeddedPort (not `Number(env) || 4096`): a junk WSD_OPENCODE_PORT must
+// degrade to 4096 exactly like WSD_IDE_PORT does in ide-service.ts, otherwise a
+// -1/99999 value reaches the client as a broken iframe `src` and net.connect
+// throws ERR_SOCKET_BAD_PORT synchronously.
+const OPENCODE_PORT = resolveEmbeddedPort(process.env.WSD_OPENCODE_PORT, 4096);
 
+// Plain TCP connect, identical to the IDE probe (ide-service.ts): we only need
+// to know that something is LISTENING, so the status line + headers + body of
+// an HTTP GET are pure cost. Measured in-container: connect p50 1ms / max 5ms
+// vs `GET /` p50 63ms / max 97ms, and a cold opencode was seen answering a
+// full HTTP GET in up to 1.85s — which an HTTP-shaped 1.5s budget misreads as
+// "offline" exactly right after an update or a restart. A stopped service
+// still fails instantly (ECONNREFUSED on loopback), so the wider ceiling is
+// free in the common case and bounded against a wedged process.
 async function opencodeRunning(): Promise<boolean> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${OPENCODE_PORT}`, {
-      signal: AbortSignal.timeout(1500),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  return probeEmbeddedPort(OPENCODE_PORT);
 }
 
-app.get('/api/opencode/status', async (_req, res) => {
-  res.json({ running: await opencodeRunning(), port: OPENCODE_PORT });
+// Same probe contract as the IDE status: short TTL + singleflight, a failed
+// probe is an honest `running:false` (never a 500), and `?fresh=1` bypasses it.
+const opencodeStatusCache = createStatusCache<{ running: boolean; port: number }>({
+  ttlMs: EMBEDDED_STATUS_DEFAULT_TTL_MS,
+  load: async () => {
+    let running = false;
+    try {
+      running = await opencodeRunning();
+    } catch {
+      running = false;
+    }
+    return { running, port: OPENCODE_PORT };
+  },
+});
+
+/** Drop the cached probe — call after restarting/updating opencode web. */
+export function invalidateOpencodeStatusCache(): void {
+  opencodeStatusCache.invalidate();
+}
+
+app.get('/api/opencode/status', async (req, res) => {
+  try {
+    const fresh = req.query?.fresh === '1' || req.query?.fresh === 'true';
+    res.json(await opencodeStatusCache.get({ fresh }));
+  } catch (err: any) {
+    // Unreachable in theory (the load never rejects) — but a hard 500 on a
+    // status poll is the one shape the client cannot recover from, so degrade
+    // honestly instead.
+    res.json({ running: false, port: OPENCODE_PORT });
+  }
 });
 
 
@@ -1518,7 +1557,30 @@ app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req: any,
         edges: Array.isArray(doc?.edges) ? doc.edges.length : 0,
       },
     });
+    // Live-sync nudge: every open board for this project refetches (debounced
+    // on the client). Covers all writers — user edits, agent aggregation and
+    // snapshot imports all funnel through this route.
+    notifyCanvasUpdate(req.params.slug, {
+      updatedAt: doc?.updatedAt ?? null,
+      by: req.user?.id,
+      nodes: Array.isArray(doc?.nodes) ? doc.nodes.length : 0,
+      edges: Array.isArray(doc?.edges) ? doc.edges.length : 0,
+    });
     res.json(doc);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Live-sync differential writes: small op batches applied atomically server-
+// side and mirrored to the canvas room, so two open boards merge each other's
+// moves without overwriting (a full PUT would still exist for agents/imports).
+app.post('/api/projects/:slug/canvas/ops', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    const ops = canvas.applyCanvasOps(req.params.slug, req.body?.ops);
+    recordAudit('canvas-save', true, req.ip);
+    res.json({ ok: true, updatedAt: (ops as any)?.updatedAt ?? null });
+    notifyCanvasOps(req.params.slug, req.body.ops, req.user?.id);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -2025,21 +2087,49 @@ app.post('/api/webhooks/test', requireAdmin, rateLimit('strict', RATE_WINDOW, RA
 
 // Open a project in opencode (ensures registration + a session exists) so the
 // opencode page's project picker can land the user on the right workspace.
-// Require viewer access to the requested slug — a viewer must not be able to
-// force-register/seed a project they cannot see. NOTE: requireProjectAccess()
-// is param-based (req.params.slug) but this route carries the slug in the
-// BODY, so we gate explicitly — the middleware would 400 everyone.
-app.post('/api/opencode/open', async (req: any, res) => {
+// EDITOR access is required, not viewer: ensureOpencodeSession() seeds the
+// workspace (git init + .git/opencode), so a viewer must not be able to
+// materialise a git repo in a project they cannot write to. NOTE:
+// requireProjectAccess() is param-based (req.params.slug) but this route
+// carries the slug in the BODY, so we gate explicitly — the middleware would
+// 400 everyone.
+//
+// The raw body value is folded to its canonical form BEFORE the gate and that
+// ONE string is then used for the gate, the lookup, the seeding and the
+// returned directory. Gating on the raw value was a hole: checkProjectAccess
+// reads meta.json for the exact slug, so a near-miss ("my-project!") found no
+// meta, tripped the legacy "no membership data ⇒ editor-level" fallback, and
+// was then canonicalised to the REAL project by getProject() — the gate was
+// decorative and a viewer walked straight through it.
+app.post('/api/opencode/open', userWriteLimiter, async (req: any, res) => {
+  // Hoisted so the catch branch can name the project it was working on.
+  let slug = '';
   try {
-    const slug = String(req.body?.slug || '');
-    if (!slug) return res.status(400).json({ error: 'Project slug required' });
-    const { allowed } = checkProjectAccess(req.user.id, req.user.role, slug, 'viewer');
-    if (!allowed) return res.status(403).json({ error: 'Access denied to this project' });
+    const rawSlug = String(req.body?.slug || '');
+    if (!rawSlug) {
+      recordAudit('opencode-open-failed', false, req.ip, req.user?.id);
+      return res.status(400).json({ error: 'Project slug required' });
+    }
+    slug = canonicalProjectSlug(rawSlug);
+    const { allowed } = checkProjectAccess(req.user.id, req.user.role, slug, 'editor');
+    if (!allowed) {
+      recordAudit('opencode-open-failed', false, req.ip, req.user?.id, { slug });
+      return res.status(403).json({ error: 'Access denied to this project' });
+    }
     const info = await getProject(slug);
-    if (!info) return res.status(404).json({ error: 'Project not found' });
+    if (!info) {
+      // Reached by a well-formed-but-unknown slug AND by one that folds to
+      // nothing (whitespace, junk) — neither can name a project, so 404 is the
+      // truthful answer and keeps the "does it exist" contract of every other
+      // project route. getProject() swallows validateProjectSlug's throw.
+      recordAudit('opencode-open-failed', false, req.ip, req.user?.id, { slug });
+      return res.status(404).json({ error: 'Project not found' });
+    }
     ensureOpencodeSession(slug);
-    res.json({ ok: true });
+    recordAudit('opencode-open', true, req.ip, req.user?.id, { slug });
+    res.json({ ok: true, directory: path.join(WORKSPACES_ROOT, slug) });
   } catch (err: any) {
+    recordAudit('opencode-open-failed', false, req.ip, req.user?.id, slug ? { slug } : undefined);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
@@ -2717,6 +2807,50 @@ function normalizeUploadPath(raw: string): string | null {
 // ── Serve frontend static build if present ───────────────────
 const frontendDist = path.join(__dirname, '..', '..', 'frontend', 'dist');
 if (fs.existsSync(frontendDist)) {
+  /**
+   * Early Hints for the SPA shell: the built index.html names the eager
+   * entry chunks, and the browser cannot know them until it has fetched and
+   * PARSED the document — the classic cold-waterfall tax. Emit a Link header
+   * alongside every index.html response (static mount, SPA fallback, and the
+   * /103 Early Hints frame the bare-HTTP connection makes for free) so the
+   * fetches for the entry + the two keep-alive tool chunks START in parallel
+   * with the document download instead of after it.
+   *
+   * Built once at boot from dist/index.html (vite injects hashed names, so
+   * the set only changes across deploys); a missing/broken manifest simply
+   * emits nothing — the page loads exactly as before. Only in-dist `assets/`
+   * refs are trusted (script/modulepreload/link-rel injection); an absolute
+   * or oddball URL is left alone rather than probed.
+   */
+  /**
+   * Matches ONLY relative in-dist references: `./assets/x.js` (module
+   * scripts) and `/assets/x.css` (the entry stylesheet vite emits). Anchored
+   * on the `assets/` segment so an oddball absolute URL (`https://…`) or a
+   * different namespace can never be blindly re-served from this origin.
+   */
+  const EARLY_HINTS_RE = /<(?:script[^>]+src|link[^>]+rel="(?:modulepreload|stylesheet)")[^>]+href="(\.?\/assets\/[^"?]+)"/g;
+  let earlyHints: string[] = [];
+  try {
+    const idxPath = path.join(frontendDist, 'index.html');
+    const html = fs.readFileSync(idxPath, 'utf8');
+    const seen = new Set<string>();
+    for (const m of html.matchAll(EARLY_HINTS_RE)) {
+      const url = m[1].replace(/^\.\//, '/'); // `./assets/x.js` → `/assets/x.js` for the Link header
+      if (seen.has(url)) continue;
+      seen.add(url);
+      // url is root-relative (`/assets/x.css`) — the `<` `>` delimiters are
+      // the Link-header URL framing, nothing more.
+      earlyHints.push(`<${url}>; rel=preload; as=${url.endsWith('.css') ? 'style' : 'script'}`);
+    }
+  } catch {
+    earlyHints = []; // best effort — never block the SPA over hints
+  }
+  if (earlyHints.length) console.log(`[Madar] Early Hints for SPA shell: ${earlyHints.length} resource(s)`);
+  const sendShell = (res: any, filePath: string) => {
+    if (earlyHints.length) res.setHeader('Link', earlyHints.join(', '));
+    res.setHeader('Cache-Control', 'no-cache'); // the shell revalidates; /assets/* stays immutable
+    res.sendFile(filePath);
+  };
   app.use(express.static(frontendDist, {
     maxAge: '7d',
     immutable: true,
@@ -2724,14 +2858,18 @@ if (fs.existsSync(frontendDist)) {
       // index.html must always revalidate — it's the SPA entry point that
       // references hashed Vite assets under /assets/*.
       if (filePath.endsWith('index.html')) {
+        if (earlyHints.length) res.setHeader('Link', earlyHints.join(', '));
         res.setHeader('Cache-Control', 'no-cache');
       }
     },
   }));
-  // SPA fallback — catch-all (Express 5 compatible)
+  // SPA fallback — catch-all (Express 5 compatible). no-cache parity with
+  // the static mount: sendFile's heuristic caching (max-age=0 + ETag) made a
+  // deep link to /ide or /opencode serve a STALE shell for a whole browser
+  // session, then point at an already-pruned dist asset.
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/')) return next();
-    res.sendFile(path.join(frontendDist, 'index.html'));
+    sendShell(res, path.join(frontendDist, 'index.html'));
   });
   console.log(`[Madar] Serving frontend from ${frontendDist}`);
 }

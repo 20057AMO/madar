@@ -78,7 +78,6 @@ docker compose up -d --build
 | `OLLAMA_API_KEY` | اختياري | مفتاح Ollama Cloud |
 | `OPENCODE_API_KEY` | اختياري | مفتاح OpenCode Zen |
 | `WSD_CHAT_MODEL` | اختياري | النموذج الافتراضي للدردشة |
-| `WSD_IDE_PASSWORD` | اختياري | كلمة مرور المحرر الثابتة |
 
 > مطلوب على Docker Desktop، اختياري على نواة Linux الأصلية.
 

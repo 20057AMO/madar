@@ -1204,9 +1204,12 @@ textarea.agent-prompt-input {
   .agents-sidebar { padding-right: 12px; }
   .empty-state { box-sizing: border-box; max-width: 100%; }
   
-  /* Prevent iOS input zoom and improve touch targets */
+  /* Prevent iOS input zoom and improve touch targets.
+     Small in-node controls are exempted — the canvas checkbox/color dots must
+     stay tiny (a 44px checkbox would eat half the sticky-note text area). */
   input, textarea, select { font-size: 16px !important; }
   button, .btn-ghost, .btn-primary, .btn-danger, .btn-secondary { min-height: 44px; }
+  .cn-check, .cn-dot, .cn-section-toggle, .cn-section-del { min-height: 0; }
 
   /* Overview: collapse to a clean single column on phones */
   .ov-stack { grid-template-columns: 1fr; gap: 14px; }
@@ -1361,6 +1364,18 @@ textarea.agent-prompt-input {
 .opencode-frame {
   flex: 1; width: 100%; border: none;
   background: #000;
+}
+
+/* Skip link target on the full-screen tool layers: the <main> landmark fills
+   the viewport, so a UA focus ring drawn on its edge reads as nothing. Mark the
+   toolbar — the layer's first real content — instead. Scoped to the two layer
+   ids, so the shared .opencode-page used by Studio and Terminals is untouched. */
+#ide-main:focus-visible,
+#opencode-main:focus-visible { outline: none; }
+#ide-main:focus-visible .opencode-toolbar,
+#opencode-main:focus-visible .opencode-toolbar {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
 }
 
 /* Port preview row */
@@ -2768,6 +2783,147 @@ input[type="file"].modern-file::file-selector-button {
   white-space: nowrap;
 }
 .cn-save-err { color: #f87171; }
+
+/* Remote-update banner (live sync): appears in the save-state slot when a
+   teammate saved the board while this client has pending local edits. */
+.cn-remote-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--blue) 35%, transparent);
+  white-space: nowrap;
+}
+.cn-remote-load {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text);
+  background: color-mix(in srgb, var(--blue) 28%, transparent);
+  border-radius: 4px;
+  padding: 1px 7px;
+}
+.cn-remote-load:hover { background: color-mix(in srgb, var(--blue) 45%, transparent); }
+.cn-remote-dismiss {
+  display: inline-flex;
+  color: var(--text-3);
+  border-radius: 4px;
+  padding: 2px;
+}
+.cn-remote-dismiss:hover { color: var(--text); background: var(--bg-3); }
+
+/* Board size chip (nodes · links) in the toolbar. */
+.cn-stats-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+/* Live collaborator presence: toolbar badges + world-space cursors. */
+.cn-presence {
+  display: inline-flex;
+  align-items: center;
+}
+.cn-presence-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: #fff;
+  border: 2px solid var(--bg-2);
+  margin-inline-start: -6px;
+  text-transform: uppercase;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  object-fit: cover;
+}
+.cn-presence-avatar:first-child { margin-inline-start: 0; }
+.cn-presence-initial { background: var(--pc, var(--blue)); }
+.cn-presence-dot {
+  width: 7px;
+  height: 7px;
+  margin-inline-start: 5px;
+  border-radius: 50%;
+  background: var(--ok, #22c55e);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok, #22c55e) 25%, transparent);
+  animation: cn-presence-pulse 2.2s ease-in-out infinite;
+}
+@keyframes cn-presence-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.cn-presence-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 2px solid var(--bg-2);
+  margin-inline-start: -6px;
+}
+.cn-peer-cursor {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  transform: translate(-2px, -2px);
+  /* NO left/top transition — frames arrive every ~50ms, and a 90ms ease
+     made every remote cursor trail visibly BEHIND the peer's real pointer. */
+  will-change: left, top;
+}
+.cn-peer-cursor svg { display: block; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4)); }
+.cn-peer-cursor-name {
+  display: inline-block;
+  margin-inline-start: 11px;
+  margin-top: -2px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #fff;
+  background: var(--pc, var(--blue));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Live rubber line shown while connecting two nodes. */
+.cn-connect-line {
+  stroke: #7dd3fc;
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  fill: none;
+  pointer-events: none;
+  animation: cn-dash 0.5s linear infinite;
+}
+@keyframes cn-dash {
+  to { stroke-dashoffset: -11; }
+}
+
+/* Last editor of an edge draws a small author tag near its midpoint. */
+.cn-edge-last {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  fill: none;
+  pointer-events: none;
+  opacity: 0.9;
+}
 .cn-connecting {
   display: inline-flex;
   align-items: center;
@@ -2811,12 +2967,21 @@ input[type="file"].modern-file::file-selector-button {
 .cn-dot.c-red { background: #ef4444; }
 .cn-dot.c-green { background: #22c55e; }
 
-/* Floating add (+) button, bottom-right of the canvas */
+/* Floating add (+) button — logical inline position so RTL mirrors it. */
 .cn-add-wrap {
   position: absolute;
-  right: 14px;
+  inset-inline-end: 14px;
   bottom: 14px;
   z-index: 6;
+}
+
+.cn-add-fab:focus-visible,
+.cn-tb-btn:focus-visible,
+.cn-add-item:focus-visible,
+.cn-ctx-item:focus-visible,
+.cn-dot:focus-visible {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 1px;
 }
 .cn-add-fab {
   width: 40px;
@@ -2979,6 +3144,9 @@ input[type="file"].modern-file::file-selector-button {
 .cn-placeholder { font-style: italic; opacity: 0.55; }
 
 .cn-check {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  min-height: 0;
   width: 18px;
   height: 18px;
   border-radius: 6px;
@@ -3008,6 +3176,12 @@ input[type="file"].modern-file::file-selector-button {
   display: inline-flex;
   gap: 5px;
   align-items: center;
+  /* Hover-revealed control strip — overlays the node's bottom edge instead of
+     stealing flex height from the note text (44px used to be squeezed out). */
+  position: absolute;
+  inset-inline-end: 10px;
+  bottom: 8px;
+  z-index: 3;
   opacity: 0;
   transition: opacity 0.14s;
 }

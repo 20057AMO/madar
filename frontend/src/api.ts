@@ -39,6 +39,32 @@ export interface Project {
   serve?: ServeState;
 }
 
+/**
+ * Whether a user may open a project workspace (opencode, and anything else that
+ * runs against the project container) — a client mirror of
+ * `decideProjectAccess(userId, role, meta, 'editor')` in
+ * backend/src/services/access-core.ts, used only to keep the UI honest so a
+ * viewer is never offered a picker entry that ends in a 403.
+ *
+ * The list payload really does carry `ownerId`/`members` (docker-manager
+ * attaches them before `publicProjects()` strips `env` only), so this needs no
+ * extra request. Keep the legacy branch in sync with the backend.
+ */
+export function canOpenProjectWorkspace(
+  user: { id: string; role: string } | null | undefined,
+  project: Pick<Project, 'ownerId' | 'members'>,
+): boolean {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  // System editors are global writers: write-level on every project.
+  if (user.role === 'editor') return true;
+  // Legacy projects with no membership data stay open to all authed users.
+  if (!project.ownerId && !(project.members && project.members.length > 0)) return true;
+  if (project.ownerId === user.id) return true;
+  const member = (project.members || []).find((m) => m.userId === user.id);
+  return !!member && member.role !== 'viewer';
+}
+
 /** Container-crash record set by the server-side detector. */
 export interface CrashInfo {
   at: string;
@@ -154,7 +180,6 @@ export interface ServerInfo {
 export interface IdeStatus {
   running: boolean;
   port: number;
-  password: string;
 }
 
 export type ChatProvider = string;
@@ -682,6 +707,23 @@ export const saveProjectCanvas = (slug: string, doc: ProjectCanvas) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(doc),
   });
+/** One differential live-sync operation (mirrors backend/src/services/project-canvas.ts). */
+export type CanvasOpType = 'node-add' | 'node-patch' | 'node-del' | 'edge-add' | 'edge-del' | 'sec-add' | 'sec-del';
+export interface CanvasOp {
+  op: CanvasOpType;
+  id?: string;
+  node?: CanvasNode;
+  edge?: CanvasEdge;
+  section?: CanvasSection;
+  patch?: Partial<Omit<CanvasNode, 'id' | 'type' | 'section'>> & { section?: string | null };
+}
+/** Push a small batch of live-sync ops (applied atomically + broadcast). */
+export const sendProjectCanvasOps = (slug: string, ops: CanvasOp[]) =>
+  api<{ ok: boolean; updatedAt: string | null }>(`/api/projects/${encodeURIComponent(slug)}/canvas/ops`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ops }),
+  });
 export const getServerInfo = () => api<ServerInfo>('/api/server/info');
 export const getIdeStatus = () => api<{ ide: IdeStatus }>('/api/ide/status');
 
@@ -692,7 +734,10 @@ export const getChatContext = (project: string) =>
   api<ChatContext>(`/api/chat/context?project=${encodeURIComponent(project)}`);
 export const getOpencodeStatus = () => api<OpencodeStatus>('/api/opencode/status');
 export const openOpencodeProject = (slug: string) =>
-  api<{ ok: boolean }>('/api/opencode/open', { method: 'POST', body: JSON.stringify({ slug }) });
+  api<{ ok: boolean; directory?: string }>('/api/opencode/open', {
+    method: 'POST',
+    body: JSON.stringify({ slug }),
+  });
 
 // ── Opencode Studio ─────────────────────────────────────────────────────
 export interface StudioItem {

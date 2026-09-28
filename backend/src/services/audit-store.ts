@@ -56,6 +56,8 @@ export type AuditEvent =
   | 'archive-empty'
   | 'archive-restore'
   | 'project-files-deleted'
+  | 'opencode-open'
+  | 'opencode-open-failed'
   | 'opencode-studio'
   | 'opencode-update'
   | 'opencode-update-failed'
@@ -93,6 +95,12 @@ export interface AuditEntry {
   ip?: string;
   /** The user whose ACCOUNT this event concerns (used for Account Activity). */
   userId?: string;
+  /**
+   * Optional event-scoped context (e.g. `{slug}` for a project-scoped action).
+   * The log is a flat, untyped record by design: every renderer reads the keys
+   * it knows, so an unknown bag is inert rather than breaking.
+   */
+  details?: Record<string, string | number | boolean | null>;
 }
 
 function loadEntries(): AuditEntry[] {
@@ -110,8 +118,16 @@ function loadEntries(): AuditEntry[] {
  * Pass userId for account-scoped events (logins, security changes, profile
  * edits) so Profile → Account Activity can filter to a single user while the
  * admin's global Security Activity log keeps everything.
+ * Pass details for project-scoped events that must be traceable to a project
+ * (opencode-open, …) — the flat log has no other place to record which one.
  */
-export function recordAudit(event: AuditEvent, ok: boolean, ip?: string, userId?: string): void {
+export function recordAudit(
+  event: AuditEvent,
+  ok: boolean,
+  ip?: string,
+  userId?: string,
+  details?: Record<string, string | number | boolean | null>
+): void {
   withFileLock('audit', () => {
     try {
       const entries = loadEntries();
@@ -121,6 +137,7 @@ export function recordAudit(event: AuditEvent, ok: boolean, ip?: string, userId?
         ok,
         ...(ip ? { ip } : {}),
         ...(userId ? { userId } : {}),
+        ...(details && Object.keys(details).length ? { details } : {}),
       });
       const trimmed = entries.slice(-MAX_ENTRIES);
       fs.mkdirSync(DATA_DIR, { recursive: true });

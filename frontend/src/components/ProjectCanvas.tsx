@@ -26,31 +26,198 @@ import {
   ClipboardPaste,
   Maximize2,
   Minimize2,
+  ImageDown,
+  ClipboardList,
+  Globe,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
   saveProjectCanvas,
+  sendProjectCanvasOps,
   getProjectNotes,
+  saveProjectNotes,
+  avatarUrl,
 } from '../api';
-import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection } from '../api';
+import type { CanvasNode, CanvasColor, ProjectCanvas, CanvasNodeType, CanvasEdge, CanvasSection, NoteItem, CanvasOp } from '../api';
+import { useI18n } from '../i18n';
 import { ConfirmModal } from './ConfirmModal';
+import { useCanvasCursors, peerColor } from '../useCanvasCursors';
 
 /**
  * ProjectCanvas — an infinite pan/zoom whiteboard for planning one project.
  *
  * The document itself is camera-free: nodes live at absolute world
  * coordinates and the client view (pan/zoom) is purely local. Edits mutate a
- * local mirror, autosave debounces ~900ms, and Ctrl+Z/Y walk a snapshot
- * history. Viewers (readOnly) can pan/zoom but not edit.
+ * local mirror, autosave debounces ~900ms (with a slow auto-retry when the
+ * save fails), and Ctrl+Z/Y walk a snapshot history. Viewers (readOnly) can
+ * pan/zoom but not edit.
+ *
+ * Pro interactions: shift+click multi-select, marquee select, arrow-key
+ * nudge, Ctrl+A select-all, Ctrl+S force-save, double-click empty space to
+ * create, drag-to-connect with a live rubber line, trackpad pinch zoom and a
+ * per-project persisted camera (survives reloads).
  */
 
 const HISTORY_DEPTH = 60;
 const MAX_NODES = 200;
 const MAX_EDGES = 400;
+const MAX_TEXT = 2000;
 const MIN_Z = 0.2;
 const MAX_Z = 3;
+/** Coarse step for arrow-key nudging (fine = 4px, with Shift = 20px). */
+const NUDGE_FINE = 4;
+const NUDGE_COARSE = 20;
 
 const COLORS: CanvasColor[] = ['yellow', 'blue', 'red', 'green'];
+
+/** PNG export ink palette (fixed hex — CSS vars can't be read offscreen). */
+const EXPORT_COLORS: Record<CanvasColor, string> = {
+  yellow: '#3a3122',
+  blue: '#1f2b44',
+  red: '#42232a',
+  green: '#1c3327',
+};
+/**
+ * Measure a text line's real pixel width via canvas — Arabic (and any
+ * non-Latin script) has almost no relation between character count and
+ * width, so the char-count wrap produced wildly overflowing exports.
+ */
+let measureCtx: CanvasRenderingContext2D | null = null;
+function textWidth(text: string, font: string): number {
+  try {
+    if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+    if (!measureCtx) return text.length * 7.2;
+    measureCtx.font = font;
+    return measureCtx.measureText(text).width;
+  } catch {
+    return text.length * 7.2;
+  }
+}
+
+/** Pixel-width word wrap (accurate for Arabic/RTL and emoji too). */
+function wrapExportTextPx(text: string, maxPx: number, font: string): string[] {
+  const out: string[] = [];
+  for (const paragraph of text.split('\n')) {
+    if (!paragraph) { out.push(''); continue; }
+    let line = '';
+    for (const word of paragraph.split(/\s+/)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && textWidth(candidate, font) > maxPx) { out.push(line); line = word; }
+      else line = candidate;
+    }
+    if (line) out.push(line);
+  }
+  return out.slice(0, 20);
+}
+
+/**
+ * Diff two board documents into a minimal op batch (node-patch per changed
+ * field, node-add/del, edge-add/del, sec-add/del). Order matters: additions
+ * first (so ops that reference new nodes land after they exist), then
+ * patches, then removals. Sections are never patched — only add/remove.
+ */
+function diffDocs(prev: ProjectCanvas, next: ProjectCanvas): CanvasOp[] {
+  const ops: CanvasOp[] = [];
+  const prevNodes = new Map(prev.nodes.map((n) => [n.id, n]));
+  const nextNodes = new Map(next.nodes.map((n) => [n.id, n]));
+  const prevSections = new Map((prev.sections ?? []).map((s) => [s.id, s]));
+  const nextSections = new Map((next.sections ?? []).map((s) => [s.id, s]));
+
+  for (const s of next.sections ?? []) {
+    if (!prevSections.has(s.id)) ops.push({ op: 'sec-add', section: { id: s.id, name: s.name, color: s.color } });
+  }
+  for (const n of next.nodes) {
+    const before = prevNodes.get(n.id);
+    if (!before) { ops.push({ op: 'node-add', node: n }); continue; }
+    const patch: CanvasOp['patch'] = {};
+    if (before.text !== n.text) patch.text = n.text;
+    if (before.x !== n.x) patch.x = n.x;
+    if (before.y !== n.y) patch.y = n.y;
+    if (before.w !== n.w) patch.w = n.w;
+    if (before.h !== n.h) patch.h = n.h;
+    if (before.color !== n.color) patch.color = n.color;
+    if (before.done !== n.done) patch.done = n.done;
+    if (before.section !== n.section) patch.section = n.section ?? null;
+    if (Object.keys(patch).length) ops.push({ op: 'node-patch', id: n.id, patch });
+  }
+  for (const e of next.edges) {
+    const before = prev.edges.find((x) => x.from === e.from && x.to === e.to);
+    if (!before) ops.push({ op: 'edge-add', edge: { id: e.id, from: e.from, to: e.to } });
+  }
+  for (const e of prev.edges) {
+    if (!next.edges.some((x) => x.from === e.from && x.to === e.to)) ops.push({ op: 'edge-del', id: e.id });
+  }
+  for (const n of prev.nodes) {
+    if (!nextNodes.has(n.id)) ops.push({ op: 'node-del', id: n.id });
+  }
+  for (const s of prev.sections ?? []) {
+    if (!nextSections.has(s.id)) ops.push({ op: 'sec-del', id: s.id });
+  }
+  return ops;
+}
+
+/**
+ * Merge a remote op batch into the local document. Idempotent semantics
+ * mirror the server (node-add on an existing id and unknown-id patches are
+ * no-ops), so an echoed or replayed batch never corrupts the board.
+ */
+function applyRemoteOps(doc: ProjectCanvas, ops: CanvasOp[]): ProjectCanvas {
+  let nodes = [...doc.nodes];
+  let edges = [...doc.edges];
+  let sections = [...(doc.sections ?? [])];
+  for (const rawOp of ops) {
+    if (!rawOp || typeof rawOp !== 'object') continue;
+    switch (rawOp.op) {
+      case 'node-add': {
+        const n = rawOp.node;
+        if (n && !nodes.some((x) => x.id === n.id)) nodes.push(n);
+        break;
+      }
+      case 'node-patch': {
+        if (!rawOp.id || !rawOp.patch) break;
+        nodes = nodes.map((n) => {
+          if (n.id !== rawOp.id) return n;
+          const merged: any = { ...n, ...rawOp.patch };
+          // `section: null` means "cleared" — the field must disappear, not
+          // survive as a null that the renderer/diff would trip on.
+          if (merged.section == null) delete merged.section;
+          return merged as CanvasNode;
+        });
+        break;
+      }
+      case 'node-del': {
+        if (!rawOp.id) break;
+        nodes = nodes.filter((n) => n.id !== rawOp.id);
+        edges = edges.filter((e) => e.from !== rawOp.id && e.to !== rawOp.id);
+        break;
+      }
+      case 'edge-add': {
+        const e = rawOp.edge;
+        if (e && !edges.some((x) => x.id === e.id) && !edges.some((x) => x.from === e.from && x.to === e.to)) edges.push(e);
+        break;
+      }
+      case 'edge-del': {
+        if (!rawOp.id) break;
+        edges = edges.filter((e) => e.id !== rawOp.id);
+        break;
+      }
+      case 'sec-add': {
+        const s = rawOp.section;
+        if (s && !sections.some((x) => x.id === s.id)) sections.push(s);
+        break;
+      }
+      case 'sec-del': {
+        if (!rawOp.id) break;
+        sections = sections.filter((s) => s.id !== rawOp.id);
+        nodes = nodes.map((n) => (n.section === rawOp.id ? { ...n, section: undefined } : n));
+        break;
+      }
+      default:
+        break; // unknown op kinds are skipped forward-compatibly
+    }
+  }
+  return { ...doc, nodes, edges, ...(sections.length ? { sections } : {}) };
+}
 
 interface ViewState {
   x: number;
@@ -62,11 +229,60 @@ function freshId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** Current user id from the stored JWT (payload claim) — used to identify
+ *  our own op echoes on the live-sync socket. Empty when undecodable. */
+function jwtUserId(token: string | null): string {
+  if (!token) return '';
+  try {
+    const b64 = (token.split('.')[1] || '').replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(b64));
+    return typeof payload?.id === 'string' ? payload.id : '';
+  } catch {
+    return '';
+  }
+}
+
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+/** Defensive shape for anything parsed out of a system clipboard. */
+function sanitizeClipboardPayload(nodes: unknown, edges: unknown): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
+  const clean: CanvasNode[] = [];
+  const rawNodes = Array.isArray(nodes) ? nodes.slice(0, MAX_NODES) : [];
+  for (const raw of rawNodes) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    const type: CanvasNodeType = r.type === 'card' ? 'card' : 'note';
+    const num = (v: unknown, dflt: number) => (typeof v === 'number' && Number.isFinite(v) ? v : dflt);
+    clean.push({
+      id: typeof r.id === 'string' && r.id ? r.id : freshId('n'),
+      type,
+      text: typeof r.text === 'string' ? r.text.slice(0, MAX_TEXT) : '',
+      x: clamp(num(r.x, 0), -100_000, 100_000),
+      y: clamp(num(r.y, 0), -100_000, 100_000),
+      w: clamp(num(r.w, 220), 60, 900),
+      h: clamp(num(r.h, type === 'card' ? 120 : 100), 40, 900),
+      color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
+      done: r.done === true,
+      ...(typeof r.section === 'string' && /^[a-zA-Z0-9_-]{1,48}$/.test(r.section) ? { section: r.section } : {}),
+    });
+  }
+  const ids = new Set(clean.map((n) => n.id));
+  const cleanEdges: CanvasEdge[] = [];
+  const rawEdges = Array.isArray(edges) ? edges.slice(0, MAX_EDGES) : [];
+  for (const raw of rawEdges) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.from !== 'string' || typeof r.to !== 'string') continue;
+    if (!ids.has(r.from) || !ids.has(r.to) || r.from === r.to) continue;
+    cleanEdges.push({ id: freshId('e'), from: r.from, to: r.to });
+  }
+  return { nodes: clean, edges: cleanEdges };
+}
+
 export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null as HTMLDivElement | null);
   const [doc, setDoc] = useState<ProjectCanvas | null>(null);
@@ -78,6 +294,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [savedAt, setSavedAt] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string } | null>(null);
+  const [remoteUpdated, setRemoteUpdated] = useState(false);
+  const [pushingNotes, setPushingNotes] = useState(false);
 
   const [selNodes, setSelNodes] = useState<string[]>([]);
   const [selEdge, setSelEdge] = useState<string | null>(null);
@@ -102,6 +320,40 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const slugRef = useRef<string>(slug);
   const saveTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
+  /** Monotonic id of the last canvas document we saved ourselves — echoes of
+   *  our own PUT through the sync room must not trigger a refetch. */
+  const lastLocalSaveRef = useRef<{ key: string; at: number } | null>(null);
+  /** Debounce timer for remote-change refetches. */
+  const remoteFetchTimer = useRef<number | null>(null);
+  /** The exact doc snapshot (stringified) our last commit was diffed against.
+   *  Never cleared — undo/redo/drag commits re-diff from it, so concurrent
+   *  remote ops that only touch OTHER nodes are still carried along. */
+  const baseDocRef = useRef<string | null>(null);
+  /** Pending ops queue + in-flight flag (serialized POSTs, order preserved). */
+  const opsQueueRef = useRef<CanvasOp[]>([]);
+  const opsSendingRef = useRef(false);
+  const opsRetryTimer = useRef<number | null>(null);
+  /** Set while applying a remote batch — suppresses the local diff for it. */
+  const applyingRemoteRef = useRef(false);
+  /** True while the board view is mounted — guards post-unmount refetches. */
+  const syncAliveRef = useRef(false);
+  /** Our own user id (JWT claim) — drops self-echoed op batches. */
+  const authUserIdRef = useRef<string>('');
+  /** Live-sync: true once at least one POST /canvas/ops round-trip succeeded.
+   *  Kept as a ref (not state) so drag/undo handlers always read the CURRENT
+   *  transport instead of a stale closure value. */
+  const liveOpsRef = useRef(false);
+  const viewSaveTimer = useRef<number | null>(null);
+  const histRef = useRef<string[]>([]);
+  const redoRef = useRef<string[]>([]);
+  /** Pre-edit snapshot so Escape cancels instead of committing. */
+  const editPreRef = useRef<{ id: string; text: string } | null>(null);
+  /** Typing streams without history spam: one snapshot on the first keystroke. */
+  const editHistPushedRef = useRef(false);
+  /** Last arrow-nudge timestamp — a burst of nudges collapses into one undo step. */
+  const nudgeAtRef = useRef(0);
+  /** Live end-point of the connect rubber line (world coords). */
+  const connectEndRef = useRef<{ x: number; y: number } | null>(null);
   const dragRef = useRef<null | {
     kind: 'node' | 'pan' | 'resize' | 'marquee';
     ids?: string[];
@@ -115,6 +367,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     cY: number;
     startX: number;
     startY: number;
+    /** Container rect cached ONCE at drag start — per-move getBoundingClientRect
+     *  forces layout and desyncs against zoom-induced reflows. */
+    rect?: { left: number; top: number };
+    /** Pressed on a node while connect mode was armed: if the pointer moves
+     *  this becomes a normal node drag; a click still completes the edge. */
+    connectDown?: boolean;
     /** True once a real movement (beyond the click threshold) happened. */
     moved?: boolean;
     /** Pre-drag document snapshot — only appended to history if we moved. */
@@ -138,31 +396,194 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         if (!cancelled) setLoaded(true);
       }
     })();
+    // Restore the persisted camera for THIS project (per-slug key).
+    try {
+      const raw = localStorage.getItem(`wsd.canvas.view.${slug}`);
+      if (raw) {
+        const v = JSON.parse(raw) as Partial<ViewState>;
+        if (v && typeof v.x === 'number' && typeof v.y === 'number' && typeof v.z === 'number') {
+          const next: ViewState = {
+            x: clamp(v.x, -100_000, 100_000),
+            y: clamp(v.y, -100_000, 100_000),
+            z: clamp(v.z, MIN_Z, MAX_Z),
+          };
+          viewRef.current = next;
+          setView(next);
+        }
+      }
+    } catch { /* junk view — keep default */ }
     return () => {
       cancelled = true;
     };
   }, [slug]);
 
+  // ── live sync (WebSocket) ────────────────────────────────
+  // Differential protocol: every local commit is diffed against baseDocRef
+  // and POSTed as a small op batch; the server applies it atomically and
+  // mirrors the ops to the room, and remote batches merge locally without a
+  // refetch. Whole-doc PUTs (agents, imports) still fall back to the refetch
+  // nudge — surfaced as a banner when a local edit is pending. Our own op
+  // echoes are dropped via the socket's `by` user id. The same room also
+  // carries the presence roster and peer cursors (useCanvasCursors).
+  syncAliveRef.current = true;
+
+  const refetchRemote = () => {
+    if (!syncAliveRef.current) return;
+    if (dirtyRef.current) { setRemoteUpdated(true); return; }
+    getProjectCanvas(slugRef.current)
+      .then((d) => {
+        if (!syncAliveRef.current) return;
+        if (dirtyRef.current) { setRemoteUpdated(true); return; }
+        docRef.current = d;
+        setDoc(d);
+        baseDocRef.current = JSON.stringify(d);
+        setLoadError(null);
+        setRemoteUpdated(false);
+      })
+      .catch(() => { /* transient — the next nudge retries */ });
+  };
+
+    const scheduleRefetch = () => {
+      if (remoteFetchTimer.current !== null) window.clearTimeout(remoteFetchTimer.current);
+      remoteFetchTimer.current = window.setTimeout(() => {
+        remoteFetchTimer.current = null;
+        refetchRemote();
+      }, 500);
+    };
+
+  // Identify ourselves so self-echoed op batches can be dropped.
+  try { authUserIdRef.current = jwtUserId(localStorage.getItem('wsd.token')); } catch { /* noop */ }
+
+  const ingestRemoteOps = (ops: any[], by?: string) => {
+    if (by && authUserIdRef.current && by === authUserIdRef.current) return; // own echo
+    const cur = docRef.current;
+    if (!cur) return;
+    applyingRemoteRef.current = true;
+    try {
+      const merged = applyRemoteOps(cur, ops);
+      docRef.current = merged;
+      setDoc(merged);
+      setRemoteUpdated(false);
+    } finally {
+      applyingRemoteRef.current = false;
+    }
+  };
+
+  // Presence + cursors ride the same canvas room socket; the callbacks above
+  // are forwarded verbatim, so sync and presence share one connection.
+  const { peers, cursors, sendCursor } = useCanvasCursors(slug, {
+    onOps: ingestRemoteOps,
+    onNudge: (info) => {
+      // Whole-doc fallback (agent aggregation, snapshot import) → refetch,
+      // after dropping our own PUT echo by its save key.
+      const key = `${slug}|${info.updatedAt ?? ''}`;
+      if (lastLocalSaveRef.current && lastLocalSaveRef.current.key === key) {
+        lastLocalSaveRef.current = null;
+        return;
+      }
+      scheduleRefetch();
+    },
+  });
+
+  useEffect(() => {
+    return () => {
+      syncAliveRef.current = false;
+      if (remoteFetchTimer.current !== null) {
+        window.clearTimeout(remoteFetchTimer.current);
+        remoteFetchTimer.current = null;
+      }
+      if (opsRetryTimer.current !== null) {
+        window.clearTimeout(opsRetryTimer.current);
+        opsRetryTimer.current = null;
+      }
+    };
+  }, []);
+
   // ── autosave ─────────────────────────────────────────────────
+  /** Serialize POST /canvas/ops: one batch in flight, order preserved. */
+  const flushOps = () => {
+    if (opsSendingRef.current) return;
+    const batch = opsQueueRef.current;
+    if (!batch.length) return;
+    opsQueueRef.current = [];
+    opsSendingRef.current = true;
+    sendProjectCanvasOps(slugRef.current, batch)
+      .then(() => {
+        opsSendingRef.current = false;
+        // First successful round-trip switches the board onto the
+        // differential sync path (both state + ref, so drag/undo handlers
+        // and flushSave always read the CURRENT transport, not a stale one).
+        if (!liveOpsRef.current) {
+          liveOpsRef.current = true;
+        }
+        setSaveError(null);
+        // Edits made while this batch was in flight go out next.
+        if (opsQueueRef.current.length) flushOps();
+        else if (!dirtyRef.current) setSaveState('saved');
+      })
+      .catch(() => {
+        opsSendingRef.current = false;
+        // Re-queue at the FRONT: the batch never landed server-side, so it
+        // must stay ahead of anything queued after it (order preservation).
+        opsQueueRef.current = [...batch, ...opsQueueRef.current];
+        setSaveError(t('canvas.opsSendFailed'));
+        if (opsRetryTimer.current === null) {
+          opsRetryTimer.current = window.setTimeout(() => {
+            opsRetryTimer.current = null;
+            flushOps();
+          }, 8000);
+        }
+      });
+  };
+
+  /** Diff the current doc against the last-sent base and queue the delta. */
+  const queueOps = () => {
+    const cur = docRef.current;
+    if (!cur) return;
+    const base = baseDocRef.current ? (JSON.parse(baseDocRef.current) as ProjectCanvas) : { version: 1 as const, nodes: [], edges: [], updatedAt: null };
+    const ops = diffDocs(base, cur);
+    baseDocRef.current = JSON.stringify(cur);
+    if (ops.length) {
+      opsQueueRef.current = [...opsQueueRef.current, ...ops];
+      if (opsQueueRef.current.length > 400) opsQueueRef.current = opsQueueRef.current.slice(-400);
+    }
+  };
+
   const flushSave = () => {
     saveTimer.current = null;
     const d = docRef.current;
     if (!d || !dirtyRef.current) return;
     dirtyRef.current = false;
     setSaveState('saving');
-    saveProjectCanvas(slugRef.current, d)
-      .then(() => {
-        if (docRef.current === d) {
-          setSaveState('saved');
-          setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-          setSaveError(null);
-        }
-      })
-      .catch((err: any) => {
-        dirtyRef.current = true;
-        setSaveState('dirty');
-        setSaveError(err.message || 'Save failed');
-      });
+    if (!liveOpsRef.current) {
+      // Legacy whole-document path (also the first-save snapshot upload).
+      saveProjectCanvas(slugRef.current, d)
+        .then((saved) => {
+          // Remember this save so the sync-room echo of our own PUT is ignored
+          // (the response carries the authoritative server-side updatedAt).
+          lastLocalSaveRef.current = { key: `${slugRef.current}|${saved?.updatedAt ?? ''}`, at: Date.now() };
+          baseDocRef.current = JSON.stringify(d);
+          if (docRef.current === d) {
+            setSaveState('saved');
+            setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+            setSaveError(null);
+          }
+        })
+        .catch((err: any) => {
+          dirtyRef.current = true;
+          setSaveState('dirty');
+          setSaveError(err.message || 'Save failed');
+          // Slow auto-retry so a hiccup (laptop sleep, blip) self-heals even
+          // if the user never touches the board again.
+          if (saveTimer.current === null) saveTimer.current = window.setTimeout(flushSave, 8000);
+        });
+      return;
+    }
+    queueOps();
+    flushOps();
+    // Optimistic UI: the op batch is authoritative now (failure re-queues it).
+    setSaveState('saved');
+    setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
   };
 
   const scheduleSave = () => {
@@ -198,8 +619,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     histRef.current = [...histRef.current.slice(-(HISTORY_DEPTH - 1)), JSON.stringify(d)];
     setCanUndo(true);
   };
-  const histRef = useRef<string[]>([]);
-  const redoRef = useRef<string[]>([]);
 
   const mutate = (fn: (d: ProjectCanvas) => ProjectCanvas, withHistory = true) => {
     const d = docRef.current;
@@ -264,7 +683,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const d = docRef.current;
     if (!d) return;
     const maxNew = MAX_NODES - d.nodes.length;
-    if (maxNew <= 0) { setNotice(`Canvas limit reached (${MAX_NODES} nodes)`); return; }
+    if (maxNew <= 0) { setNotice(t('canvas.noticeLimitNodes', { max: MAX_NODES })); return; }
     const budget = Math.min(selNodes.length, maxNew);
     const src = selNodes.slice(0, budget).map((id) => d.nodes.find((n) => n.id === id)).filter(Boolean) as CanvasNode[];
     if (!src.length) return;
@@ -305,7 +724,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       navigator.clipboard.writeText(JSON.stringify({ nodes, edges }));
     } catch { /* best-effort — in-memory ref still works */ }
     pasteCountRef.current = 0;
-    setNotice(`Copied ${nodes.length} node(s)`);
+    setNotice(t('canvas.noticeCopied', { n: nodes.length }));
   };
 
   /** Core paste logic — shared by the keyboard shortcut and context menu. */
@@ -316,9 +735,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const { nodes, edges } = payload;
     if (!nodes.length) return;
     const maxNew = MAX_NODES - d.nodes.length;
-    if (maxNew <= 0) { setNotice(`Canvas limit reached (${MAX_NODES} nodes)`); return; }
+    if (maxNew <= 0) { setNotice(t('canvas.noticeLimitNodes', { max: MAX_NODES })); return; }
     const budget = Math.min(nodes.length, maxNew);
-    if (budget < nodes.length) setNotice(`Canvas limit — pasted ${budget} of ${nodes.length}`);
+    if (budget < nodes.length) setNotice(t('canvas.noticePasteCapped', { n: budget, total: nodes.length }));
     const off = 24 + pasteCountRef.current * 20;
     pasteCountRef.current += 1;
     const idMap: Record<string, string> = {};
@@ -346,13 +765,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       const text = await navigator.clipboard.readText();
       if (text) {
         const parsed = JSON.parse(text);
-        // Accept both the new {nodes, edges} shape and the legacy nodes-only array.
+        // Accept both the new {nodes, edges} shape and the legacy nodes-only
+        // array — ALWAYS through the sanitizer: clipboard content is untrusted
+        // input (wrong sizes/text lengths would poison the local doc).
         if (Array.isArray(parsed)) {
-          doPaste({ nodes: parsed as CanvasNode[], edges: [] });
+          doPaste(sanitizeClipboardPayload(parsed, []));
           return;
         }
         if (Array.isArray(parsed?.nodes)) {
-          doPaste({ nodes: parsed.nodes, edges: parsed.edges ?? [] });
+          doPaste(sanitizeClipboardPayload(parsed.nodes, parsed.edges ?? []));
           return;
         }
       }
@@ -370,15 +791,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   const setColor = (nodeId: string, color: CanvasColor) => patchNode(nodeId, { color });
 
-  const addNode = (type: CanvasNodeType) => {
+  const addNode = (type: CanvasNodeType, atWorld?: { x: number; y: number }) => {
     if (docRef.current && docRef.current.nodes.length >= MAX_NODES) {
-      setNotice(`Canvas limit reached (${MAX_NODES} nodes)`);
+      setNotice(t('canvas.noticeLimitNodes', { max: MAX_NODES }));
       return;
     }
     const el = containerRef.current;
     const r = el?.getBoundingClientRect();
-    const cx = r ? (r.width / 2 - viewRef.current.x) / viewRef.current.z : 60;
-    const cy = r ? (r.height / 2 - viewRef.current.y) / viewRef.current.z : 60;
+    const cx = atWorld ? atWorld.x : r ? (r.width / 2 - viewRef.current.x) / viewRef.current.z : 60;
+    const cy = atWorld ? atWorld.y : r ? (r.height / 2 - viewRef.current.y) / viewRef.current.z : 60;
     // Cascade successive adds in a visible fan (large steps relative to the
     // 220×100 node) so rapid FAB/N/C creates never stack at the exact center.
     const seq = addSeqRef.current++;
@@ -405,8 +826,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   const addEdge = (from: string, to: string) => {
     const d = docRef.current;
-    if (d && d.edges.length >= MAX_EDGES) {
-      setNotice(`Edge limit reached (${MAX_EDGES} edges)`);
+    if (!d) return;
+    if (d.edges.length >= MAX_EDGES) {
+      setNotice(t('canvas.noticeLimitEdges', { max: MAX_EDGES }));
+      return;
+    }
+    // One arrow per direction — a duplicate connect attempt is a no-op with
+    // feedback instead of a stacked invisible edge.
+    if (d.edges.some((e) => e.from === from && e.to === to)) {
+      setNotice(t('canvas.noticeEdgeExists'));
       return;
     }
     mutate((d) => ({ ...d, edges: [...d.edges, { id: freshId('e'), from, to }] }));
@@ -417,7 +845,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const addSection = (name: string) => {
     const cur = docRef.current;
     if (cur && (cur.sections?.length ?? 0) >= MAX_SECTIONS) {
-      setNotice(`Limit reached (${MAX_SECTIONS} sections)`);
+      setNotice(t('canvas.noticeLimitSections', { max: MAX_SECTIONS }));
       return;
     }
     const sec: CanvasSection = { id: freshId('s'), name: name.slice(0, 80) || 'Section', color: 'blue' };
@@ -493,6 +921,19 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       window.removeEventListener('resize', onScroll);
     };
   }, [ctxMenu]);
+
+  // A window blur can swallow the Space keyup — never leave pan mode stuck on.
+  useEffect(() => {
+    const onBlur = () => {
+      setSpaceHeld(false);
+      // Also drop an in-flight pan so the camera doesn't keep following a
+      // phantom drag after alt-tab.
+      const dr = dragRef.current;
+      if (dr?.kind === 'pan') dragRef.current = null;
+    };
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, []);
 
   const removeSelected = () => {
     if (selEdge) {
@@ -573,12 +1014,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       const { items } = await getProjectNotes(slug);
       const budget = MAX_NODES - (docRef.current?.nodes.length || 0);
       if (budget <= 0) {
-        setNotice(`Canvas limit reached (${MAX_NODES} nodes)`);
+        setNotice(t('canvas.noticeLimitNodes', { max: MAX_NODES }));
         return;
       }
       const open = items.filter((n) => !n.done).slice(0, Math.min(12, budget));
       if (!open.length) {
-        setNotice('No open notes to import');
+        setNotice(t('canvas.noticeNoNotes'));
         return;
       }
       const colorByKind: Record<string, CanvasColor> = { idea: 'yellow', bug: 'red', goal: 'blue' };
@@ -598,16 +1039,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         };
       });
       mutate((d) => ({ ...d, nodes: [...d.nodes, ...nodes] }));
-      setNotice(`Imported ${nodes.length} note(s) from the Notes tab`);
+      setNotice(t('canvas.noticeImported', { n: nodes.length }));
     } catch (err: any) {
-      setNotice(err.message || 'Could not import notes');
+      setNotice(t('canvas.noticeImportFailed', { error: err.message || '' }));
     }
   };
 
   // ── view helpers ─────────────────────────────────────────────
+  const persistView = () => {
+    if (viewSaveTimer.current !== null) return;
+    viewSaveTimer.current = window.setTimeout(() => {
+      viewSaveTimer.current = null;
+      try {
+        localStorage.setItem(`wsd.canvas.view.${slugRef.current}`, JSON.stringify(viewRef.current));
+      } catch { /* private mode */ }
+    }, 400);
+  };
+
   const setViewState = (v: ViewState) => {
     viewRef.current = v;
     setView(v);
+    persistView();
   };
 
   const resetZoom = () => {
@@ -617,6 +1069,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   const resetView = () => {
     setViewState({ x: 40, y: 40, z: 1 });
+  };
+
+  /** Screen (client) coords → world coords under the current camera. When a
+   *  drag supplies its cached container rect, no live layout read happens
+   *  (rect stays valid: pointer capture pins events to the same element). */
+  const worldFromClient = (clientX: number, clientY: number, rect?: { left: number; top: number }) => {
+    const r = rect ?? containerRef.current?.getBoundingClientRect();
+    const { x, y, z } = viewRef.current;
+    return { x: (clientX - (r?.left ?? 0) - x) / z, y: (clientY - (r?.top ?? 0) - y) / z };
   };
 
   // Soft grid snap applied only on release so live dragging stays free and the
@@ -640,17 +1101,19 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     });
   };
 
-  const fitView = () => {
+  /** Fit either the whole board or (when ids given) just those nodes. */
+  const fitView = (ids?: string[]) => {
     const d = docRef.current;
     const r = containerRef.current?.getBoundingClientRect();
-    if (!d || !d.nodes.length) {
+    const list = ids?.length && d ? d.nodes.filter((n) => ids.includes(n.id)) : d?.nodes;
+    if (!list || !list.length) {
       setViewState({ x: 40, y: 40, z: 1 });
       return;
     }
-    const minX = Math.min(...d.nodes.map((n) => n.x));
-    const minY = Math.min(...d.nodes.map((n) => n.y));
-    const maxX = Math.max(...d.nodes.map((n) => n.x + n.w));
-    const maxY = Math.max(...d.nodes.map((n) => n.y + n.h));
+    const minX = Math.min(...list.map((n) => n.x));
+    const minY = Math.min(...list.map((n) => n.y));
+    const maxX = Math.max(...list.map((n) => n.x + n.w));
+    const maxY = Math.max(...list.map((n) => n.y + n.h));
     const pad = 60;
     const w = maxX - minX + pad * 2;
     const h = maxY - minY + pad * 2;
@@ -662,6 +1125,13 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     });
   };
 
+  /** Enter connect mode from any trigger (toolbar / shortcut / port drag). */
+  const beginConnect = (id: string) => {
+    const a = docRef.current?.nodes.find((n) => n.id === id);
+    connectEndRef.current = a ? { x: a.x + a.w / 2, y: a.y + a.h / 2 } : null;
+    setConnectFrom(id);
+  };
+
   // ── wheel zoom (non-passive so we can preventDefault) ───────
   useEffect(() => {
     const el = containerRef.current;
@@ -669,6 +1139,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const onWheel = (e: WheelEvent) => {
       if ((e.target as HTMLElement).closest?.('textarea')) return;
       e.preventDefault();
+      // Trackpad pinch arrives as ctrl+wheel — zoom with it too (exponential
+      // mapping so small finger gestures feel proportional).
+      if (e.ctrlKey) {
+        zoomBy(clamp(Math.exp(-e.deltaY * 0.01), 0.5, 1.5), { sx: e.clientX, sy: e.clientY });
+        return;
+      }
       zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, { sx: e.clientX, sy: e.clientY });
     };
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -681,11 +1157,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       const target = e.target as HTMLElement;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      // Never fire board shortcuts behind a modal (ConfirmModal etc.).
+      if (document.querySelector('.modal-overlay')) return;
       const meta = e.ctrlKey || e.metaKey;
       if (meta && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')) {
         e.preventDefault();
         if ((e.key === 'y' || e.key === 'Y') || e.shiftKey) redo();
         else undo();
+        return;
+      }
+      if (meta && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        if (dirtyRef.current) flushSave();
+        return;
+      }
+      if (meta && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        const ids = (docRef.current?.nodes ?? [])
+          .filter((n) => !(n.section && collapsedSections.has(n.section)))
+          .map((n) => n.id);
+        setSelNodes(ids);
+        setSelEdge(null);
         return;
       }
       if (meta && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateSelected(); return; }
@@ -704,6 +1196,25 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         removeSelected();
         return;
       }
+      // Arrow-key nudge of the selection (fine 4px, Shift = coarse 20px).
+      // A rapid burst collapses into one undo entry (800ms quiet window).
+      if (e.key.startsWith('Arrow') && selNodes.length && !readOnly) {
+        e.preventDefault();
+        const step = e.shiftKey ? NUDGE_COARSE : NUDGE_FINE;
+        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+        const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+        const now = Date.now();
+        const withHistory = now - nudgeAtRef.current > 800;
+        nudgeAtRef.current = now;
+        mutate(
+          (d) => ({
+            ...d,
+            nodes: d.nodes.map((n) => (selNodes.includes(n.id) ? { ...n, x: n.x + dx, y: n.y + dy } : n)),
+          }),
+          withHistory
+        );
+        return;
+      }
       if (readOnly) return;
       if (e.key === ' ') {
         e.preventDefault();
@@ -713,7 +1224,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       if (e.key === 'n' || e.key === 'N') addNode('note');
       else if (e.key === 'c' || e.key === 'C') addNode('card');
       else if (e.key === 'l' || e.key === 'L') {
-        if (selNode) setConnectFrom(selNode);
+        if (selNode) beginConnect(selNode);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -725,7 +1236,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [readOnly, selNodes, selEdge, editing, connectFrom]);
+  }, [readOnly, selNodes, selEdge, editing, connectFrom, collapsedSections]);
 
   // ── pointer interactions (delegated to the canvas root) ─────
   const onPointerDown = (e: any) => {
@@ -735,15 +1246,38 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const nodeEl = (target as Element).closest?.('.cn-node');
     const edgeEl = (target as Element).closest?.('.cn-edge');
 
+    // Interactive controls INSIDE a node must never start a node drag —
+    // the press belongs to them. (Without this, mousedown on the checkbox /
+    // color dot / port drags the whole node under the pointer.)
+    if (nodeEl && target.closest?.('.cn-check, .cn-node-colors, .cn-resize-handle, .cn-port')) return;
+
     // Commit the open text editor on any pointer-down outside the node being
     // edited — clicking another node, the background or a section must close it.
     if (editing && nodeEl?.getAttribute('data-id') !== editing) {
       setEditing(null);
     }
 
-    if (e.button === 2) return;
+    // Cache the container rect ONCE per gesture. Re-reading it on every
+    // pointermove forces layout per frame and can desync mid-gesture.
+    const rect = el.getBoundingClientRect();
+    const cachedRect = { left: rect.left, top: rect.top };
 
-    // ── Fix: Space held → always pan, even if clicking over a node ──────────
+    if (e.button === 1) {
+      // Middle button always pans, over anything.
+      dragRef.current = {
+        kind: 'pan',
+        cX: e.clientX,
+        cY: e.clientY,
+        startX: viewRef.current.x,
+        startY: viewRef.current.y,
+        rect: cachedRect,
+      };
+      el.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (e.button === 2) return; // right button → context menu only
+
+    // Space held → always pan, even if clicking over a node.
     if (e.button === 0 && spaceHeld) {
       dragRef.current = {
         kind: 'pan',
@@ -751,6 +1285,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         cY: e.clientY,
         startX: viewRef.current.x,
         startY: viewRef.current.y,
+        rect: cachedRect,
       };
       el.setPointerCapture(e.pointerId);
       return;
@@ -770,8 +1305,24 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       e.stopPropagation();
 
       if (connectFrom) {
-        if (connectFrom !== id) addEdge(connectFrom, id);
-        setConnectFrom(null);
+        // Armed connect mode: DON'T complete the edge on pointerdown. Keep the
+        // press live so dragging out of the node moves it normally; if this is
+        // just a click (no drag beyond the threshold) endDrag completes the
+        // edge — a press that "grabs nothing" used to be swallowed here.
+        dragRef.current = {
+          kind: 'node',
+          ids: [id],
+          startPos: { [id]: { x: node.x, y: node.y } },
+          cX: e.clientX,
+          cY: e.clientY,
+          startX: node.x,
+          startY: node.y,
+          moved: false,
+          connectDown: true,
+          pre: JSON.stringify(docRef.current),
+          rect: cachedRect,
+        };
+        el.setPointerCapture(e.pointerId);
         return;
       }
       if (readOnly) {
@@ -780,10 +1331,16 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         return;
       }
 
-      // ── Fix: Multi-selection drag ──────────────────────────────────────────
-      // If the clicked node is already in the current selection keep all of
-      // them selected so the drag moves the whole group. Otherwise reset to
-      // just the clicked node (normal single-click behaviour).
+      // Shift+click toggles the node in/out of the multi-selection.
+      if (e.shiftKey) {
+        setSelNodes((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+        setSelEdge(null);
+        return;
+      }
+
+      // Multi-selection drag: if the clicked node is already in the current
+      // selection keep all of them selected so the drag moves the whole group.
+      // Otherwise reset to just the clicked node (normal single-click).
       const isInSel = selNodes.includes(id);
       const dragIds = isInSel && selNodes.length > 1 ? selNodes : [id];
 
@@ -807,6 +1364,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           startY: node.y,
           moved: false,
           pre: JSON.stringify(docRef.current),
+          rect: cachedRect,
         };
         el.setPointerCapture(e.pointerId);
       }
@@ -818,33 +1376,20 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       setConnectFrom(null);
       return;
     }
-    if (e.button === 1 || e.button === 2) {
-      dragRef.current = {
-        kind: 'pan',
-        cX: e.clientX,
-        cY: e.clientY,
-        startX: viewRef.current.x,
-        startY: viewRef.current.y,
-      };
-      el.setPointerCapture(e.pointerId);
-    } else if (e.button === 0) {
+    if (e.button === 0) {
       // Left-drag on empty canvas → marquee selection (rubber band).
-      const { x, y, z } = viewRef.current;
-      const rr = containerRef.current?.getBoundingClientRect();
-      const ox = rr ? rr.left : 0;
-      const oy = rr ? rr.top : 0;
-      const sx = (e.clientX - ox - x) / z;
-      const sy = (e.clientY - oy - y) / z;
+      const w = worldFromClient(e.clientX, e.clientY);
       dragRef.current = {
         kind: 'marquee',
         cX: e.clientX,
         cY: e.clientY,
-        startX: sx,
-        startY: sy,
-        endX: sx,
-        endY: sy,
+        startX: w.x,
+        startY: w.y,
+        endX: w.x,
+        endY: w.y,
         moved: false,
         pre: JSON.stringify(docRef.current),
+        rect: cachedRect,
       };
       el.setPointerCapture(e.pointerId);
       setSelNodes([]);
@@ -854,6 +1399,23 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   };
 
   const onPointerMove = (e: any) => {
+    // Broadcast our pointer position (world coords, throttled inside the
+    // hook) so open boards can render it as a live collaborator cursor.
+    if (!readOnly) {
+      const w = worldFromClient(e.clientX, e.clientY);
+      sendCursor(w.x, w.y);
+    }
+    // Live rubber line while connecting: end at the cursor (imperative —
+    // no re-render per mousemove).
+    if (connectFrom) {
+      const w = worldFromClient(e.clientX, e.clientY);
+      connectEndRef.current = w;
+      const line = containerRef.current?.querySelector<SVGLineElement>('.cn-connect-line');
+      if (line) {
+        line.setAttribute('x2', String(w.x));
+        line.setAttribute('y2', String(w.y));
+      }
+    }
     const dr = dragRef.current;
     if (!dr) return;
     const dx = e.clientX - dr.cX;
@@ -861,26 +1423,18 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     if (dr.kind === 'pan') {
       setViewState({ ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy });
     } else if (dr.kind === 'marquee') {
-      const { x, y, z } = viewRef.current;
-      const rr = containerRef.current?.getBoundingClientRect();
-      const ox = rr ? rr.left : 0;
-      const oy = rr ? rr.top : 0;
-      const ex = (e.clientX - ox - x) / z;
-      const ey = (e.clientY - oy - y) / z;
+      const w = worldFromClient(e.clientX, e.clientY, dr.rect);
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       dr.moved = true;
-      dr.endX = ex;
-      dr.endY = ey;
-      const marq = document.querySelector('.cn-marquee');
+      dr.endX = w.x;
+      dr.endY = w.y;
+      const marq = containerRef.current?.querySelector('.cn-marquee');
       if (marq) {
-        const sx = Math.min(dr.startX, ex);
-        const sy = Math.min(dr.startY, ey);
-        const sw = Math.abs(ex - dr.startX);
-        const sh = Math.abs(ey - dr.startY);
-        marq.setAttribute('x', String(sx));
-        marq.setAttribute('y', String(sy));
-        marq.setAttribute('width', String(sw));
-        marq.setAttribute('height', String(sh));
+        marq.setAttribute('display', 'inline');
+        marq.setAttribute('x', String(Math.min(dr.startX, w.x)));
+        marq.setAttribute('y', String(Math.min(dr.startY, w.y)));
+        marq.setAttribute('width', String(Math.abs(w.x - dr.startX)));
+        marq.setAttribute('height', String(Math.abs(w.y - dr.startY)));
       }
     } else if (dr.kind === 'resize' && dr.resize) {
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
@@ -923,14 +1477,28 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const endDrag = (e: any) => {
     const dr = dragRef.current;
     dragRef.current = null;
+    // Release from the element the capture was SET on (the canvas root), not
+    // from wherever the pointer ended up — and only if WE own this pointer id.
     try {
-      (e.target as Element).closest?.('.canvas-root')?.releasePointerCapture?.(e.pointerId);
+      const root = containerRef.current;
+      if (root && root.hasPointerCapture?.(e.pointerId)) root.releasePointerCapture(e.pointerId);
     } catch {
       /* already released */
     }
     if (!dr) return;
+    // Armed connect mode: a SIMPLE click (no drag) completes the edge.
+    if (dr.kind === 'node' && dr.connectDown && !dr.moved) {
+      const target = (e.target as Element)?.closest?.('.cn-node') as HTMLElement | null;
+      const targetId = target?.dataset?.id;
+      if (targetId && connectFrom && targetId !== connectFrom) addEdge(connectFrom, targetId);
+      setConnectFrom(null);
+      return;
+    }
+    // A connect-mode press that DRAGGED AWAY falls through to the normal
+    // node-drag commit below (history + save) — connect mode stays armed so
+    // the user can still click the target next.
     if (dr.kind === 'marquee') {
-      const marq = document.querySelector('.cn-marquee');
+      const marq = containerRef.current?.querySelector('.cn-marquee');
       if (marq) marq.setAttribute('display', 'none');
       if (dr.moved) {
         const cur = docRef.current;
@@ -959,7 +1527,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       if (cur) {
         docRef.current = { ...cur, nodes: cur.nodes.map((n) => n) };
         setDoc(docRef.current);
-        scheduleSave();
+        if (liveOpsRef.current) { queueOps(); flushOps(); setSaveState('saved'); }
+        else scheduleSave();
       }
       return;
     }
@@ -985,17 +1554,42 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     };
     docRef.current = next;
     setDoc(next);
-    scheduleSave();
+    if (liveOpsRef.current) { queueOps(); flushOps(); setSaveState('saved'); }
+    else scheduleSave();
   };
 
-  // ── editing (inline textarea) ───────────────────────────────
+  // ── editing (inline textarea) ─────────────────────────────────
   const startEdit = (id: string) => {
     if (readOnly) return;
-    pushHistory(); // snapshot once, THEN stream keystrokes without history spam
+    const node = docRef.current?.nodes.find((n) => n.id === id);
+    editPreRef.current = node ? { id, text: node.text } : null;
+    editHistPushedRef.current = false;
     setEditing(id);
   };
   const commitEdit = () => {
+    editPreRef.current = null;
     setEditing(null);
+  };
+  /** Escape while editing = cancel: restore the pre-edit text, no save diff. */
+  const cancelEdit = () => {
+    const pre = editPreRef.current;
+    if (pre && docRef.current) {
+      const node = docRef.current.nodes.find((n) => n.id === pre.id);
+      if (node && node.text !== pre.text) {
+        mutate((d) => ({ ...d, nodes: d.nodes.map((n) => (n.id === pre.id ? { ...n, text: pre.text } : n)) }), false);
+      }
+    }
+    editPreRef.current = null;
+    setEditing(null);
+  };
+  const onEditorInput = (id: string, e: any) => {
+    // One history snapshot per editing session (on the first keystroke),
+    // never one per character.
+    if (!editHistPushedRef.current) {
+      pushHistory();
+      editHistPushedRef.current = true;
+    }
+    patchNode(id, { text: e.currentTarget.value }, false);
   };
   const onEditorKey = (e: any) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1004,8 +1598,185 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
     if (e.key === 'Escape') {
       e.preventDefault();
-      (e.currentTarget as HTMLTextAreaElement).blur();
+      e.stopPropagation();
+      cancelEdit();
     }
+  };
+
+  // ── push selected cards → project notes ─────────────────
+  const pushSelectionToNotes = async () => {
+    if (!selNodes.length || readOnly || pushingNotes) return;
+    const d = docRef.current;
+    if (!d) return;
+    const picked = selNodes
+      .map((id) => d.nodes.find((n) => n.id === id))
+      .filter(Boolean) as CanvasNode[];
+    if (!picked.length) return;
+    const fresh: NoteItem[] = picked.map((n) => ({
+      id: freshId('n').slice(0, 40),
+      text: n.text.trim(),
+      kind: n.type === 'card' ? ('goal' as const) : ('idea' as const),
+      done: n.type === 'card' && n.done === true,
+      createdAt: new Date().toISOString(),
+    })).filter((n) => n.text);
+    if (!fresh.length) {
+      setNotice(t('canvas.noticePushEmpty'));
+      return;
+    }
+    setPushingNotes(true);
+    try {
+      const existing = await getProjectNotes(slugRef.current);
+      const existingTexts = new Set((existing.items || []).map((n) => n.text.trim()));
+      const freshOnly = fresh.filter((n) => !existingTexts.has(n.text));
+      if (!freshOnly.length) {
+        setNotice(t('canvas.noticePushDuplicates'));
+        return;
+      }
+      // Client-side cap mirrors the backend MAX_ITEMS=300 so a near-full list
+      // fails fast with clear feedback instead of a 400 from the server.
+      const room = 300 - (existing.items?.length ?? 0);
+      if (room <= 0) {
+        setNotice(t('canvas.noticePushLimit', { max: 300 }));
+        return;
+      }
+      const merged = [...freshOnly.slice(0, room), ...(existing.items || [])].slice(0, 300);
+      await saveProjectNotes(slugRef.current, merged);
+      setNotice(t('canvas.noticePushed', { n: Math.min(freshOnly.length, room) }));
+    } catch (err: any) {
+      setNotice(t('canvas.noticePushFailed', { error: err.message || '' }));
+    } finally {
+      setPushingNotes(false);
+    }
+  };
+
+  // ── PNG export (2D re-render of the board) ───────────────
+  const exportPng = () => {
+    const d = docRef.current;
+    if (!d || !d.nodes.length) {
+      setNotice(t('canvas.noticeExportEmpty'));
+      return;
+    }
+    const PAD = 32;
+    const minX = Math.min(...d.nodes.map((n) => n.x)) - PAD;
+    const minY = Math.min(...d.nodes.map((n) => n.y)) - PAD;
+    const maxX = Math.max(...d.nodes.map((n) => n.x + n.w)) + PAD;
+    const maxY = Math.max(...d.nodes.map((n) => n.y + n.h)) + PAD;
+    const width = Math.min(Math.max(maxX - minX, 1), 8000);
+    const height = Math.min(Math.max(maxY - minY, 1), 8000);
+    const scale = Math.min(2, Math.max(0.1, 8000 / Math.max(width, height)));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(scale, scale);
+
+    // Backdrop — same panel tone as the on-screen board.
+    ctx.fillStyle = '#17181d';
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = '#23252b';
+    ctx.lineWidth = 1;
+    for (let gx = -((minX % 24) + 24) % 24; gx < width; gx += 24) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, height); ctx.stroke();
+    }
+    for (let gy = -((minY % 24) + 24) % 24; gy < height; gy += 24) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(width, gy); ctx.stroke();
+    }
+
+    const byId = new Map(d.nodes.map((n) => [n.id, n]));
+    const ox = -minX;
+    const oy = -minY;
+
+    // Edges — the same quadratic curve as the on-screen renderer.
+    for (const edge of d.edges) {
+      const a = byId.get(edge.from);
+      const b = byId.get(edge.to);
+      if (!a || !b) continue;
+      const x1 = a.x + a.w / 2 + ox;
+      const y1 = a.y + a.h / 2 + oy;
+      const x2 = b.x + b.w / 2 + ox;
+      const y2 = b.y + b.h / 2 + oy;
+      const dxa = Math.abs(x2 - x1);
+      const dya = Math.abs(y2 - y1);
+      const cx = dxa >= dya ? (x1 + x2) / 2 : x1;
+      const cy = dxa >= dya ? y1 : (y1 + y2) / 2;
+      ctx.strokeStyle = '#7d8289';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.quadraticCurveTo(cx, cy, x2, y2);
+      ctx.stroke();
+      // Arrowhead oriented along the arrival tangent.
+      const ang = Math.atan2(y2 - cy, x2 - cx);
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - 8 * Math.cos(ang - 0.4), y2 - 8 * Math.sin(ang - 0.4));
+      ctx.lineTo(x2 - 8 * Math.cos(ang + 0.4), y2 - 8 * Math.sin(ang + 0.4));
+      ctx.closePath();
+      ctx.fillStyle = '#7d8289';
+      ctx.fill();
+    }
+
+    // Nodes — rounded rect, color swatch, wrapped text, ✓ for done cards.
+    const R = 10;
+    for (const n of d.nodes) {
+      const x = n.x + ox;
+      const y = n.y + oy;
+      ctx.beginPath();
+      ctx.moveTo(x + R, y);
+      ctx.arcTo(x + n.w, y, x + n.w, y + n.h, R);
+      ctx.arcTo(x + n.w, y + n.h, x, y + n.h, R);
+      ctx.arcTo(x, y + n.h, x, y, R);
+      ctx.arcTo(x, y, x + n.w, y, R);
+      ctx.closePath();
+      ctx.fillStyle = EXPORT_COLORS[n.color] ?? EXPORT_COLORS.yellow;
+      ctx.fill();
+
+      ctx.fillStyle = '#e8e9ea';
+      const FONT = '13px "Inter", system-ui, sans-serif';
+      ctx.font = FONT;
+      const maxPx = n.w - 20;
+      const lines = wrapExportTextPx(n.text || '', maxPx, FONT);
+      const lineH = 17;
+      const startY = y + 14;
+      lines.forEach((line, li) => {
+        const ty = startY + li * lineH;
+        if (ty > y + n.h - 4) return;
+        if (n.type === 'card' && li === 0 && n.done) {
+          ctx.fillStyle = '#3fb950';
+          ctx.fillText('✓', x + 10, ty);
+          ctx.fillStyle = '#e8e9ea';
+          ctx.fillText(line, x + 26, ty);
+        } else {
+          ctx.fillText(line, x + 10, ty);
+        }
+      });
+      if (!lines.length) {
+        ctx.fillStyle = 'rgba(232, 233, 234, 0.4)';
+        ctx.fillText('…', x + 10, startY);
+      }
+    }
+
+    canvas.toBlob((blob) => {
+      if (!blob) { setNotice(t('canvas.noticeExportFailed')); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `canvas-${slug}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }, 'image/png');
+  };
+
+  // Double-click on empty canvas creates a note right under the cursor.
+  const onRootDblClick = (e: any) => {
+    if (readOnly) return;
+    const target = e.target as Element;
+    if (target.closest?.('.cn-node') || target.closest?.('.cn-edge')) return;
+    addNode('note', worldFromClient(e.clientX, e.clientY));
   };
 
   const toggleDone = (id: string, done: boolean) => patchNode(id, { done });
@@ -1014,10 +1785,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     return (
       <div class="panel" style="margin-top: 8px">
         <div class="empty-state">
-          <div style="color: var(--danger); margin-bottom: 8px">Could not load canvas</div>
+          <div style="color: var(--danger); margin-bottom: 8px">{t('canvas.loadError')}</div>
           <div class="dim">{loadError}</div>
           <button class="btn-ghost sm" style="margin-top: 12px" onClick={() => window.location.reload()}>
-            Reload
+            {t('canvas.reload')}
           </button>
         </div>
       </div>
@@ -1028,13 +1799,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const nodeById = (id: string) => doc?.nodes.find((n) => n.id === id);
 
   const renderEdges = () => {
-    if (!doc || !doc.edges.length) return null;
+    if (!doc) return null;
     // Hide edges touching a collapsed section.
     const hidden = new Set(
       doc.nodes.filter((n) => n.section && collapsedSections.has(n.section)).map((n) => n.id)
     );
     const visible = doc.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to));
-    if (!visible.length) return null;
+    const src = connectFrom ? nodeById(connectFrom) : null;
+    if (!visible.length && !src) return null;
     // Pre-compute a world→SVG path for every edge between live nodes.
     const edgePath = (edge: CanvasEdge): string | null => {
       const a = nodeById(edge.from);
@@ -1090,6 +1862,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             </g>
           );
         })}
+        {src && (
+          <line
+            class="cn-connect-line"
+            x1={src.x + src.w / 2}
+            y1={src.y + src.h / 2}
+            x2={connectEndRef.current?.x ?? src.x + src.w / 2}
+            y2={connectEndRef.current?.y ?? src.y + src.h / 2}
+          />
+        )}
         <rect class="cn-marquee" x="0" y="0" width="0" height="0" display="none" />
       </svg>
     );
@@ -1098,62 +1879,114 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   return (
     <div class={`canvas-wrap ${isFullscreen ? 'cn-fullscreen' : ''}`} ref={wrapRef}>
       <h2 class="panel-title" style="display:flex;align-items:center;gap:6px">
-        Planning canvas
-        {!readOnly && <span class="dim" style="font-weight:400;font-size:0.7rem">— drag nodes, double-click to edit, Ctrl+Z to undo</span>}
+        {t('canvas.title')}
+        {!readOnly && <span class="dim" style="font-weight:400;font-size:0.7rem">{t('canvas.titleHint')}</span>}
       </h2>
       {/* Top toolbar: view controls + mode + save status */}
       <div class="cn-toolbar">
         <div class="cn-tb-group">
-          <button class="cn-tb-btn" title="Zoom out (scroll to zoom)" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)}>
+          <button class="cn-tb-btn" title={t('canvas.zoomOut')} aria-label={t('canvas.zoomOut')} onClick={() => zoomBy(1 / 1.2)}>
             <ZoomOut width={15} height={15} />
           </button>
-          <button class="cn-tb-btn" title="Zoom in" aria-label="Zoom in" onClick={() => zoomBy(1.2)}>
+          <button class="cn-tb-btn" title={t('canvas.zoomIn')} aria-label={t('canvas.zoomIn')} onClick={() => zoomBy(1.2)}>
             <ZoomIn width={15} height={15} />
           </button>
-          <button class="cn-tb-btn" title="Fit all nodes" aria-label="Fit all nodes" onClick={fitView}>
+          <button class="cn-tb-btn" title={t('canvas.fitAll')} aria-label={t('canvas.fitAll')} onClick={() => fitView()}>
             <Maximize width={14} height={14} />
           </button>
-          <button class="cn-tb-btn cn-zoom-btn" title={`Zoom: ${Math.round(view.z * 100)}% — click to reset to 100%`} aria-label={`Zoom ${Math.round(view.z * 100)}%`} onClick={resetZoom}>
+          {selNodes.length > 0 && (
+            <button class="cn-tb-btn" title={t('canvas.fitSelection')} aria-label={t('canvas.fitSelection')} onClick={() => fitView(selNodes)}>
+              <Maximize width={14} height={14} />
+            </button>
+          )}
+          <button class="cn-tb-btn cn-zoom-btn" title={t('canvas.resetZoom', { pct: Math.round(view.z * 100) })} aria-label={t('canvas.resetZoom', { pct: Math.round(view.z * 100) })} onClick={resetZoom}>
             {Math.round(view.z * 100)}%
           </button>
-          <button class="cn-tb-btn" title="Reset view (Home)" aria-label="Reset view" onClick={resetView}>
+          <button class="cn-tb-btn" title={t('canvas.resetView')} aria-label={t('canvas.resetView')} onClick={resetView}>
             <Home width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={toggleFullscreen}>
+          <button class="cn-tb-btn" title={isFullscreen ? t('canvas.exitFullscreen') : t('canvas.fullscreen')} aria-label={isFullscreen ? t('canvas.exitFullscreen') : t('canvas.fullscreen')} onClick={toggleFullscreen}>
             {isFullscreen ? <Minimize2 width={15} height={15} /> : <Maximize2 width={15} height={15} />}
           </button>
+          <button class="cn-tb-btn" title={t('canvas.exportPng')} aria-label={t('canvas.exportPng')} onClick={exportPng}>
+            <ImageDown width={15} height={15} />
+          </button>
+          {peers.length > 0 && (
+            <span class="cn-presence" title={peers.map((p) => p.displayName || p.username).join(', ')}>
+              {peers.slice(0, 5).map((p, i) => {
+                const label = p.displayName || p.username;
+                const url = avatarUrl(p.id, (p.avatarExt as any) ?? null);
+                return url ? (
+                  <img key={p.id} class="cn-presence-avatar" src={url} style={{ '--pi': i } as any} alt={label} width={18} height={18} />
+                ) : (
+                  <span key={p.id} class="cn-presence-avatar cn-presence-initial" style={{ '--pi': i, '--pc': peerColor(p.id) } as any} aria-label={label}>
+                    {(label || '?').slice(0, 1).toUpperCase()}
+                  </span>
+                );
+              })}
+              {peers.length > 5 && <span class="cn-presence-more">+{peers.length - 5}</span>}
+              <span class="cn-presence-dot" aria-hidden="true" />
+            </span>
+          )}
         </div>
         <div class="cn-tb-group">
-          <button class="cn-tb-btn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!canUndo} onClick={undo}>
+          <button class="cn-tb-btn" title={t('canvas.undo')} aria-label={t('canvas.undo')} disabled={!canUndo} onClick={undo}>
             <Undo2 width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={!canRedo} onClick={redo}>
+          <button class="cn-tb-btn" title={t('canvas.redo')} aria-label={t('canvas.redo')} disabled={!canRedo} onClick={redo}>
             <Redo2 width={14} height={14} />
           </button>
         </div>
         <div class="cn-tb-group">
           {!readOnly && (
-            <button class="cn-tb-btn" title="Add a horizontal section (swimlane)" aria-label="Add section" onClick={() => setAddSectionOpen(true)}>
+            <button class="cn-tb-btn" title={t('canvas.addSection')} aria-label={t('canvas.addSection')} onClick={() => setAddSectionOpen(true)}>
               <Rows3 width={15} height={15} />
-              {addSectionOpen ? <span class="cn-tb-hint">name</span> : null}
             </button>
           )}
-          <button class={`cn-tb-btn ${connectFrom ? 'cn-active' : ''}`} title="Connect nodes (select source, then target)" aria-label="Connect nodes" aria-pressed={!!connectFrom} disabled={readOnly || !selNode} onClick={() => setConnectFrom(connectFrom ? null : selNode)}>
+          <button class={`cn-tb-btn ${connectFrom ? 'cn-active' : ''}`} title={t('canvas.connect')} aria-label={t('canvas.connect')} aria-pressed={!!connectFrom} disabled={readOnly || !selNode} onClick={() => (connectFrom ? setConnectFrom(null) : selNode && beginConnect(selNode))}>
             <Link2 width={15} height={15} />
-            {connectFrom ? <span class="cn-tb-hint">pick target</span> : null}
+            {connectFrom ? <span class="cn-tb-hint">{t('canvas.connectPickTarget')}</span> : null}
           </button>
+          <span class="cn-stats-chip" title={t('canvas.stats', { nodes: doc?.nodes.length ?? 0, edges: doc?.edges.length ?? 0 })}>
+            {t('canvas.stats', { nodes: doc?.nodes.length ?? 0, edges: doc?.edges.length ?? 0 })}
+          </span>
           {readOnly && (
-            <span class="cn-ro-chip" title="Your role can only view this canvas" role="status">
-              <Lock width={11} height={11} /> Read-only
+            <span class="cn-ro-chip" title={t('canvas.readOnlyChipTitle')} role="status">
+              <Lock width={11} height={11} /> {t('canvas.readOnlyChip')}
             </span>
           )}
         </div>
         <div class="cn-tb-spacer" />
         <div class="cn-save-state" role="status">
-          {saveState === 'saving' && <span class="dim">Saving…</span>}
-          {saveState === 'dirty' && <span class="dim">Unsaved changes</span>}
-          {saveState === 'saved' && savedAt && <span class="dim">Saved {savedAt}</span>}
-          {saveError ? <span class="cn-save-err">{saveError}</span> : null}
+          {remoteUpdated && (
+            <span class="cn-remote-banner">
+              <Globe width={12} height={12} />
+              {t('canvas.remoteUpdated')}
+              <button class="cn-remote-load" onClick={() => {
+                setRemoteUpdated(false);
+                getProjectCanvas(slugRef.current)
+                  .then((d) => {
+                    docRef.current = d; setDoc(d);
+                    baseDocRef.current = JSON.stringify(d);
+                  })
+                  .catch(() => { /* next nudge retries */ });
+              }}>
+                {t('canvas.remoteLoad')}
+              </button>
+              <button class="cn-remote-dismiss" aria-label={t('canvas.remoteDismiss')} onClick={() => setRemoteUpdated(false)}>
+                <X width={11} height={11} />
+              </button>
+            </span>
+          )}
+          {saveState === 'saving' && <span class="dim">{t('canvas.saving')}</span>}
+          {saveState === 'dirty' && <span class="dim">{t('canvas.unsaved')}</span>}
+          {saveState === 'saved' && savedAt && <span class="dim">{t('canvas.savedAt', { time: savedAt })}</span>}
+          {saveError ? (
+            <>
+              <span class="cn-save-err">{t('canvas.saveFailed', { error: saveError })}</span>
+              <button class="cn-tb-btn" onClick={flushSave}>{t('canvas.saveRetry')}</button>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -1165,13 +1998,13 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             const count = doc.nodes.filter((n) => n.section === s.id).length;
             return (
               <span key={s.id} class={`cn-section-chip c-${s.color}`}>
-                <button class="cn-section-toggle" aria-label={collapsed ? 'Expand section' : 'Collapse section'} onClick={() => toggleSection(s.id)}>
+                <button class="cn-section-toggle" aria-label={collapsed ? t('canvas.sectionExpand') : t('canvas.sectionCollapse')} onClick={() => toggleSection(s.id)}>
                   {collapsed ? <ChevronRight width={12} height={12} /> : <ChevronDown width={12} height={12} />}
                 </button>
                 <span class="cn-section-name">{s.name}</span>
                 <span class="cn-section-count">{count}</span>
                 {!readOnly && (
-                  <button class="cn-section-del" aria-label={`Delete section ${s.name}`} onClick={() => setConfirmDelSection(s.id)}>
+                  <button class="cn-section-del" aria-label={t('canvas.sectionDelete', { name: s.name })} onClick={() => setConfirmDelSection(s.id)}>
                     <X width={12} height={12} />
                   </button>
                 )}
@@ -1183,15 +2016,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
               <input
                 autoFocus
                 class="cn-section-input"
-                placeholder="Section name"
-                aria-label="New section name"
+                placeholder={t('canvas.sectionNamePlaceholder')}
+                aria-label={t('canvas.sectionNameAria')}
                 onKeyDown={(e: any) => {
                   if (e.key === 'Enter') addSection(e.currentTarget.value);
                   if (e.key === 'Escape') setAddSectionOpen(false);
                 }}
                 onBlur={() => setAddSectionOpen(false)}
               />
-              <button class="cn-section-ok" aria-label="Create section" onClick={(e) => {
+              <button class="cn-section-ok" aria-label={t('canvas.sectionCreate')} onClick={(e) => {
                 const inp = (e.currentTarget.parentElement as HTMLElement).querySelector('.cn-section-input') as HTMLInputElement;
                 if (inp) addSection(inp.value);
               }}>
@@ -1209,8 +2042,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <button
               key={c}
               class={`cn-dot c-${c} ${selected.color === c ? 'cn-dot-active' : ''}`}
-              title={`${c} color`}
-              aria-label={`${c} color`}
+              title={t('canvas.colorAria', { color: c })}
+              aria-label={t('canvas.colorAria', { color: c })}
               aria-pressed={selected.color === c}
               onClick={() => setColor(selected.id, c)}
             />
@@ -1218,8 +2051,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           {doc?.sections?.length ? (
             <select
               class="cn-section-select"
-              title="Move node to section"
-              aria-label="Move selected node to section"
+              title={t('canvas.moveToSection')}
+              aria-label={t('canvas.moveToSectionAria')}
               value={selected.section ?? ''}
               onPointerDown={(e: any) => e.stopPropagation()}
               onClick={(e: any) => e.stopPropagation()}
@@ -1228,42 +2061,51 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 setNodeSection(selected.id, e.currentTarget.value || undefined);
               }}
             >
-              <option value="">No section</option>
+              <option value="">{t('canvas.noSection')}</option>
               {doc.sections.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
           ) : null}
           <span class="cn-sel-sep" />
-          <button class="cn-tb-btn" title="Bring to front" aria-label="Bring selected to front" onClick={bringToFront}>
+          <button class="cn-tb-btn" title={t('canvas.bringToFront')} aria-label={t('canvas.bringToFront')} onClick={bringToFront}>
             <BringToFront width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Send to back" aria-label="Send selected to back" onClick={sendToBack}>
+          <button class="cn-tb-btn" title={t('canvas.sendToBack')} aria-label={t('canvas.sendToBack')} onClick={sendToBack}>
             <SendToBack width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Duplicate (Ctrl+D)" aria-label="Duplicate selected" onClick={duplicateSelected}>
+          <button class="cn-tb-btn" title={t('canvas.duplicate')} aria-label={t('canvas.duplicateAria')} onClick={duplicateSelected}>
             <CopyPlus width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Copy (Ctrl+C)" aria-label="Copy selected" onClick={copySelected}>
+          <button class="cn-tb-btn" title={t('canvas.copy')} aria-label={t('canvas.copyAria')} onClick={copySelected}>
             <Copy width={14} height={14} />
           </button>
-          <button class="cn-tb-btn" title="Delete (Del)" aria-label="Delete selected" onClick={removeSelected}>
+          <button
+            class="cn-tb-btn"
+            title={t('canvas.pushToNotes')}
+            aria-label={t('canvas.pushToNotesAria')}
+            disabled={pushingNotes}
+            onClick={pushSelectionToNotes}
+          >
+            <ClipboardList width={14} height={14} />
+          </button>
+          <button class="cn-tb-btn" title={t('canvas.deleteSelected')} aria-label={t('canvas.deleteSelectedAria')} onClick={removeSelected}>
             <Trash2 width={14} height={14} />
           </button>
         </div>
       )}
       {selEdge && !readOnly && (
         <div class="cn-selbar cn-selbar-edge">
-          <span class="cn-sel-label">Selected arrow</span>
+          <span class="cn-sel-label">{t('canvas.selectedArrow')}</span>
           <span class="cn-sel-sep" />
-          <button class="cn-tb-btn" title="Delete arrow (Del)" aria-label="Delete selected arrow" onClick={removeSelected}>
+          <button class="cn-tb-btn" title={t('canvas.deleteArrow')} aria-label={t('canvas.deleteArrowAria')} onClick={removeSelected}>
             <Trash2 width={14} height={14} />
           </button>
         </div>
       )}
       {connectFrom && (
         <div class="cn-connecting" role="status">
-          <MousePointer2 width={12} height={12} /> Click the target node to connect
+          <MousePointer2 width={12} height={12} /> {t('canvas.connecting')}
         </div>
       )}
 
@@ -1271,20 +2113,20 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       {!readOnly && (
         <div class="cn-add-wrap">
           <div class={`cn-add-menu ${menuOpen ? 'open' : ''}`}>
-            <button class="cn-add-item" aria-label="Add sticky note" onClick={() => addNode('note')}>
-              <StickyNote width={15} height={15} /> Sticky note <span class="dim">N</span>
+            <button class="cn-add-item" aria-label={t('canvas.addNote')} onClick={() => addNode('note')}>
+              <StickyNote width={15} height={15} /> {t('canvas.addNote')} <span class="dim">N</span>
             </button>
-            <button class="cn-add-item" aria-label="Add task card" onClick={() => addNode('card')}>
-              <CheckSquare width={15} height={15} /> Task card <span class="dim">C</span>
+            <button class="cn-add-item" aria-label={t('canvas.addCard')} onClick={() => addNode('card')}>
+              <CheckSquare width={15} height={15} /> {t('canvas.addCard')} <span class="dim">C</span>
             </button>
-            <button class="cn-add-item" aria-label="Add arrow" onClick={() => { if (selNode) { setConnectFrom(selNode); setMenuOpen(false); } else setMenuOpen(false); }}>
-              <Link2 width={15} height={15} /> Arrow <span class="dim">L</span>
+            <button class="cn-add-item" aria-label={t('canvas.addArrow')} onClick={() => { if (selNode) { beginConnect(selNode); setMenuOpen(false); } else setMenuOpen(false); }}>
+              <Link2 width={15} height={15} /> {t('canvas.addArrow')} <span class="dim">L</span>
             </button>
-            <button class="cn-add-item" aria-label="Seed canvas from notes" onClick={() => { seedFromNotes(); setMenuOpen(false); }}>
-              <Sparkles width={15} height={15} /> Seed from notes
+            <button class="cn-add-item" aria-label={t('canvas.seedFromNotes')} onClick={() => { seedFromNotes(); setMenuOpen(false); }}>
+              <Sparkles width={15} height={15} /> {t('canvas.seedFromNotes')}
             </button>
           </div>
-          <button class="cn-add-fab" title="Add to canvas" aria-label="Add to canvas" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>
+          <button class="cn-add-fab" title={t('canvas.addAria')} aria-label={t('canvas.addAria')} aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>
             <Plus width={18} height={18} />
           </button>
         </div>
@@ -1295,7 +2137,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         <div
           class="cn-ctx"
           role="menu"
-          aria-label="Canvas menu"
+          aria-label={t('canvas.ctxMenuAria')}
           style={{ left: Math.min(ctxMenu.x, window.innerWidth - 230), top: Math.min(ctxMenu.y, window.innerHeight - 320) }}
           onContextMenu={(e: any) => {
             e.preventDefault();
@@ -1307,38 +2149,38 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <>
               {!readOnly && (
                 <button class="cn-ctx-item" role="menuitem" onClick={() => { startEdit(ctxMenu.nodeId!); closeCtxMenu(); }}>
-                  <Pencil width={14} height={14} /> Edit
+                  <Pencil width={14} height={14} /> {t('canvas.ctxEdit')}
                 </button>
               )}
               {!readOnly && (
                 <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); duplicateSelected(); closeCtxMenu(); }}>
-                  <CopyPlus width={14} height={14} /> Duplicate <span class="dim">Ctrl+D</span>
+                  <CopyPlus width={14} height={14} /> {t('canvas.duplicate')} <span class="dim">Ctrl+D</span>
                 </button>
               )}
               {!readOnly && (
                 <>
                   <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); copySelected(); closeCtxMenu(); }}>
-                    <Copy width={14} height={14} /> Copy <span class="dim">Ctrl+C</span>
+                    <Copy width={14} height={14} /> {t('canvas.copy')} <span class="dim">Ctrl+C</span>
                   </button>
                   <span class="cn-ctx-sep" />
                   <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); bringToFront(); closeCtxMenu(); }}>
-                    <BringToFront width={14} height={14} /> Bring to front
+                    <BringToFront width={14} height={14} /> {t('canvas.bringToFront')}
                   </button>
                   <button class="cn-ctx-item" role="menuitem" onClick={() => { setSelNodes([ctxMenu.nodeId!]); sendToBack(); closeCtxMenu(); }}>
-                    <SendToBack width={14} height={14} /> Send to back
+                    <SendToBack width={14} height={14} /> {t('canvas.sendToBack')}
                   </button>
                   <span class="cn-ctx-sep" />
-                  <span class="cn-ctx-label">Color</span>
+                  <span class="cn-ctx-label">{t('canvas.ctxColor')}</span>
                   <span class="cn-ctx-colors">
                     {COLORS.map((c) => (
-                      <button key={c} type="button" class={`cn-dot c-${c} ${doc?.nodes.find((n) => n.id === ctxMenu.nodeId)?.color === c ? 'cn-dot-active' : ''}`} aria-label={`${c} color`} onClick={() => { setColor(ctxMenu.nodeId!, c); closeCtxMenu(); }} />
+                      <button key={c} type="button" class={`cn-dot c-${c} ${doc?.nodes.find((n) => n.id === ctxMenu.nodeId)?.color === c ? 'cn-dot-active' : ''}`} aria-label={t('canvas.colorAria', { color: c })} onClick={() => { setColor(ctxMenu.nodeId!, c); closeCtxMenu(); }} />
                     ))}
                   </span>
                   {doc?.sections?.length ? (
                     <>
-                      <span class="cn-ctx-label">Section</span>
+                      <span class="cn-ctx-label">{t('canvas.ctxSection')}</span>
                       <select class="cn-section-select cn-ctx-select" value={doc.nodes.find((n) => n.id === ctxMenu.nodeId)?.section ?? ''} onClick={(e: any) => e.stopPropagation()} onChange={(e: any) => { setNodeSection(ctxMenu.nodeId!, e.currentTarget.value || undefined); closeCtxMenu(); }}>
-                        <option value="">No section</option>
+                        <option value="">{t('canvas.noSection')}</option>
                         {doc.sections.map((s) => (
                           <option key={s.id} value={s.id}>{s.name}</option>
                         ))}
@@ -1347,7 +2189,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   ) : null}
                   <span class="cn-ctx-sep" />
                   <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { removeNode(ctxMenu.nodeId!); closeCtxMenu(); }}>
-                    <Trash2 width={14} height={14} /> Delete
+                    <Trash2 width={14} height={14} /> {t('canvas.ctxDeleteNode')}
                   </button>
                 </>
               )}
@@ -1356,7 +2198,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <>
               {!readOnly && (
                 <button class="cn-ctx-item cn-ctx-danger" role="menuitem" onClick={() => { removeEdge(ctxMenu.edgeId!); closeCtxMenu(); }}>
-                  <Trash2 width={14} height={14} /> Delete arrow
+                  <Trash2 width={14} height={14} /> {t('canvas.ctxDeleteArrow')}
                 </button>
               )}
             </>
@@ -1364,21 +2206,21 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             <>
               {!readOnly && (
                 <button class="cn-ctx-item" role="menuitem" onClick={() => { addNode('note'); closeCtxMenu(); }}>
-                  <StickyNote width={14} height={14} /> Sticky note <span class="dim">N</span>
+                  <StickyNote width={14} height={14} /> {t('canvas.addNote')} <span class="dim">N</span>
                 </button>
               )}
               {!readOnly && (
                 <button class="cn-ctx-item" role="menuitem" onClick={() => { addNode('card'); closeCtxMenu(); }}>
-                  <CheckSquare width={14} height={14} /> Task card <span class="dim">C</span>
+                  <CheckSquare width={14} height={14} /> {t('canvas.addCard')} <span class="dim">C</span>
                 </button>
               )}
               {!readOnly && copyRef.current?.nodes.length ? (
                 <button class="cn-ctx-item" role="menuitem" onClick={() => { pasteFromClipboard(); closeCtxMenu(); }}>
-                  <ClipboardPaste width={14} height={14} /> Paste <span class="dim">Ctrl+V</span>
+                  <ClipboardPaste width={14} height={14} /> {t('canvas.paste')} <span class="dim">Ctrl+V</span>
                 </button>
               ) : null}
               <button class="cn-ctx-item" role="menuitem" onClick={() => { fitView(); closeCtxMenu(); }}>
-                <Maximize width={14} height={14} /> Fit all nodes
+                <Maximize width={14} height={14} /> {t('canvas.fitAll')}
               </button>
             </>
           )}
@@ -1395,6 +2237,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
+        onDblClick={onRootDblClick}
         onContextMenu={(e: any) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1422,8 +2265,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   <button
                     class={`cn-check ${n.done ? 'done' : ''}`}
                     type="button"
-                    title={n.done ? 'Mark not done' : 'Mark done'}
-                    aria-label={n.done ? 'Mark not done' : 'Mark done'}
+                    title={n.done ? t('canvas.nodeCheckDone') : t('canvas.nodeCheckTodo')}
+                    aria-label={n.done ? t('canvas.nodeCheckDone') : t('canvas.nodeCheckTodo')}
                     aria-pressed={n.done}
                     onPointerDown={(e: any) => e.stopPropagation()}
                     onClick={(e) => {
@@ -1440,15 +2283,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                     data-id={n.id}
                     value={n.text}
                     autofocus
-                    placeholder={n.type === 'card' ? 'Task description…' : 'Type your note…'}
-                    onInput={(e: any) => patchNode(n.id, { text: e.currentTarget.value }, false)}
+                    placeholder={n.type === 'card' ? t('canvas.cardPlaceholder') : t('canvas.notePlaceholder')}
+                    onInput={(e: any) => onEditorInput(n.id, e)}
                     onBlur={commitEdit}
                     onKeyDown={onEditorKey}
                     onClick={(e: any) => e.stopPropagation()}
                     onPointerDown={(e: any) => e.stopPropagation()}
                   />
                 ) : (
-                  <div class="cn-text">{n.text || <span class="cn-placeholder">Double-click to edit</span>}</div>
+                  <div class="cn-text">{n.text || <span class="cn-placeholder">{t('canvas.placeholderClickToEdit')}</span>}</div>
                 )}
                 {!isEditing && !readOnly && (
                   <div class="cn-node-colors">
@@ -1457,7 +2300,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                         key={c}
                         type="button"
                         class={`cn-dot s c-${c} ${n.color === c ? 'cn-dot-active' : ''}`}
-                        aria-label={`Set ${c} color`}
+                        aria-label={t('canvas.colorAria', { color: c })}
                         aria-pressed={n.color === c}
                         onPointerDown={(e: any) => e.stopPropagation()}
                         onClick={(e) => {
@@ -1471,7 +2314,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 {isSel && !readOnly && (
                   <div
                     class="cn-resize-handle"
-                    aria-hidden="true"
+                    aria-label={t('canvas.resizeAria')}
                     onPointerDown={(e: any) => {
                       e.stopPropagation();
                       if (readOnly) return;
@@ -1482,18 +2325,36 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 {isSel && !readOnly && (
                   <div
                     class="cn-port"
-                    title="Drag to another node to connect"
-                    aria-hidden="true"
+                    title={t('canvas.connectPort')}
                     onPointerDown={(e: any) => {
                       e.stopPropagation();
                       if (readOnly) return;
-                      setConnectFrom(n.id);
+                      beginConnect(n.id);
                     }}
                   />
                 )}
               </div>
             );
           })}
+
+        {/* live collaborator cursors (world coords) */}
+        {cursors.map((c) => (
+          <div
+            key={c.id}
+            class="cn-peer-cursor"
+            style={{ left: c.x, top: c.y, '--pc': c.color } as any}
+          >
+            <svg width="15" height="19" viewBox="0 0 15 19" aria-hidden="true">
+              <path
+                d="M1.5 1l11.5 11.5H6.2L3.8 18 1.5 1z"
+                fill={c.color}
+                stroke="#fff"
+                stroke-width="1.2"
+              />
+            </svg>
+            <span class="cn-peer-cursor-name">{c.name}</span>
+          </div>
+        ))}
         </div>
 
         {loaded && doc && doc.nodes.length === 0 && (
@@ -1501,29 +2362,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             class="cn-empty"
             role="button"
             tabIndex={0}
-            aria-label="Add to canvas"
+            aria-label={t('canvas.addAria')}
             onClick={() => setMenuOpen(true)}
             onKeyDown={(e: KeyboardEvent) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                setMenuOpen(true);
+                if (!readOnly) addNode('note');
               }
             }}
           >
-            <div class="cn-empty-icon">✸</div>
-            <div class="cn-empty-title">An empty board for your big ideas</div>
-            <div class="cn-empty-sub">
-              Drop sticky notes, task cards, or link them with arrows. Press Enter to add your first item — or use <b>N</b> / <b>C</b> to create a note or card.
-            </div>
+            <div class="cn-empty-icon" aria-hidden="true">✸</div>
+            <div class="cn-empty-title">{t('canvas.emptyTitle')}</div>
+            <div class="cn-empty-sub">{t('canvas.emptySub')}</div>
           </div>
         )}
       </div>
 
       <ConfirmModal
         open={!!confirmDelSection}
-        title={`Delete section '${doc?.sections?.find((s) => s.id === confirmDelSection)?.name ?? ''}'?`}
-        message="Nodes inside it stay on the board but lose their section."
-        confirmLabel="Delete section"
+        title={t('canvas.deleteSectionTitle', { name: doc?.sections?.find((s) => s.id === confirmDelSection)?.name ?? '' })}
+        message={t('canvas.deleteSectionMessage')}
+        confirmLabel={t('canvas.deleteSectionConfirm')}
         danger
         onCancel={() => setConfirmDelSection(null)}
         onConfirm={() => {

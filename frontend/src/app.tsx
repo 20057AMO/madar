@@ -1,6 +1,6 @@
 import { Component, type ComponentChildren } from 'preact';
 import { lazy, Suspense } from 'preact/compat';
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { Router, Route } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
@@ -40,21 +40,67 @@ import {
 import { UPDATE_RUNNING_STATES } from './views/settings-shared';
 import { Avatar } from './components/Avatar';
 
-const Dashboard = lazy(() => import('./views/Dashboard').then(m => ({ default: m.Dashboard })));
-const Projects = lazy(() => import('./views/Projects').then(m => ({ default: m.Projects })));
-const Project = lazy(() => import('./views/Project').then(m => ({ default: m.Project })));
-  const Opencode = lazy(() => import('./views/Opencode').then(m => ({ default: m.Opencode })));
-  const OpencodeStudio = lazy(() => import('./views/OpencodeStudio').then(m => ({ default: m.OpencodeStudio })));
-const Agents = lazy(() => import('./views/Agents').then(m => ({ default: m.Agents })));
-const EmbeddedIDE = lazy(() => import('./views/EmbeddedIDE').then(m => ({ default: m.EmbeddedIDE })));
-const Terminals = lazy(() => import('./views/Terminals').then(m => ({ default: m.Terminals })));
-const Providers = lazy(() => import('./views/Providers').then(m => ({ default: m.Providers })));
-const Settings = lazy(() => import('./views/Settings').then(m => ({ default: m.Settings })));
-const Profile = lazy(() => import('./views/Profile').then(m => ({ default: m.Profile })));
-const Team = lazy(() => import('./views/Team').then(m => ({ default: m.Team })));
-const UserProfile = lazy(() => import('./views/UserProfile').then(m => ({ default: m.UserProfile })));
-const Planner = lazy(() => import('./views/Planner').then(m => ({ default: m.Planner })));
-const TeamChat = lazy(() => import('./views/Chat').then(m => ({ default: m.Chat })));
+/**
+ * Import wrappers with a side-effect-free prefetch seam: the chunk-network
+ * request is exported so keep-alive layers can fire it when their route is
+ * merely POSSIBLE (a sidebar link, a deep link) instead of when it renders.
+ * The dynamic import itself stays the loader — no eager fetch at boot.
+ */
+const loadDashboard = () => import('./views/Dashboard');
+const loadOpencode = () => import('./views/Opencode');
+const loadEmbeddedIDE = () => import('./views/EmbeddedIDE');
+const loadProject = () => import('./views/Project');
+const loadTeamChat = () => import('./views/Chat');
+const loadPlanner = () => import('./views/Planner');
+const loadTerminals = () => import('./views/Terminals');
+const loadProjects = () => import('./views/Projects');
+const loadAgents = () => import('./views/Agents');
+const loadProviders = () => import('./views/Providers');
+const loadSettings = () => import('./views/Settings');
+const loadProfile = () => import('./views/Profile');
+const loadTeam = () => import('./views/Team');
+const loadUserProfile = () => import('./views/UserProfile');
+const loadOpencodeStudio = () => import('./views/OpencodeStudio');
+
+const Dashboard = lazy(() => loadDashboard().then(m => ({ default: m.Dashboard })));
+const Projects = lazy(() => loadProjects().then(m => ({ default: m.Projects })));
+const Project = lazy(() => loadProject().then(m => ({ default: m.Project })));
+const Opencode = lazy(() => loadOpencode().then(m => ({ default: m.Opencode })));
+const OpencodeStudio = lazy(() => loadOpencodeStudio().then(m => ({ default: m.OpencodeStudio })));
+const Agents = lazy(() => loadAgents().then(m => ({ default: m.Agents })));
+const EmbeddedIDE = lazy(() => loadEmbeddedIDE().then(m => ({ default: m.EmbeddedIDE })));
+const Terminals = lazy(() => loadTerminals().then(m => ({ default: m.Terminals })));
+const Providers = lazy(() => loadProviders().then(m => ({ default: m.Providers })));
+const Settings = lazy(() => loadSettings().then(m => ({ default: m.Settings })));
+const Profile = lazy(() => loadProfile().then(m => ({ default: m.Profile })));
+const Team = lazy(() => loadTeam().then(m => ({ default: m.Team })));
+const UserProfile = lazy(() => loadUserProfile().then(m => ({ default: m.UserProfile })));
+const Planner = lazy(() => loadPlanner().then(m => ({ default: m.Planner })));
+const TeamChat = lazy(() => loadTeamChat().then(m => ({ default: m.Chat })));
+
+/**
+ * One idle tick of speculative prefetching for the most-likely next chunks.
+ * Runs ONCE after the shell is interactive; every loader is idempotent (the
+ * module promise is cached by the runtime), so a chunk already pulled by a
+ * real navigation dedupes. Keep-alive tool layers (/ide, /opencode) come
+ * first: their iframe-based first paint is the slowest in the product, and
+ * removing the chunk fetch from that critical path is the win that matters.
+ */
+function prefetchLikelyChunks() {
+  const idle = (cb: () => void) => {
+    if ('requestIdleCallback' in window) requestIdleCallback(cb, { timeout: 2500 });
+    else setTimeout(cb, 1200);
+  };
+  idle(() => {
+    void loadEmbeddedIDE();
+    void loadOpencode();
+  });
+  setTimeout(() => {
+    void loadDashboard();
+    void loadProject();
+    void loadTeamChat();
+  }, 3500);
+}
 
 
 interface ErrorBoundaryProps { children: ComponentChildren; }
@@ -120,6 +166,35 @@ const NavButton = ({
 
 function navigate(href: string): void {
   window.location.hash = href;
+}
+
+/**
+ * Exact / segment-aware match for the two full-screen tool layers. A plain
+ * startsWith mounted the bare layer for every near-miss (`/idea`,
+ * `/opencodefoo`, `/ide-x`), which strands the user on a chrome-less dead end
+ * they can only leave through the URL bar. Match the route segment instead:
+ * `/ide` and `/opencode` exactly (an optional trailing slash and the in-hash
+ * query are folded away), plus opencode's cold directory deep link
+ * `/#/opencode/<base64url-directory>` — the server path main.tsx's
+ * normalizeBootPath folds into the hash before the first render.
+ * `/opencode-studio` can never match, because an extra segment has to follow a
+ * real '/'.
+ */
+function isToolRoute(location: string | null, base: string, deepLink = false): boolean {
+  const path = (location || '').split('?')[0].split('#')[0].replace(/\/+$/, '');
+  if (path === base) return true;
+  return deepLink && path.length > base.length + 1 && path.startsWith(`${base}/`);
+}
+
+/** Stable <main> ids the skip link resolves to while a layer owns the screen. */
+const TOOL_MAIN_ID = { ide: 'ide-main', opencode: 'opencode-main' } as const;
+
+type ToolLayer = keyof typeof TOOL_MAIN_ID;
+
+function activeToolLayer(location: string | null): ToolLayer | null {
+  if (isToolRoute(location, '/ide')) return 'ide';
+  if (isToolRoute(location, '/opencode', true)) return 'opencode';
+  return null;
 }
 
 /**
@@ -347,12 +422,58 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
+/**
+ * Per-route document title. Every route — including the full-screen keep-alive
+ * layers (/ide, /opencode), which deliberately render no <Route> — needs a
+ * distinct title so the window, the tab strip and screen-reader announcements
+ * say where the user actually is. Location carries the query inside the hash,
+ * so it is stripped before matching. Hard-coded English on purpose: this is
+ * document metadata, not page copy, and the i18n lane is off-limits.
+ */
+const ROUTE_TITLES: Record<string, string> = {
+  '/': 'Dashboard',
+  '/projects': 'Projects',
+  '/chat': 'Team Chat',
+  '/planner': 'Planner',
+  '/terminals': 'Terminals',
+  '/ide': 'VS Code',
+  '/opencode': 'opencode',
+  '/opencode-studio': 'Opencode Studio',
+  '/providers': 'Providers',
+  '/team': 'Team',
+  '/settings': 'Settings',
+  '/profile': 'Profile',
+};
+
+function RouteTitle() {
+  const [location] = useHashLocation();
+  useEffect(() => {
+    const path = (location || '/').split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
+    let label = ROUTE_TITLES[path];
+    if (!label && path.startsWith('/project/')) label = 'Project';
+    if (!label && path.startsWith('/user/')) label = 'Profile';
+    if (!label && path.startsWith('/terminals/')) label = 'Terminals';
+    document.title = label ? `${label} — Madar` : 'Madar';
+  }, [location]);
+  return null;
+}
+
 function Shell() {
   const [location] = useHashLocation();
   const { user, loading } = useAuth();
   const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // One-shot speculative chunk prefetch once the shell is up and the user is
+  // known — never during the login/setup flow (no wasted bytes there).
+  const prefetchedRef = useRef(false);
+  useEffect(() => {
+    if (loading || prefetchedRef.current) return;
+    if (!user) return;
+    prefetchedRef.current = true;
+    prefetchLikelyChunks();
+  }, [loading, user]);
+  const layer = activeToolLayer(location);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -401,54 +522,80 @@ function Shell() {
     return <Suspense fallback={<div class="app-view" style="display:flex;align-items:center;justify-content:center;height:100vh;"><div class="dim" style="font-size:0.85rem">{t('common.loading')}</div></div>}><Agents /></Suspense>;
   }
 
+  // The tool layers cover the whole viewport but never unmount the shell, so
+  // everything under it would stay tabbable and visible to AT — ~18 invisible
+  // controls behind a full-screen page. `inert` is the mechanism: aria-hidden
+  // alone only hides from screen readers and leaves the keyboard free to walk
+  // into the hidden chrome, whereas inert drops the whole subtree out of both
+  // the tab order and the accessibility tree. Declared, not applied in an
+  // effect, so it is already in place on the first paint of the layer and is
+  // torn down the instant the layer closes. The skip link and the command
+  // palette sit outside .app-view (as does the toast stack) and keep working.
   return (
-    <div class="app-view">
-      <a class="skip-link" href="#main">{t('common.skipToContent')}</a>
-      <div class={`sidebar-backdrop${sidebarOpen ? ' open' : ''}`} onClick={() => setSidebarOpen(false)} />
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <div class="mobile-topbar">
-        <button class="menu-btn" aria-label={t('nav.openMenu')} onClick={() => setSidebarOpen(true)}>
-          <Menu width={20} height={20} />
-        </button>
-        <span class="mobile-topbar-brand">Madar</span>
-        <button
-          class="menu-btn palette-trigger"
-          aria-label={t('palette.title')}
-          title={`${t('palette.title')} (Ctrl+K)`}
-          onClick={() => setPaletteOpen(true)}
-        >
-          <Command width={16} height={16} />
-        </button>
+    <>
+      <a
+        class="skip-link"
+        href={layer ? `#${TOOL_MAIN_ID[layer]}` : '#main'}
+        onClick={(e) => {
+          // The app is hash-routed, so a plain fragment target would REPLACE
+          // the route (/#/ide → #ide-main) and drop the user on an empty shell
+          // instead of moving focus. Move focus to the landmark ourselves.
+          e.preventDefault();
+          const target = document.getElementById(layer ? TOOL_MAIN_ID[layer] : 'main');
+          if (!target) return;
+          target.focus();
+          target.scrollIntoView();
+        }}
+      >
+        {t('common.skipToContent')}
+      </a>
+      <div class="app-view" inert={layer !== null}>
+        <div class={`sidebar-backdrop${sidebarOpen ? ' open' : ''}`} onClick={() => setSidebarOpen(false)} />
+        <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        <div class="mobile-topbar">
+          <button class="menu-btn" aria-label={t('nav.openMenu')} onClick={() => setSidebarOpen(true)}>
+            <Menu width={20} height={20} />
+          </button>
+          <span class="mobile-topbar-brand">Madar</span>
+          <button
+            class="menu-btn palette-trigger"
+            aria-label={t('palette.title')}
+            title={`${t('palette.title')} (Ctrl+K)`}
+            onClick={() => setPaletteOpen(true)}
+          >
+            <Command width={16} height={16} />
+          </button>
+        </div>
+        <main class="main" id="main" tabindex={-1}>
+          <Suspense fallback={<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div class="dim" style="font-size:0.85rem">{t('common.loading')}</div></div>}>
+            <Route path="/" component={Dashboard} />
+            <Route path="/projects" component={Projects} />
+            <Route path="/chat" component={TeamChat} />
+            <Route path="/planner" component={Planner} />
+            <Route path="/project/:slug" component={Project} />
+            <Route path="/terminals" component={Terminals} />
+            <Route path="/terminals/:slug" component={Terminals} />
+            {user?.role === 'admin' ? (
+              <>
+                <Route path="/providers" component={Providers} />
+                <Route path="/team" component={Team} />
+                <Route path="/opencode-studio" component={OpencodeStudio} />
+              </>
+            ) : (
+              <>
+                <Route path="/providers" component={AdminOnly} />
+                <Route path="/team" component={AdminOnly} />
+                <Route path="/opencode-studio" component={AdminOnly} />
+              </>
+            )}
+            <Route path="/settings" component={Settings} />
+            <Route path="/profile" component={Profile} />
+            <Route path="/user/:id" component={UserProfile} />
+          </Suspense>
+        </main>
       </div>
-      <main class="main" id="main" tabindex={-1}>
-        <Suspense fallback={<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div class="dim" style="font-size:0.85rem">{t('common.loading')}</div></div>}>
-          <Route path="/" component={Dashboard} />
-          <Route path="/projects" component={Projects} />
-          <Route path="/chat" component={TeamChat} />
-        <Route path="/planner" component={Planner} />
-          <Route path="/project/:slug" component={Project} />
-          <Route path="/terminals" component={Terminals} />
-          <Route path="/terminals/:slug" component={Terminals} />
-          {user?.role === 'admin' ? (
-            <>
-              <Route path="/providers" component={Providers} />
-              <Route path="/team" component={Team} />
-              <Route path="/opencode-studio" component={OpencodeStudio} />
-            </>
-          ) : (
-            <>
-              <Route path="/providers" component={AdminOnly} />
-              <Route path="/team" component={AdminOnly} />
-              <Route path="/opencode-studio" component={AdminOnly} />
-            </>
-          )}
-          <Route path="/settings" component={Settings} />
-          <Route path="/profile" component={Profile} />
-          <Route path="/user/:id" component={UserProfile} />
-        </Suspense>
-      </main>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-    </div>
+    </>
   );
 }
 
@@ -490,14 +637,27 @@ function AdminOnly() {
 function IdeKeepAlive() {
   const [location] = useHashLocation();
   const { user } = useAuth();
-  const wants = !!user && location.startsWith('/ide');
+  const wants = !!user && isToolRoute(location, '/ide');
   const [everOpened, setEverOpened] = useState(wants);
+  // Background warm-up: the code-server frame is the heaviest first-load in the
+  // app (~3.5s cold: a 19MB workbench bundle to download + parse), so once the
+  // user is signed in we mount the IDE layer HIDDEN a few seconds after boot.
+  // The workbench downloads/parses while they work in the dashboard, and the
+  // first visit to /#/ide finds a ready frame instead of a spinner. Once the
+  // IDE is really opened this flag is irrelevant (everOpened takes over).
+  const [warmed, setWarmed] = useState(false);
 
   useEffect(() => {
     if (wants) setEverOpened(true);
   }, [wants]);
 
-  if (!everOpened || !user) return null;
+  useEffect(() => {
+    if (!user || everOpened || wants) return;
+    const t = setTimeout(() => setWarmed(true), 3500);
+    return () => clearTimeout(t);
+  }, [user, everOpened, wants]);
+
+  if ((!everOpened && !warmed) || !user) return null;
   return (
     <Suspense fallback={null}>
       <div style={wants ? undefined : 'display: none'}>
@@ -509,21 +669,38 @@ function IdeKeepAlive() {
 
 /**
  * Keep-alive opencode layer — same pattern as IdeKeepAlive: once /#/opencode
- * is opened the page stays mounted (hidden while navigating elsewhere), so
- * the opencode web session never reloads between visits. Note: /opencode
- * must NOT match /opencode-studio.
+ * (or its /#/opencode/<directory> cold deep link) is opened the page stays
+ * mounted (hidden while navigating elsewhere), so the opencode web session
+ * never reloads between visits. The segment-aware match means
+ * /opencode-studio can never land here, and a near-miss like /opencodefoo no
+ * longer opens a chrome-less layer.
  */
 function OpencodeKeepAlive() {
   const [location] = useHashLocation();
   const { user } = useAuth();
-  const wants = !!user && location.startsWith('/opencode') && !location.startsWith('/opencode-studio');
+  const wants = !!user && isToolRoute(location, '/opencode', true);
   const [everOpened, setEverOpened] = useState(wants);
 
   useEffect(() => {
     if (wants) setEverOpened(true);
   }, [wants]);
 
-  if (!everOpened || !user) return null;
+  // Background warm-up — tiered behind the IDE (IdeKeepAlive mounts at +3.5 s;
+  // this one at +5.5 s) so the two heavy frames never compete for bandwidth/
+  // parse CPU in the same tick. The opencode web bundle ships with NO cache
+  // headers and no compression (measured: 2.7 MB JS + 0.5 MB CSS raw), so this
+  // hidden frame also fills the per-session HTTP cache — later first-visits
+  // within the session reuse it instead of re-pulling megabytes. The component
+  // itself gates the actual frame on its first honest status answer.
+  const [warmed, setWarmed] = useState(false);
+
+  useEffect(() => {
+    if (!user || everOpened || wants) return;
+    const t = setTimeout(() => setWarmed(true), 5500);
+    return () => clearTimeout(t);
+  }, [user, everOpened, wants]);
+
+  if ((!everOpened && !warmed) || !user) return null;
   return (
     <Suspense fallback={null}>
       <div style={wants ? undefined : 'display: none'}>
@@ -540,6 +717,7 @@ export function App() {
         <ToastProvider>
           <AuthProvider>
             <Router hook={useHashLocation}>
+              <RouteTitle />
               <Shell />
               <IdeKeepAlive />
               <OpencodeKeepAlive />

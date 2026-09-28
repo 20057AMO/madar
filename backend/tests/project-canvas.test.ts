@@ -1,7 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
-import { req, reqAuth, uniqueId, initTestAuth, JWT_SECRET } from './helpers.ts';
+import WebSocket from 'ws';
+import { req, reqAuth, uniqueId, initTestAuth, signTestToken, JWT_SECRET, API_URL } from './helpers.ts';
 import type { CanvasNode, ProjectCanvas } from '../src/services/project-canvas.ts';
 
 /**
@@ -143,6 +144,25 @@ test('canvas normalization: junk rows dropped, bad edges removed, numeric clamps
   assert.strictEqual(junk.h, 900, 'huge height capped');
   assert.strictEqual(junk.color, 'yellow', 'unknown color normalizes');
   assert.strictEqual(junk.type, 'note', 'unknown type normalizes');
+});
+
+test('duplicate edges are deduped: one arrow per from→to direction', async () => {
+  const slug = await createTestProject('canvas-dup-edge');
+  const doc = canvasDoc(
+    [node('a', 'A'), node('b', 'B')],
+    [
+      edge('e-1', 'a', 'b'),
+      edge('e-2', 'a', 'b'), // exact duplicate pair — different id, same direction
+      edge('e-3', 'b', 'a'), // reverse direction is still allowed
+    ]
+  );
+  const { status, json } = await api('PUT', `/projects/${slug}/canvas`, doc);
+  assert.strictEqual(status, 200, `put: ${JSON.stringify(json)}`);
+  assert.strictEqual(json.edges.length, 2, 'duplicate a→b dropped, b→a kept');
+
+  const got = await api('GET', `/projects/${slug}/canvas`);
+  const pairs = got.json.edges.map((e: any) => `${e.from}>${e.to}`).sort();
+  assert.deepStrictEqual(pairs, ['a>b', 'b>a']);
 });
 
 test('canvas rejected: missing arrays, oversized payload, non-object body all 400', async () => {
@@ -351,4 +371,218 @@ test('swimlane sections: persist, normalize dangling refs, and tag the canvas mi
   const mirror = await api('GET', `/projects/${slug}/file?path=WSD_CANVAS.md`);
   assert.strictEqual(mirror.status, 200, 'mirror exists with a sectioned board');
   assert.match(mirror.json.content, /- \[note\] \[Infra\] Planned in infra/);
+});
+
+test('canvas live sync: a PUT broadcasts a canvas-updated nudge to the project room', async () => {
+  const slug = await createTestProject('canvas-live');
+  const token = signTestToken();
+  const wsBase = API_URL.replace(/\/api$/, '').replace(/^http/, 'ws');
+  const ws = new WebSocket(`${wsBase}/ws/projects/${encodeURIComponent(slug)}/canvas?token=${encodeURIComponent(token)}`);
+
+  try {
+    // The room must accept an authenticated member connection.
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('ws open timeout')), 8000);
+      ws.once('open', () => { clearTimeout(t); resolve(); });
+      ws.once('error', (e) => { clearTimeout(t); reject(e); });
+    });
+
+    // Register the listener BEFORE the save so nothing is missed.
+    const nudgePromise = new Promise<any>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no canvas-updated nudge within 8s')), 8000);
+      ws.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg?.type === 'canvas-updated') { clearTimeout(t); resolve(msg); }
+        } catch { /* ignore */ }
+      });
+    });
+    // If the test bails before the nudge arrives, don't let the late timer
+    // rejection crash the run (node:test treats unhandled rejections as errors).
+    nudgePromise.catch(() => {});
+
+    const put = await api('PUT', `/projects/${slug}/canvas`, {
+      version: 1,
+      nodes: [node('live-1', 'Synced live')],
+      edges: [],
+      updatedAt: null,
+    });
+    assert.strictEqual(put.status, 200, `save failed: ${put.status}`);
+
+    const nudge = await nudgePromise;
+    assert.strictEqual(nudge.type, 'canvas-updated');
+    assert.strictEqual(nudge.nodes, 1, 'nudge carries the new node count');
+    assert.strictEqual(nudge.edges, 0);
+    assert.ok(typeof nudge.updatedAt === 'string' && nudge.updatedAt.length > 0, 'nudge carries updatedAt');
+  } finally {
+    try { ws.close(); } catch { /* already gone */ }
+  }
+});
+
+test('canvas ops: differential batch applies, broadcasts, is idempotent and caps batch size', async () => {
+  const slug = await createTestProject('canvas-ops');
+  const token = signTestToken();
+  const wsBase = API_URL.replace(/\/api$/, '').replace(/^http/, 'ws');
+  const ws = new WebSocket(`${wsBase}/ws/projects/${encodeURIComponent(slug)}/canvas?token=${encodeURIComponent(token)}`);
+
+  const collected: any[] = [];
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('ws open timeout')), 8000);
+      ws.once('open', () => { clearTimeout(t); resolve(); });
+      ws.once('error', (e) => { clearTimeout(t); reject(e); });
+    });
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg?.type === 'canvas-ops') collected.push(msg);
+      } catch { /* ignore */ }
+    });
+
+    // 1) add + patch + edge in one batch
+    const batch1 = await api('POST', `/projects/${slug}/canvas/ops`, {
+      ops: [
+        { op: 'node-add', node: node('op-a', 'Alpha') },
+        { op: 'node-add', node: node('op-b', 'Beta') },
+        { op: 'node-patch', id: 'op-a', patch: { x: 123, y: 45 } },
+        { op: 'edge-add', edge: { id: 'op-e1', from: 'op-a', to: 'op-b' } },
+      ],
+    });
+    assert.strictEqual(batch1.status, 200, `ops batch 1 failed: ${batch1.status} ${JSON.stringify(batch1.json)}`);
+
+    let doc = (await api('GET', `/projects/${slug}/canvas`)).json;
+    assert.strictEqual(doc.nodes.length, 2, 'both nodes added');
+    const a = doc.nodes.find((n: CanvasNode) => n.id === 'op-a');
+    assert.strictEqual(a.x, 123, 'patch applied');
+    assert.strictEqual(doc.edges.length, 1, 'edge added');
+
+    // 2) idempotent resend: same node-add + unknown-id patch + unknown kind
+    const batch2 = await api('POST', `/projects/${slug}/canvas/ops`, {
+      ops: [
+        { op: 'node-add', node: node('op-a', 'Alpha-resend') },
+        { op: 'node-patch', id: 'ghost', patch: { text: 'x' } },
+      ],
+    });
+    assert.strictEqual(batch2.status, 200, 'resend batch must be a 200 no-op');
+    doc = (await api('GET', `/projects/${slug}/canvas`)).json;
+    assert.strictEqual(doc.nodes.length, 2, 'node-add resend did not duplicate');
+    assert.strictEqual(doc.nodes.find((n: CanvasNode) => n.id === 'op-a').text, 'Alpha', 'resend did not overwrite');
+
+    // 3) cascade: deleting a node kills its edges
+    const batch3 = await api('POST', `/projects/${slug}/canvas/ops`, {
+      ops: [{ op: 'node-del', id: 'op-b' }],
+    });
+    assert.strictEqual(batch3.status, 200);
+    doc = (await api('GET', `/projects/${slug}/canvas`)).json;
+    assert.strictEqual(doc.nodes.length, 1);
+    assert.strictEqual(doc.edges.length, 0, 'edge cascaded away with its node');
+
+    // 4) validation: empty batch, unknown op kind, over-cap batch
+    const empty = await api('POST', `/projects/${slug}/canvas/ops`, { ops: [] });
+    assert.strictEqual(empty.status, 400, 'empty batch rejected');
+    const unknown = await api('POST', `/projects/${slug}/canvas/ops`, { ops: [{ op: 'board-wipe' }] });
+    assert.strictEqual(unknown.status, 400, 'unknown op kind rejected');
+    const tooMany = await api('POST', `/projects/${slug}/canvas/ops`, {
+      ops: Array.from({ length: 41 }, (_, i) => ({ op: 'node-patch', id: 'op-a', patch: { x: i } })),
+    });
+    assert.strictEqual(tooMany.status, 400, 'over-cap batch rejected');
+
+    // 5) viewer (read-only) cannot push ops
+    // (access control uses the same requireProjectAccess('editor') middleware
+    // as PUT — covered by the canvas access test; here we just verify the
+    // broadcast carried the exact applied ops with the sender id.)
+    await new Promise((r) => setTimeout(r, 600));
+    assert.ok(collected.length >= 3, `expected >=3 canvas-ops broadcasts, got ${collected.length}`);
+    const first = collected[0];
+    assert.strictEqual(first.type, 'canvas-ops');
+    assert.ok(Array.isArray(first.ops) && first.ops.length === 4, 'broadcast carries the exact applied batch');
+    assert.ok(first.ops.some((o: any) => o.op === 'node-add' && o.node?.id === 'op-a'), 'op payload preserved verbatim');
+    assert.ok(typeof first.by === 'string' && first.by.length > 0, 'broadcast carries the sender id');
+  } finally {
+    try { ws.close(); } catch { /* already gone */ }
+  }
+});
+
+test('canvas presence: roster broadcast + cursor relay between two clients', async () => {
+  const slug = await createTestProject('canvas-presence');
+  const wsBase = API_URL.replace(/\/api$/, '').replace(/^http/, 'ws');
+
+  // A second real member so cursors flow across (different) user ids.
+  const peerName = uniqueId('canvas-peer');
+  const mk = await reqAuth('POST', '/users', { username: peerName, password: 'canvas-test-pw', role: 'viewer' });
+  assert.strictEqual(mk.status, 201, `create peer user: ${mk.status}`);
+  const peer = (await mk.json()) as { id: string; username: string };
+  const peerToken = jwt.sign({ id: peer.id, username: peer.username, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const addM = await reqAuth('POST', `/projects/${slug}/members`, { userId: peer.id, role: 'viewer' });
+  assert.strictEqual(addM.status, 200, 'add peer member');
+
+  const open = (token: string) =>
+    new Promise<WebSocket>((resolve, reject) => {
+      const s = new WebSocket(`${wsBase}/ws/projects/${encodeURIComponent(slug)}/canvas?token=${encodeURIComponent(token)}`);
+      s.on('open', () => resolve(s));
+      s.on('error', reject);
+    });
+
+  let wsA: WebSocket | null = null;
+  let wsB: WebSocket | null = null;
+  try {
+    wsA = await open(signTestToken());
+    wsB = await open(peerToken);
+
+    // Each client eventually sees a roster containing BOTH users.
+    const rosterWithBoth = (ws: WebSocket) =>
+      new Promise<any>((resolve, reject) => {
+        const to = setTimeout(() => reject(new Error('roster timeout')), 5000);
+        const onMsg = (raw: any) => {
+          try {
+            const m = JSON.parse(raw.toString());
+            if (m?.type === 'canvas-roster' && Array.isArray(m.users) && m.users.some((u: any) => u.id === peer.id)) {
+              clearTimeout(to);
+              ws.off('message', onMsg);
+              resolve(m);
+            }
+          } catch { /* keep waiting */ }
+        };
+        ws.on('message', onMsg);
+      });
+    const ra = await rosterWithBoth(wsA);
+    await rosterWithBoth(wsB);
+    const adminId = ra.users.find((u: any) => u.id !== peer.id)?.id;
+    assert.ok(adminId, 'roster includes the initiating user too');
+    assert.ok(ra.users.every((u: any) => typeof u.username === 'string'), 'roster carries usernames');
+
+    // Cursor relay: A moves → B receives the frame attributed to A...
+    const cursorAtB = new Promise<any>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error('cursor relay timeout')), 5000);
+      wsB!.once('message', (raw: any) => { clearTimeout(to); resolve(JSON.parse(raw.toString())); });
+    });
+    wsA!.send(JSON.stringify({ type: 'cursor', x: 111.5, y: -40 }));
+    const cur = await cursorAtB;
+    assert.strictEqual(cur.type, 'cursor');
+    assert.strictEqual(cur.by, adminId, 'cursor frame carries the mover id');
+    assert.strictEqual(cur.x, 111.5);
+    assert.strictEqual(cur.y, -40);
+
+    // ...and A never hears its own cursor back (any A-attributed frame at A
+    // is a server bug — B's relayed frames are legitimate).
+    let selfEcho = false;
+    const echoTrap = (raw: any) => {
+      try { if (JSON.parse(raw.toString())?.by === adminId) selfEcho = true; } catch { /* junk */ }
+    };
+    wsA!.on('message', echoTrap);
+
+    // Junk frames must not kill the room: garbage then a valid B→A cursor.
+    wsB!.send('not-json{{');
+    wsB!.send(JSON.stringify({ type: 'cursor', x: 5, y: 6 }));
+    const cur2 = await new Promise<any>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error('cursor relay timeout (B→A)')), 5000);
+      wsA!.once('message', (raw: any) => { wsA!.off('message', echoTrap); clearTimeout(to); resolve(JSON.parse(raw.toString())); });
+    });
+    assert.strictEqual(cur2.type, 'cursor', 'room survives malformed frames');
+    assert.strictEqual(cur2.by, peer.id, 'B→A relay carries B id');
+    assert.strictEqual(selfEcho, false, 'sender excluded from its own cursor broadcast');
+  } finally {
+    for (const s of [wsA, wsB]) { try { s?.close(); } catch { /* already gone */ } }
+    try { await reqAuth('DELETE', `/users/${peer.id}`); } catch { /* cleanup best-effort */ }
+  }
 });

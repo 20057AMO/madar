@@ -1,6 +1,12 @@
 {
   "workbench.colorTheme": "Default Dark+",
   "workbench.iconTheme": "material-icon-theme",
+  "workbench.startupEditor": "none",
+  "telemetry.telemetryLevel": "off",
+  "update.mode": "none",
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "security.workspace.trust.enabled": false,
   "editor.fontFamily": "JetBrains Mono, Cascadia Code, Fira Code, monospace",
   "editor.fontSize": 14,
   "editor.formatOnSave": true,

@@ -2,20 +2,7 @@
 set -euo pipefail
 
 DATA_DIR="${WSD_DATA_DIR:-/app/data}"
-IDE_PASSWORD_FILE="$DATA_DIR/ide-password"
-
-# Resolve the IDE password: explicit env > persisted > generated
-if [ -n "${WSD_IDE_PASSWORD:-}" ]; then
-  IDE_PASSWORD="$WSD_IDE_PASSWORD"
-else
-  mkdir -p "$DATA_DIR"
-  if [ -f "$IDE_PASSWORD_FILE" ]; then
-    IDE_PASSWORD="$(cat "$IDE_PASSWORD_FILE")"
-  else
-    IDE_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '+/=' | cut -c1-16)"
-    printf '%s' "$IDE_PASSWORD" > "$IDE_PASSWORD_FILE"
-  fi
-fi
+mkdir -p "$DATA_DIR"
 
 # ── Web IDE ───────────────────────────────────────────────────
 echo "Madar: starting supervised code-server IDE on 0.0.0.0:8080 (no auth)"
@@ -31,6 +18,7 @@ rm -f "$CODE_SERVER_PID_FILE"
 (
   while true; do
     env -u PORT code-server --auth none --disable-telemetry --disable-update-check \
+      --disable-workspace-trust \
       --bind-addr 0.0.0.0:8080 /workspaces \
       > /tmp/code-server.log 2>&1 &
     CODE_SERVER_CHILD=$!

@@ -17,5 +17,18 @@
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- App-shell service worker: repeat boots of the SPA shell (including
+         the /#/ide and /#/opencode deep links) are answered from cache while
+         the network copy refreshes in the background. API/WebSocket traffic
+         is bypassed entirely by the worker. Registered post-load so it can
+         never contend with the first paint; failures are silently ignored
+         (private mode, file://, older browsers). -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function () {});
+        });
+      }
+    </script>
   </body>
 </html>

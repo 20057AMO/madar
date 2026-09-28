@@ -93,13 +93,28 @@ async function v1ListSessions(directory: string): Promise<Array<{ id?: unknown }
   return Array.isArray(j) ? j : [];
 }
 
-async function v1CreateSession(directory: string): Promise<void> {
-  await fetch(`${baseUrl()}/session?directory=${encodeURIComponent(directory)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{}',
-    signal: AbortSignal.timeout(3000),
-  });
+/**
+ * POST a session for `directory`, reporting the OUTCOME instead of pretending.
+ *
+ * `true`  — opencode answered ok, the session exists.
+ * `false` — we do NOT know (abort, connection refused, non-2xx). This is
+ *           deliberately not "no session": a client-side abort does not
+ *           un-create the session opencode is already writing, so reading
+ *           `false` as "absent" is what let the create path and opencode
+ *           disagree about a project forever.
+ */
+async function v1CreateSession(directory: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${baseUrl()}/session?directory=${encodeURIComponent(directory)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(3000),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
 async function v1DeleteSession(id: string): Promise<void> {
@@ -109,42 +124,92 @@ async function v1DeleteSession(id: string): Promise<void> {
   });
 }
 
-/** Create an opencode session for a workspace directory (best-effort). */
-export function createOpencodeSession(slug: string): void {
-  const directory = path.join(
-    process.env.WSD_PROJECTS_DIR || '/workspaces',
-    slug,
-  );
+function opencodeDirectory(slug: string): string {
+  return path.join(process.env.WSD_PROJECTS_DIR || '/workspaces', slug);
+}
+
+// ── Registration reconciliation ─────────────────────────────────────────
+//
+// The 3s abort makes the OUTCOME unknown, never the state absent: opencode may
+// still be writing the very session the client stopped listening for. Parking
+// that unknown is the whole point — an unconfirmed registration is remembered
+// and re-driven through the same idempotent POST until opencode confirms, with
+// a bounded attempt count and a give-up line (the entrypoint boot sync is the
+// backstop beyond that). Same repair shape as reconcileRunningDelegations():
+// detect the stale state, fix it off the request path, never throw.
+const REGISTRATION_RETRY_MS = 4_000;
+const REGISTRATION_MAX_ATTEMPTS = 5;
+
+const pendingRegistrations = new Map<string, number>();
+let reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+
+function parkRegistration(slug: string, attempts: number): void {
+  pendingRegistrations.set(slug, attempts);
+  if (reconcileTimer) return;
+  reconcileTimer = setTimeout(() => {
+    reconcileTimer = null;
+    void reconcileRegistrations();
+  }, REGISTRATION_RETRY_MS);
+  reconcileTimer.unref?.();
+}
+
+/**
+ * Re-drive every parked registration. The POST is idempotent, so a session the
+ * first attempt DID create is simply confirmed here rather than duplicated.
+ * The project id is deliberately NOT re-seeded: reconciliation must not add a
+ * filesystem side effect out of band, only resolve the session mismatch.
+ */
+async function reconcileRegistrations(): Promise<void> {
+  for (const [slug, attempts] of [...pendingRegistrations]) {
+    pendingRegistrations.delete(slug);
+    if (attempts >= REGISTRATION_MAX_ATTEMPTS) {
+      console.warn(
+        `[opencode] giving up session registration for '${slug}' after ${attempts} unconfirmed ` +
+          'attempts — the entrypoint boot sync will register it',
+      );
+      continue;
+    }
+    if (await v1CreateSession(opencodeDirectory(slug))) continue;
+    parkRegistration(slug, attempts + 1);
+  }
+}
+
+/**
+ * Create an opencode session for a workspace directory.
+ *
+ * Resolves `true` only when opencode CONFIRMED it. An unconfirmed outcome is
+ * never dropped: the slug is parked for reconciliation so the caller's belief
+ * and opencode's real state converge instead of silently diverging. Never
+ * rejects — an offline opencode must not fail a create.
+ */
+export function createOpencodeSession(slug: string): Promise<boolean> {
+  const directory = opencodeDirectory(slug);
   seedOpencodeProjectId(directory);
-  v1CreateSession(directory).catch(() => {
-    /* opencode not ready yet — startup sync in entrypoint covers it */
+  return v1CreateSession(directory).then((confirmed) => {
+    if (!confirmed) parkRegistration(slug, 0);
+    return confirmed;
   });
 }
 
 /** Ensure at least one session exists for the project (no duplicates). */
 export function ensureOpencodeSession(slug: string): void {
-  const directory = path.join(
-    process.env.WSD_PROJECTS_DIR || '/workspaces',
-    slug,
-  );
+  const directory = opencodeDirectory(slug);
   v1ListSessions(directory)
     .then((sessions) => {
       if (sessions.length > 0) return;
-      createOpencodeSession(slug);
+      return createOpencodeSession(slug);
     })
     .catch(() => {
       // opencode unreachable or unexpected shape — plain registration is
       // idempotent enough for this purpose.
-      createOpencodeSession(slug);
-    });
+      return createOpencodeSession(slug);
+    })
+    .catch(() => {});
 }
 
 /** Best-effort cleanup of sessions bound to a deleted project's directory. */
 export function unregisterOpencodeProjectSessions(slug: string): void {
-  const directory = path.join(
-    process.env.WSD_PROJECTS_DIR || '/workspaces',
-    slug,
-  );
+  const directory = opencodeDirectory(slug);
   v1ListSessions(directory)
     .then((sessions) => {
       for (const s of sessions) {

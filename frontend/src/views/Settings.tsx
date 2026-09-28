@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   TriangleAlert,
   ScrollText,
+  Gauge,
 } from 'lucide-preact';
 import { useAuth } from '../auth';
 import {
@@ -54,6 +55,7 @@ import { PwMeter } from '../components/PwMeter';
 import { ReAuthModal } from '../components/ReAuthModal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { fmtBytes } from '../lib/size';
+import { readPerfMetrics, clearPerfMetrics, median, type PerfStore, type FramePerf, type ShellPerf } from '../lib/perf-metrics';
 import { type Msg, AuditLog, UPDATE_RUNNING_STATES } from './settings-shared';
 import { useI18n } from '../i18n';
 
@@ -188,6 +190,147 @@ function WhRow({ w, onChanged, onDelete }: WhRowProps) {
         )}
       </div>
       {msg && <div class={msg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top:6px" role={msg.type === 'ok' ? 'status' : 'alert'}>{msg.text}</div>}
+    </div>
+  );
+}
+
+function fmtMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '—';
+  if (ms >= 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+/** DCL of 0 means 'not stamped' (SW-cached shell) — render it as such. */
+function fmtDcl(ms: number): string {
+  return fmtMs(ms || null);
+}
+
+function fmtAgo(at: number): string {
+  const s = Math.max(1, Math.round((Date.now() - at) / 1000));
+  if (s < 60) return t2Compat(`${s} ثانية مضت`, `${s}s ago`);
+  const m = Math.round(s / 60);
+  if (m < 60) return t2Compat(`${m} دقيقة مضت`, `${m}m ago`);
+  const h = Math.round(m / 60);
+  if (h < 24) return t2Compat(`${h} ساعة مضت`, `${h}h ago`);
+  return t2Compat(`${Math.round(h / 24)} يوم مضى`, `${Math.round(h / 24)}d ago`);
+}
+
+// Module-level fallback so fmtAgo works outside the component tree too — the
+// panel passes its own t2 through props, this is only a safety net.
+let t2Compat: (ar: string, en: string) => string = (_ar, en) => en;
+
+function FrameTable({
+  title,
+  rows,
+  t2,
+}: {
+  title: string;
+  rows: FramePerf[];
+  t2: (ar: string, en: string) => string;
+}) {
+  const latest = rows[rows.length - 1];
+  const okRows = rows.filter((r) => !r.errored);
+  const med = median(okRows.map((r) => r.totalMs));
+  return (
+    <div style="margin-bottom:14px">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <strong style="font-size:0.82rem">{title}</strong>
+        <span style="font-size:0.68rem;color:var(--text-3)">
+          {t2('الوسيط', 'median')} <code class="mono">{fmtMs(med)}</code>
+        </span>
+      </div>
+      {!latest ? (
+        <div class="settings-hint">{t2('لا قياسات بعد — افتح الصفحة مرة واحدة على الأقل.', 'No measurements yet — open the page at least once.')}</div>
+      ) : (
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px">
+          <span style="font-size:0.7rem;color:var(--text-2)">
+            {t2('آخر تحميل', 'Last load')}
+            {' '}<code class="mono" style="font-weight:600">{fmtMs(latest.totalMs)}</code>
+            {' '}· {t2('استقصاء الحالة', 'status probe')} <code class="mono">{fmtMs(latest.probeMs)}</code>
+            {' '}· {t2('الإطار', 'frame')} <code class="mono">{fmtMs(latest.frameMs)}</code>
+            {latest.errored && <span style="color:var(--red)"> · {t2('فشل', 'failed')}</span>}
+          </span>
+          <span style="font-size:0.68rem;color:var(--text-3)">{fmtAgo(latest.at)}</span>
+        </div>
+      )}
+      {okRows.length > 1 && (
+        <div style="display:flex;gap:2px;margin-top:8px;align-items:flex-end;height:26px" aria-hidden="true">
+          {okRows.slice(-12).map((r, i) => {
+            const max = Math.max(...okRows.slice(-12).map((x) => x.totalMs), 1);
+            const h = Math.max(3, Math.round((r.totalMs / max) * 26));
+            return (
+              <div
+                key={i}
+                style={`width:10px;height:${h}px;background:var(--accent,#4f8cff);opacity:0.75;border-radius:2px 2px 0 0`}
+                title={`${fmtMs(r.totalMs)} · ${fmtAgo(r.at)}`}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShellRow({ shell, t2 }: { shell: ShellPerf | undefined; t2: (ar: string, en: string) => string }) {
+  return (
+    <div style="margin-bottom:14px">
+      <strong style="font-size:0.82rem">{t2('غلاف التطبيق (هذا التحميل)', 'App shell (this load)')}</strong>
+      {!shell ? (
+        <div class="settings-hint">{t2('لم تُسجَّل قياسات بعد.', 'No measurements recorded yet.')}</div>
+      ) : (
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px">
+          <span style="font-size:0.7rem;color:var(--text-2)">
+            {shell.fromCache ? (
+              <span style="color:var(--green,#3ecf8e)">{t2('من الذاكرة (SW)', 'from cache (SW)')}</span>
+            ) : (
+              <span>{t2('من الشبكة', 'from network')}</span>
+            )}
+            {' '}· {t2('جلب الغلاف', 'shell fetch')} <code class="mono">{fmtMs(shell.shellTransferMs)}</code>
+            {shell.fcpMs !== null && <> · FCP <code class="mono">{fmtMs(shell.fcpMs)}</code></>}
+            {' '}· DCL <code class="mono">{fmtDcl(shell.domContentLoadedMs)}</code>
+            {shell.loadMs !== null && <> · {t2('تحميل كامل', 'full load')} <code class="mono">{fmtMs(shell.loadMs)}</code></>}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PerfPanel() {
+  const { t, t2 } = useI18n();
+  t2Compat = t2; // keep the fmtAgo fallback in sync with the active language
+  const [perf, setPerf] = useState<PerfStore | null>(null);
+  useEffect(() => {
+    setPerf(readPerfMetrics());
+  }, []);
+  const shell = perf?.shell[perf.shell.length - 1];
+  return (
+    <div class="panel settings-section">
+      <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span><span class="icon-wrap"><Gauge width={14} height={14} /></span> {t2('قياسات الأداء', 'Performance measurements')}</span>
+        <button
+          class="btn-ghost sm"
+          onClick={() => {
+            clearPerfMetrics();
+            setPerf(readPerfMetrics());
+          }}
+        >
+          <Trash2 width={13} height={13} class="icon" /> {t('common.delete')}
+        </button>
+      </h2>
+      <p class="settings-hint">
+        {t2(
+          'توقيتات حقيقية من هذا المتصفح: أزمنة التنقل للغلاف، وزمن انتظار تحميل إطاري VS Code و opencode (من الاستقصاء حتى جاهزية الإطار). تُخزَّن محليًا فقط ولا تُرسل لأي مكان.',
+          'Real timings from this browser: Navigation Timing for the shell, and the wait for the VS Code / opencode frames to load (status probe → frame ready). Stored locally only — never sent anywhere.',
+        )}
+      </p>
+      <div style="margin-top:12px">
+        <ShellRow shell={shell} t2={t2} />
+        <FrameTable title="VS Code" rows={perf?.ide ?? []} t2={t2} />
+        <FrameTable title="opencode" rows={perf?.opencode ?? []} t2={t2} />
+      </div>
     </div>
   );
 }
@@ -1140,6 +1283,9 @@ export function Settings() {
           )}
         </div>
       </div>
+
+      {/* Performance measurements — real Navigation Timing + frame loads */}
+      <PerfPanel />
 
       {/* About */}
       <div class="panel settings-section">

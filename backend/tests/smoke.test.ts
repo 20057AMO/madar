@@ -37,8 +37,9 @@ describe('Madar API Smoke Tests', () => {
     const res = await reqAuth('GET', '/ide/status');
     assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
     const data = await res.json();
+    assert.strictEqual(typeof data.ide.running, 'boolean');
     assert.strictEqual(typeof data.ide.port, 'number');
-    assert.strictEqual(typeof data.ide.password, 'string');
+    assert.strictEqual('password' in data.ide, false, 'code-server runs with --auth none — no IDE password exists');
   });
 
   test('GET /opencode/status - should report the opencode web UI', async () => {
