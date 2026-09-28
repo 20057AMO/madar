@@ -5,10 +5,21 @@ DATA_DIR="${WSD_DATA_DIR:-/app/data}"
 mkdir -p "$DATA_DIR"
 
 # ── Web IDE ───────────────────────────────────────────────────
-echo "Madar: starting supervised code-server IDE on 0.0.0.0:8080 (no auth)"
+# Both embedded surfaces run UNAUTHENTICATED. The host-side publish is pinned to
+# loopback (WSD_EMBEDDED_PUBLISH_HOST in docker-compose.yml), which is what keeps
+# them off the LAN. The in-container bind must therefore stay 0.0.0.0: Docker's
+# published-port path DNATs to the container's bridge address, so a 127.0.0.1
+# listener is unreachable through it — host AND project containers alike. The
+# knobs stay for the network-isolated / proxied layout of a later round.
+IDE_BIND="${WSD_IDE_BIND:-0.0.0.0}"
+OPENCODE_BIND="${WSD_OPENCODE_BIND:-0.0.0.0}"
+
+echo "Madar: starting supervised code-server IDE on ${IDE_BIND}:8080 (no auth)"
 # NOTE: code-server reads the PORT env var and it overrides --bind-addr,
 # so unset it (PORT is used by the dashboard node app).
-# Auth disabled (--auth none) — safe in local Docker environment.
+# Auth disabled (--auth none) — the only access control is the loopback
+# publish on the host side; do not widen WSD_EMBEDDED_PUBLISH_HOST on an
+# untrusted network.
 # Supervised restart loop: same pattern as opencode below — if code-server
 # crashes or is killed (e.g. version update), the loop revives it within ~2s.
 # PID of the live child is published in $DATA_DIR/code-server.pid for the
@@ -19,7 +30,7 @@ rm -f "$CODE_SERVER_PID_FILE"
   while true; do
     env -u PORT code-server --auth none --disable-telemetry --disable-update-check \
       --disable-workspace-trust \
-      --bind-addr 0.0.0.0:8080 /workspaces \
+      --bind-addr "${IDE_BIND}:8080" /workspaces \
       > /tmp/code-server.log 2>&1 &
     CODE_SERVER_CHILD=$!
     printf '%s' "$CODE_SERVER_CHILD" > "$CODE_SERVER_PID_FILE"
@@ -40,7 +51,7 @@ if [ -f "$OPENCODE_DB" ] && command -v python3 >/dev/null 2>&1; then
   python3 /app/opencode-purge.py "$DATA_DIR" || true
 fi
 
-echo "Madar: starting supervised opencode web on 0.0.0.0:${WSD_OPENCODE_PORT:-4096} (cwd /workspaces)"
+echo "Madar: starting supervised opencode web on ${OPENCODE_BIND}:${WSD_OPENCODE_PORT:-4096} (cwd /workspaces)"
 mkdir -p "$DATA_DIR/opencode"
 # Supervised restart loop: the Studio Update button kills the running
 # opencode process after installing a newer binary — this loop revives it
@@ -64,7 +75,7 @@ rm -f "$OPENCODE_PID_FILE"
       XDG_CACHE_HOME=/root/.cache \
       XDG_DATA_HOME="$DATA_DIR/opencode" \
       npm_config_cache=/root/.npm \
-      opencode web --hostname 0.0.0.0 --port "${WSD_OPENCODE_PORT:-4096}" \
+      opencode web --hostname "${OPENCODE_BIND}" --port "${WSD_OPENCODE_PORT:-4096}" \
       > /tmp/opencode-web.log 2>&1 &
     OPENCODE_CHILD=$!
     printf '%s' "$OPENCODE_CHILD" > "$OPENCODE_PID_FILE"
@@ -90,7 +101,7 @@ OPENCODE_SUPERVISOR=$!
 # $DATA_DIR/projects/<slug>) are registered — deleted projects must never
 # resurrect in opencode after a restart.
 # Every curl is time-boxed so this block can never block dashboard startup.
-OPCODE_URL="http://localhost:${WSD_OPENCODE_PORT:-4096}"
+OPCODE_URL="http://127.0.0.1:${WSD_OPENCODE_PORT:-4096}"
 opencode_ready() {
   curl -fsS --max-time 2 "$OPCODE_URL/global/health" >/dev/null 2>&1
 }

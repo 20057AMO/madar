@@ -180,7 +180,11 @@ function tcpProbeHost(port: number, timeoutMs = 2000): Promise<boolean> {
 async function resolveIdeHostPort(): Promise<number> {
   try {
     const { stdout } = await execFileOut('docker', ['port', CONTAINER, '8080'], { timeout: 30_000 });
-    const m = stdout.match(/0\.0\.0\.0:(\d+)/);
+    // The publish interface is loopback by default (both embedded surfaces run
+    // unauthenticated), so the old /0\.0\.0\.0:(\d+)/ match silently fell back
+    // to 8100 and would have ignored a WSD_IDE_PORT override. Match any
+    // host:port pair instead.
+    const m = stdout.match(/[\d.]+:(\d+)/);
     if (m) return Number(m[1]);
   } catch { /* fall through */ }
   return 8100;

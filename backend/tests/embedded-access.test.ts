@@ -5,15 +5,19 @@
  *
  * Three contracts are locked down here:
  *
- *  1. `GET /api/ide/status` → `200 {ide:{running:boolean, port:number}}`.
+ *  1. `GET /api/ide/status` → `200 {ide:{running, port, workspace, lanReachable}}`.
  *     The `password` key is GONE. code-server runs `--auth none`, so the
  *     secret protected nothing — it was still minted, written to
  *     `data/ide-password` and shipped to every authenticated client. We assert
  *     the key is ABSENT (not merely unused) and that the RAW response text
  *     never contains the substring `password` at all. `?fresh=1` bypasses the
  *     4s TTL probe cache and must serve the identical shape.
+ *     `workspace` is the workspaces bind-mount verdict and `lanReachable` says
+ *     whether the port is published off-host: `running` describes the PROCESS,
+ *     and a running IDE serving a broken/empty mount is precisely the silent
+ *     failure this pair of fields exists to make visible.
  *
- *  2. `GET /api/opencode/status` → `200 {running:boolean, port:number}`.
+ *  2. `GET /api/opencode/status` → `200 {running, port, workspace, lanReachable}`.
  *     The probe moved from an HTTP fetch (1.5s) to a shared plain TCP-connect
  *     probe (`EMBEDDED_PROBE_TIMEOUT_MS = 3000`) because a measured 1.85s cold
  *     answer made the view report a FALSE "offline". The budget itself is
@@ -432,7 +436,7 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
 
   // ── /api/ide/status: the removed password ─────────────────────────────────
   describe('GET /api/ide/status — exact shape, password removed', () => {
-    test('reports exactly {running, port} and has NO password key', async () => {
+    test('reports exactly {running, port, workspace, lanReachable} and has NO password key', async () => {
       const res = await rawReq('GET', '/ide/status', authHeaders());
       assert.strictEqual(res.status, 200, `ide/status: ${res.status} -> ${res.text}`);
       assert.deepStrictEqual(
@@ -442,12 +446,31 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       );
       assert.deepStrictEqual(
         Object.keys(res.json.ide).sort(),
-        ['port', 'running'],
+        ['lanReachable', 'port', 'running', 'workspace'],
         `ide payload keys changed: ${Object.keys(res.json.ide).join(',')}`
       );
       assert.strictEqual(typeof res.json.ide.running, 'boolean');
       assert.strictEqual(typeof res.json.ide.port, 'number');
       assert.ok(Number.isInteger(res.json.ide.port) && res.json.ide.port > 0 && res.json.ide.port <= 65535);
+    });
+
+    test('the mount verdict is present and honest (state + hint), never a bare running:true', async () => {
+      const res = await rawReq('GET', '/ide/status', authHeaders());
+      assert.strictEqual(res.status, 200);
+      const ws = res.json.ide.workspace;
+      assert.ok(ws, 'ide/status must carry a workspace mount verdict');
+      assert.ok(
+        ['ok', 'missing', 'not_a_directory', 'unreadable', 'unresolved'].includes(ws.state),
+        `unexpected workspace.state: ${JSON.stringify(ws.state)}`
+      );
+      assert.ok(['env', 'mountinfo', null].includes(ws.source), `unexpected workspace.source: ${ws.source}`);
+      assert.ok(['proved', 'refuted', 'unknown'].includes(ws.verification), `unexpected verification: ${ws.verification}`);
+      assert.strictEqual(typeof ws.hint, 'string');
+      // A non-ok mount must always carry a sentence naming the cause.
+      if (ws.state !== 'ok') assert.ok(ws.hint.length > 10, `empty hint for state ${ws.state}`);
+      // running describes the PROCESS only: a live IDE on a broken mount is
+      // exactly the case this field exists for, so never assert the two agree.
+      assert.strictEqual(typeof res.json.ide.lanReachable, 'boolean');
     });
 
     test("Object.hasOwn(ide,'password') is false — the secret is ABSENT, not just unused", async () => {
@@ -473,7 +496,7 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       const res = await rawReq('GET', '/ide/status?fresh=1', authHeaders());
       assert.strictEqual(res.status, 200, `ide/status?fresh=1: ${res.status} -> ${res.text}`);
       assert.deepStrictEqual(Object.keys(res.json).sort(), ['ide']);
-      assert.deepStrictEqual(Object.keys(res.json.ide).sort(), ['port', 'running']);
+      assert.deepStrictEqual(Object.keys(res.json.ide).sort(), ['lanReachable', 'port', 'running', 'workspace']);
       assert.strictEqual(Object.hasOwn(res.json.ide, 'password'), false);
       assert.ok(!res.text.toLowerCase().includes('password'), `?fresh=1 leaked: ${res.text}`);
     });
@@ -481,7 +504,7 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
     test('?fresh=true is honoured as the same bypass alias (and still shape-correct)', async () => {
       const res = await rawReq('GET', '/ide/status?fresh=true', authHeaders());
       assert.strictEqual(res.status, 200, `ide/status?fresh=true: ${res.status} -> ${res.text}`);
-      assert.deepStrictEqual(Object.keys(res.json.ide).sort(), ['port', 'running']);
+      assert.deepStrictEqual(Object.keys(res.json.ide).sort(), ['lanReachable', 'port', 'running', 'workspace']);
       assert.ok(!res.text.toLowerCase().includes('password'));
     });
 
@@ -513,17 +536,23 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
 
   // ── /api/opencode/status: the widened probe budget ────────────────────────
   describe('GET /api/opencode/status — exact shape + the widened probe budget', () => {
-    test('reports exactly {running, port}', async () => {
+    test('reports exactly {running, port, workspace, lanReachable}', async () => {
       const res = await rawReq('GET', '/opencode/status', authHeaders());
       assert.strictEqual(res.status, 200, `opencode/status: ${res.status} -> ${res.text}`);
       assert.deepStrictEqual(
         Object.keys(res.json).sort(),
-        ['port', 'running'],
+        ['lanReachable', 'port', 'running', 'workspace'],
         `opencode/status payload keys changed: ${Object.keys(res.json).join(',')}`
       );
       assert.strictEqual(typeof res.json.running, 'boolean');
       assert.strictEqual(typeof res.json.port, 'number');
       assert.ok(Number.isInteger(res.json.port) && res.json.port > 0 && res.json.port <= 65535);
+      assert.ok(
+        ['ok', 'missing', 'not_a_directory', 'unreadable', 'unresolved'].includes(res.json.workspace?.state),
+        `unexpected workspace.state: ${JSON.stringify(res.json.workspace?.state)}`
+      );
+      assert.strictEqual(typeof res.json.workspace.hint, 'string');
+      assert.strictEqual(typeof res.json.lanReachable, 'boolean');
     });
 
     test('?fresh=1 is served with the identical shape (cache-bypass path answers)', async () => {
@@ -534,7 +563,7 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       // would only be flaky.
       const res = await rawReq('GET', '/opencode/status?fresh=1', authHeaders());
       assert.strictEqual(res.status, 200, `opencode/status?fresh=1: ${res.status} -> ${res.text}`);
-      assert.deepStrictEqual(Object.keys(res.json).sort(), ['port', 'running']);
+      assert.deepStrictEqual(Object.keys(res.json).sort(), ['lanReachable', 'port', 'running', 'workspace']);
       assert.strictEqual(typeof res.json.running, 'boolean');
     });
 

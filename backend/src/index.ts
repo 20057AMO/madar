@@ -47,8 +47,9 @@ import { exportProjectSnapshot, importProjectSnapshot } from './services/project
 import { exportProjectZip } from './services/project-zip';
 import * as snapAuto from './services/project-snapshots-auto';
 import { getIdeStatus } from './services/ide-service';
-import { createStatusCache, resolveEmbeddedPort, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
+import { createStatusCache, resolveEmbeddedPort, isLanReachableHost, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
 import { probeEmbeddedPort } from './services/embedded-status-probe';
+import { getWorkspaceMount, startWorkspaceMountAudit } from './services/workspaces-mount';
 import { detectIp } from './services/server-info';
 import { getChatConfig, updateChatConfig, listModels, type ChatConfig } from './services/chat-config';
 import {
@@ -1098,7 +1099,15 @@ async function opencodeRunning(): Promise<boolean> {
 
 // Same probe contract as the IDE status: short TTL + singleflight, a failed
 // probe is an honest `running:false` (never a 500), and `?fresh=1` bypasses it.
-const opencodeStatusCache = createStatusCache<{ running: boolean; port: number }>({
+// `workspace` + `lanReachable` mirror the IDE payload: the process being alive
+// says nothing about the bind mount it serves from, and an off-host publish of
+// an unauthenticated surface is a fact the operator must see.
+const opencodeStatusCache = createStatusCache<{
+  running: boolean;
+  port: number;
+  workspace: ReturnType<typeof getWorkspaceMount>;
+  lanReachable: boolean;
+}>({
   ttlMs: EMBEDDED_STATUS_DEFAULT_TTL_MS,
   load: async () => {
     let running = false;
@@ -1107,7 +1116,12 @@ const opencodeStatusCache = createStatusCache<{ running: boolean; port: number }
     } catch {
       running = false;
     }
-    return { running, port: OPENCODE_PORT };
+    return {
+      running,
+      port: OPENCODE_PORT,
+      workspace: getWorkspaceMount(),
+      lanReachable: isLanReachableHost(process.env.WSD_EMBEDDED_PUBLISH_HOST),
+    };
   },
 });
 
@@ -1124,7 +1138,12 @@ app.get('/api/opencode/status', async (req, res) => {
     // Unreachable in theory (the load never rejects) — but a hard 500 on a
     // status poll is the one shape the client cannot recover from, so degrade
     // honestly instead.
-    res.json({ running: false, port: OPENCODE_PORT });
+    res.json({
+      running: false,
+      port: OPENCODE_PORT,
+      workspace: getWorkspaceMount(),
+      lanReachable: isLanReachableHost(process.env.WSD_EMBEDDED_PUBLISH_HOST),
+    });
   }
 });
 
@@ -2932,6 +2951,11 @@ startAlertsAutomation();
 
 // Orphaned-attachment upload cleanup (boot + every WSD_ATTACHMENT_GC_MS).
 startAttachmentGcSweep();
+
+// Workspaces bind-mount audit (boot + every WSD_MOUNT_AUDIT_MS): resolves the
+// host bind source for project containers and reports a broken mount instead of
+// letting every project file land in a directory nobody can see.
+startWorkspaceMountAudit();
 
 
 

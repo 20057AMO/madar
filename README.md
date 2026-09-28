@@ -36,7 +36,7 @@
 | المتغير | القيمة |
 |---------|--------|
 | Docker Engine 24+ أو Docker Desktop | مع إضافة `compose` v2. على Windows استخدم WSL2 backend |
-| منافذ حرة | `3000` (اللوحة)، `8100` (المحرر)، `4096` (OpenCode) |
+| منافذ حرة | `3000` (اللوحة، كل الواجهات)، `8100` (المحرر، محلي فقط)، `4096` (OpenCode، محلي فقط) |
 | مساحة قرص | ~4 GB على الأقل للصور والمشاريع |
 
 > لا يحتاج جهازك Node.js أو أي أدوات تطوير — كل شيء يُبنى داخل Docker.
@@ -56,7 +56,8 @@ cp .env.example .env
 # 3. عدّل .env — المطلوب:
 #    JWT_SECRET: ولّده بأمر:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-#    WSD_WORKSPACES_HOST_DIR: المسار المطلق لمجلد workspaces/
+#    WSD_WORKSPACES_HOST_DIR: اتركه فارغًا (يُشتق تلقائيًا من mountinfo).
+#      اضبطه فقط لمشاركة UNC أو مسار WSL:
 #      ويندوز: D:/madar/workspaces
 #      لينكس:  /home/me/madar/workspaces
 
@@ -74,7 +75,8 @@ docker compose up -d --build
 | المتغير | مطلوب؟ | الوصف |
 |---------|--------|-------|
 | `JWT_SECRET` | نعم | سر توقيع رموز JWT |
-| `WSD_WORKSPACES_HOST_DIR` | نعم* | المسار المطلق لمجلد `workspaces/` على المضيف |
+| `WSD_WORKSPACES_HOST_DIR` | اختياري | يُشتقّ تلقائيًا من `mountinfo`؛ اضبطه لمشاركة UNC أو WSL |
+| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | واجهة نشر صفحتَي VS Code وOpenCode (بلا كلمة مرور) — الافتراضي `127.0.0.1` |
 | `OLLAMA_API_KEY` | اختياري | مفتاح Ollama Cloud |
 | `OPENCODE_API_KEY` | اختياري | مفتاح OpenCode Zen |
 | `WSD_CHAT_MODEL` | اختياري | النموذج الافتراضي للدردشة |

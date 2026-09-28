@@ -30,10 +30,11 @@ nano .env   # أو أي محرر
 | المتغير | مطلوب؟ | الوصف |
 | --- | --- | --- |
 | `JWT_SECRET` | ✅ **نعم** | سر توقيع رموز تسجيل الدخول. ولّده بأمر:<br>`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `WSD_WORKSPACES_HOST_DIR` | ✅ **نعم** | المسار **المطلق** لمجلد `workspaces/` كما يراه مضيف Docker (وليس داخل الحاوية). مثال ويندوز: `D:/madar/workspaces` — لينكس: `/home/me/madar/workspaces`. يستخدم كمصدر الربط عند تشغيل حاويات المشاريع لتشارك نفس الملفات مع اللوحة |
+| `WSD_WORKSPACES_HOST_DIR` | اختياري | اتركه فارغًا: الخادم يشتقّ مصدر ربط حاوية التطبيق تلقائيًا من `/proc/self/mountinfo`، فلا يتقادم ولا ينكسر عند إعادة تسمية المجلد أو نقله. اضبطه فقط إذا تعذّر على mountinfo التعبير عن المسار (مشاركة UNC أو مسار توزيع WSL). مثال: `D:/madar/workspaces` أو `/home/me/madar/workspaces`. تظهر القيمة المشتقّة وحالة المسار في `GET /api/ide/status` تحت `workspace` |
 | `OLLAMA_API_KEY` | اختياري | مفتاح Ollama Cloud فقط. بدونها يعمل Ollama المحلي أو أي مزوّد آخر |
 | `OPENCODE_API_KEY` | اختياري | لتمكين صفحة OpenCode/Zen |
 | `WSD_CHAT_MODEL` | اختياري | النموذج الافتراضي للدردشة (افتراضي `qwen3:30b`) |
+| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | الواجهة التي تُنشر عليها صفحتا VS Code وOpenCode (افتراضي `127.0.0.1`). **كلاهما بلا كلمة مرور**، لذا اتركه على loopback. توسيعه إلى `0.0.0.0` يعني تنفيذ شيفرة عن بُعد دون مصادقة على حاوية root تحتفظ بمقبض Docker — لا تفعله إلا على شبكة تثق بها |
 | `OLLAMA_LOCAL_HOST` | اختياري | عنوان Ollama المحلي (افتراضي `http://host.docker.internal:11434`) |
 | `WSD_OPENCODE_PORT` | اختياري | منفذ واجهة opencode (افتراضي `4096`) |
 
@@ -79,8 +80,8 @@ docker compose up -d --build
 | المشكلة | الحل |
 | --- | --- |
 | الحاوية تعيد التشغيل باستمرار | افحص `docker compose logs app` — غالبًا `JWT_SECRET` غير مضبوط في `.env` |
-| إنشاء المشروع يفشل | تأكد أن مقبس `/var/run/docker.sock` مسموح للحاوية `app`، وأن `WSD_WORKSPACES_HOST_DIR` مسار مطلق صحيح |
-| ملفات المشروع لا تظهر داخل حاويته | `WSD_WORKSPACES_HOST_DIR` يجب أن يكون مسار المضيف الفعلي المطلق (على Docker Desktop خاصة) وليس مسار الحاوية |
+| إنشاء المشروع يفشل | تأكد أن مقبس `/var/run/docker.sock` مسموح للحاوية `app`. إن كانت رسالة الخطأ تذكر workspaces، فراجع `workspace.hint` في `GET /api/ide/status` — الخادم يرفض الإنشاء صراحةً إذا كان المسار غير قابل للتحديد أو المجلد تالف بدل إنشاء حاوية على ربط خاطئ |
+| ملفات المشروع لا تظهر داخل حاويته | راجع `workspace.hostPath` و `workspace.source` في `GET /api/ide/status`؛ `source: mountinfo` يعني أن المسار مشتقّ تلقائيًا. اضبط `WSD_WORKSPACES_HOST_DIR` فقط لمشاركة UNC أو مسار WSL |
 | المحرر لا يفتح | تأكد أن منفذ `8100` غير محجوب وأن `app` يعمل (`docker compose ps`) |
 | opencode لا يعمل | افحص `docker compose logs app`؛ أضف `OPENCODE_API_KEY` إن لم يكن مضبوطًا |
 | الدردشة تخطئ | افتح **Providers** واضغط فحص الاتصال للمزوّد — الرسالة تميز بين خطأ مفتاح وحصة ومنفذ |

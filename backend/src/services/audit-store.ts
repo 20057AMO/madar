@@ -86,7 +86,8 @@ export type AuditEvent =
   | 'chat-channel-settings'
   | 'chat-channel-settings-failed'
   | 'agent-run'
-  | 'agent-run-failed';
+  | 'agent-run-failed'
+  | 'mount-audit';
 
 export interface AuditEntry {
   ts: string;

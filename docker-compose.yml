@@ -9,14 +9,26 @@ services:
       PORT: 3000
       HOST: 0.0.0.0
       WSD_PROJECTS_DIR: /workspaces
-      # Host-side absolute path of ./workspaces, used as the bind source when
-      # launching project containers so their /workspace sees the same files
+      # OPTIONAL host-side absolute path of ./workspaces, used as the bind source
+      # when launching project containers so their /workspace sees the same files
       # (bind sources resolve on the Docker Desktop VM, not inside this container).
-      # REQUIRED — a relative path would resolve against the daemon host's CWD and
-      # silently mount the wrong directory, so compose fails fast when it is unset.
-      WSD_WORKSPACES_HOST_DIR: "${WSD_WORKSPACES_HOST_DIR:-${PWD}/workspaces}"
+      # EMPTY ON PURPOSE: the default is a runtime derivation from
+      # /proc/self/mountinfo, which cannot go stale when the checkout moves. Set
+      # this ONLY for paths mountinfo cannot express (UNC share, WSL distro).
+      WSD_WORKSPACES_HOST_DIR: "${WSD_WORKSPACES_HOST_DIR:-}"
       WSD_WORKSPACE_IMAGE: wsd/workspace:latest
       WSD_IDE_PORT: ${WSD_IDE_PORT:-8100}
+      # Interface the two embedded surfaces are PUBLISHED on. Loopback by
+      # default because BOTH run unauthenticated: publishing them on 0.0.0.0 is
+      # anonymous remote code execution against a root container holding the
+      # docker socket. Widen only on a trusted network.
+      WSD_EMBEDDED_PUBLISH_HOST: ${WSD_EMBEDDED_PUBLISH_HOST:-127.0.0.1}
+      # In-container bind: must stay 0.0.0.0 — Docker's published-port path
+      # DNATs to the container bridge address, so a loopback listener is
+      # unreachable through the published port. Override only once an
+      # authenticated proxy or network isolation sits in front.
+      WSD_IDE_BIND: ${WSD_IDE_BIND:-0.0.0.0}
+      WSD_OPENCODE_BIND: ${WSD_OPENCODE_BIND:-0.0.0.0}
       WSD_CHAT_MODEL: ${WSD_CHAT_MODEL:-qwen3:30b}
       WSD_DATA_DIR: /app/data
       # JWT signing secret — set JWT_SECRET in .env (see .env.example) or tokens
@@ -62,14 +74,13 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
+      # Dashboard stays published on every interface: it is the authenticated
+      # surface and is the only thing LAN teammates can reach.
       - "3000:3000"
-      # code-server binds a fixed port (8080) inside this container; the host
-      # side honors WSD_IDE_PORT so an override keeps the browser link working.
-      - "${WSD_IDE_PORT:-8100}:8080"
-      # opencode binds the SAME port inside and out (host var passes through to
-      # the entrypoint, so the two sides always agree — a fixed internal port
-      # plus a different host variable would silently map to a dead container port).
-      - "${WSD_OPENCODE_PORT:-4096}:${WSD_OPENCODE_PORT:-4096}"
+      # Embedded surfaces are unauthenticated, so they inherit
+      # WSD_EMBEDDED_PUBLISH_HOST (loopback by default).
+      - "${WSD_EMBEDDED_PUBLISH_HOST:-127.0.0.1}:${WSD_IDE_PORT:-8100}:8080"
+      - "${WSD_EMBEDDED_PUBLISH_HOST:-127.0.0.1}:${WSD_OPENCODE_PORT:-4096}:${WSD_OPENCODE_PORT:-4096}"
     depends_on:
       - workspace
 

@@ -5,22 +5,41 @@
  * The dashboard only needs to know whether it is up and on which host port.
  * code-server runs with `--auth none`, so there is NO IDE password: nothing to
  * mint, persist or echo.
+ *
+ * `running` describes the PROCESS and nothing else — which is exactly why the
+ * payload also carries the workspaces mount verdict (`workspace`) and whether
+ * the port is published off-host (`lanReachable`). An IDE that is running and
+ * serving an empty directory is NOT healthy, and a published unauthenticated
+ * IDE is NOT a safe default.
  */
 import {
   createStatusCache,
+  isLanReachableHost,
   resolveEmbeddedPort,
+  resolveEmbeddedPublishHost,
   EMBEDDED_STATUS_DEFAULT_TTL_MS,
 } from './embedded-status-core';
 import { probeEmbeddedPort } from './embedded-status-probe';
+import { getWorkspaceMount, type WorkspaceMountInfo } from './workspaces-mount';
 
 /** Host-facing port (compose maps WSD_IDE_PORT -> the internal bind below). */
 const IDE_HOST_PORT = resolveEmbeddedPort(process.env.WSD_IDE_PORT, 8100);
 /** code-server's own bind inside the main container (the entrypoint's arg). */
 const IDE_INTERNAL_PORT = resolveEmbeddedPort(process.env.WSD_IDE_INTERNAL_PORT, 8080);
+/** Interface the IDE port is published on — loopback unless the operator opts in. */
+const IDE_PUBLISH_HOST = resolveEmbeddedPublishHost(process.env.WSD_EMBEDDED_PUBLISH_HOST);
 
 export interface IdeStatus {
   running: boolean;
   port: number;
+  /**
+   * The workspaces bind mount — reported here because `running:true` only
+   * describes the PROCESS: a broken mount left code-server serving an empty
+   * Explorer, which this payload used to call "healthy".
+   */
+  workspace: WorkspaceMountInfo;
+  /** True when the IDE is published beyond loopback (see resolveEmbeddedPublishHost). */
+  lanReachable: boolean;
 }
 
 /**
@@ -43,7 +62,12 @@ const ideStatusCache = createStatusCache<IdeStatus>({
     } catch {
       running = false;
     }
-    return { running, port: IDE_HOST_PORT };
+    return {
+      running,
+      port: IDE_HOST_PORT,
+      workspace: getWorkspaceMount(),
+      lanReachable: isLanReachableHost(IDE_PUBLISH_HOST),
+    };
   },
 });
 

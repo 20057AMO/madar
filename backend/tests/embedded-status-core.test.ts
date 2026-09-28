@@ -16,6 +16,10 @@
  *  - A rejected load is never cached; the next get() retries.
  *  - resolveEmbeddedPort degrades junk to the fallback, accepts a valid
  *    stringified port (tolerating surrounding whitespace).
+ *  - resolveEmbeddedPublishHost / isLanReachableHost: a MISSING publish host
+ *    means loopback (both embedded surfaces are unauthenticated, so the default
+ *    must never be 0.0.0.0), and only a non-loopback interface reports LAN
+ *    reachability.
  *  - probeEmbeddedPort answers true/false and NEVER throws or rejects — the
  *    one file of this round that talks to a real socket (loopback only).
  */
@@ -25,6 +29,8 @@ import net from 'node:net';
 import {
   createStatusCache,
   resolveEmbeddedPort,
+  resolveEmbeddedPublishHost,
+  isLanReachableHost,
   EMBEDDED_STATUS_DEFAULT_TTL_MS,
 } from '../src/services/embedded-status-core.ts';
 import {
@@ -210,6 +216,31 @@ describe('resolveEmbeddedPort', () => {
     assert.strictEqual(resolveEmbeddedPort('8080', 8100), 8080);
     assert.strictEqual(resolveEmbeddedPort('1', 8100), 1);
     assert.strictEqual(resolveEmbeddedPort('65535', 8100), 65535);
+  });
+});
+
+describe('resolveEmbeddedPublishHost / isLanReachableHost', () => {
+  test('an unset publish host degrades to LOOPBACK, never 0.0.0.0', () => {
+    // Both embedded surfaces run unauthenticated, so the safe default must be
+    // the one a missing value produces.
+    assert.strictEqual(resolveEmbeddedPublishHost(undefined), '127.0.0.1');
+    assert.strictEqual(resolveEmbeddedPublishHost(''), '127.0.0.1');
+    assert.strictEqual(resolveEmbeddedPublishHost('   '), '127.0.0.1');
+  });
+
+  test('a real interface passes through, whitespace trimmed', () => {
+    assert.strictEqual(resolveEmbeddedPublishHost('0.0.0.0'), '0.0.0.0');
+    assert.strictEqual(resolveEmbeddedPublishHost(' 192.168.1.10 '), '192.168.1.10');
+  });
+
+  test('lanReachable is false for every loopback spelling and true for the rest', () => {
+    assert.strictEqual(isLanReachableHost(undefined), false);
+    assert.strictEqual(isLanReachableHost('127.0.0.1'), false);
+    assert.strictEqual(isLanReachableHost('127.0.0.1 '), false);
+    assert.strictEqual(isLanReachableHost('LOCALHOST'), false);
+    assert.strictEqual(isLanReachableHost('::1'), false);
+    assert.strictEqual(isLanReachableHost('0.0.0.0'), true);
+    assert.strictEqual(isLanReachableHost('192.168.1.10'), true);
   });
 });
 
