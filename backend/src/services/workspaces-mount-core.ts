@@ -101,6 +101,20 @@ export const HOST_PATH_REDACTED = '<redacted>';
 /** Name of the writability canary, written at the ROOT of the workspaces dir. */
 export const MOUNT_CANARY_FILE = '.madar-mount-canary';
 
+/**
+ * Name of the PROBE canary, deliberately distinct from MOUNT_CANARY_FILE.
+ *
+ * physicalCheck() unlinks its own canary in a `finally`, and it is fully
+ * synchronous — so it can run (a MOUNT_AUDIT_MS cache expiry, or the sweep tick)
+ * while a verification probe sits in its `await` between writing the canary and
+ * the probe container starting. With ONE shared name that audit deleted the
+ * file the probe was about to look for, `test -f` exited 1, and the verdict was
+ * recorded as 'refuted' — which (since the creation gate landed) refuses every
+ * project create with an alarming 500 against a mount that was never broken.
+ * Two names make that interleaving structurally impossible.
+ */
+export const MOUNT_VERIFY_CANARY_FILE = '.madar-mount-verify-canary';
+
 // ── /proc/self/mountinfo parsing ──────────────────────────────────────────
 
 /** Split a mountinfo line on whitespace and split off the post-'-' segment. */
@@ -317,6 +331,65 @@ export function mountRefusalCode(input: {
   if (input.state !== 'ok') return 'broken';
   if (input.verification === 'refuted') return 'refuted';
   return null;
+}
+
+// ── host-path proof (probe argv + exit-code mapping) ───────────────────────
+
+/**
+ * The probe container's argv, built from ONE canary name so the file the
+ * verification writes and the path the probe looks for can never drift apart
+ * (a rename in one place only is exactly the regression MOUNT_VERIFY_CANARY_FILE
+ * exists to prevent). No shell is involved: the args go to execFile as an array.
+ */
+export function buildProbeArgv(
+  hostPath: string,
+  image: string,
+  canaryFile: string = MOUNT_VERIFY_CANARY_FILE,
+): string[] {
+  return ['run', '--rm', '-v', `${hostPath}:/probe`, image, 'test', '-f', `/probe/${canaryFile}`];
+}
+
+/**
+ * The probe's exit code, read off a child_process error.
+ *
+ * Node's execFile error carries the exit status on `code` and has NO `status`
+ * key at all, so a mapping that reads `err.status === 1` is silently dead — every
+ * refutation degraded to 'unknown' and the strongest creation-gate signal never
+ * fired. `status` is kept as a fallback for a spawn-style error object.
+ */
+export function probeExitCode(err: unknown): number | null {
+  const e = (err ?? {}) as { code?: unknown; status?: unknown };
+  const raw = typeof e.code === 'number' ? e.code : typeof e.status === 'number' ? e.status : null;
+  return raw === null ? null : raw;
+}
+
+/**
+ * What a probe run proves. Only the probe's OWN failure code refutes the path:
+ * `test -f` exiting 1 means the container saw the mounted directory WITHOUT our
+ * canary. Docker reserves 125+ for "could not run the container" (daemon down,
+ * image missing, bad mount) and a ceiling kill leaves no code at all — both are
+ * the absence of an answer, never a refutation, so they stay 'unknown' (which
+ * the creation gate deliberately treats as permissive).
+ */
+export function probeVerdictFor(exitCode: number | null | undefined, ok: boolean): MountVerification {
+  if (ok) return 'proved';
+  return exitCode === 1 ? 'refuted' : 'unknown';
+}
+
+/**
+ * What a SECOND, independent look decides. A refuted verdict is persisted and now
+ * refuses every project create, so one observation must never be able to take the
+ * app down: a bind mount can hide a just-written file for a moment (attribute
+ * caching, an indexer touching the directory), and a single such miss would
+ * otherwise read as positive knowledge. Two consecutive refutations of two
+ * FRESH canaries are knowledge; anything else degrades to the permissive answer.
+ */
+export function confirmProbeVerdict(
+  first: MountVerification,
+  second: MountVerification,
+): MountVerification {
+  if (second === 'proved') return 'proved';
+  return first === 'refuted' && second === 'refuted' ? 'refuted' : 'unknown';
 }
 
 // ── hints + canary ────────────────────────────────────────────────────────

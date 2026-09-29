@@ -27,6 +27,11 @@ import { execFile } from 'child_process';
 import { recordAudit } from './audit-store';
 import {
   MOUNT_CANARY_FILE,
+  MOUNT_VERIFY_CANARY_FILE,
+  buildProbeArgv,
+  probeExitCode,
+  probeVerdictFor,
+  confirmProbeVerdict,
   canaryToken,
   classifyMountError,
   mountHint,
@@ -39,7 +44,7 @@ import {
   type WorkspaceMountState,
 } from './workspaces-mount-core';
 
-export { MOUNT_CANARY_FILE, canaryToken, mountHint, publicMountInfo, mountRefusalCode };
+export { MOUNT_CANARY_FILE, MOUNT_VERIFY_CANARY_FILE, canaryToken, mountHint, publicMountInfo, mountRefusalCode };
 export type { MountVerification, WorkspaceMountInfo, WorkspaceMountState };
 
 const DATA_DIR = process.env.WSD_DATA_DIR || path.join(__dirname, '..', '..', 'data');
@@ -100,6 +105,12 @@ function stateForIoReason(reason: MountReason): WorkspaceMountState {
  * Writability is part of the verdict on purpose: a read-only bind passes every
  * read check and then breaks project creation with files nobody can see, which
  * is the same silent-failure class as the stale bind source.
+ *
+ * This writes MOUNT_CANARY_FILE, never the probe's canary: the whole function
+ * is synchronous, so it may run during a verification's `await` (a cache expiry
+ * or the sweep tick) and an unlink on a SHARED name would delete the file the
+ * in-flight probe still has to see — refuting a healthy mount, which the
+ * creation gate then turns into a 500 for every project.
  */
 function physicalCheck(): { state: WorkspaceMountState; reason: MountReason | null } {
   try {
@@ -215,30 +226,25 @@ export function getWorkspaceMount(): WorkspaceMountInfo {
 /**
  * Prove the decoded path is the SAME directory this container writes to: drop a
  * canary through the bind, then ask a throwaway container mounting the decoded
- * path to look for it. A visible non-zero exit refutes the path; an inability
- * to run the container at all (no docker binary, timeout) is 'unknown'.
+ * path to look for it. The canary name is the caller's — the PROBE one, never
+ * the physical check's — and both sides of the comparison come from a single
+ * buildProbeArgv() call, so a concurrent audit cannot make a healthy mount look
+ * refuted. A visible non-zero exit refutes the path; an inability to run the
+ * container at all (no docker binary, timeout) is 'unknown'.
  *
  * ASYNC on purpose: a synchronous `execFileSync` blocks the single Node event
  * loop for the whole 30 s ceiling, so every HTTP request and WebSocket frame
  * stalls while the probe container boots. This never rejects — a probe can only
  * ever produce a verdict, never an exception.
  */
-function runProbeContainer(hostPath: string): Promise<MountVerification> {
+function runProbeContainer(hostPath: string, canaryFile: string): Promise<MountVerification> {
   return new Promise<MountVerification>((resolve) => {
     try {
       execFile(
         'docker',
-        ['run', '--rm', '-v', `${hostPath}:/probe`, PROBE_IMAGE, 'test', '-f', `/probe/${MOUNT_CANARY_FILE}`],
+        buildProbeArgv(hostPath, PROBE_IMAGE, canaryFile),
         { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
-        (err) => {
-          // Only the probe's OWN failure code (test(1) on a missing canary)
-          // refutes the path. Docker reserves 125+ for "could not run the
-          // container" (daemon down, image missing, bad mount), a ceiling kill
-          // leaves no status at all, and a missing docker binary fails to spawn
-          // — all of which are the absence of an answer, never a refutation.
-          if (!err) return resolve('proved');
-          resolve((err as { status?: number | null }).status === 1 ? 'refuted' : 'unknown');
-        },
+        (err) => resolve(probeVerdictFor(probeExitCode(err), !err)),
       );
     } catch {
       resolve('unknown');
@@ -249,28 +255,45 @@ function runProbeContainer(hostPath: string): Promise<MountVerification> {
 let verifyInFlight: Promise<WorkspaceMountInfo> | null = null;
 
 async function runVerification(): Promise<WorkspaceMountInfo> {
-  const info = cached ?? auditMount();
+  const info = getWorkspaceMount();
   if (!VERIFY_ENABLED || !info.hostPath) return info;
 
-  const canary = path.join(MOUNT_POINT, MOUNT_CANARY_FILE);
-  const token = canaryToken(`${Date.now()}:${info.hostPath}`);
-  let wrote = false;
-  try {
-    fs.writeFileSync(canary, token, { encoding: 'utf8', mode: 0o600 });
-    wrote = true;
-  } catch {
-    wrote = false;
-  }
-  const verification = wrote ? await runProbeContainer(info.hostPath) : 'unknown';
-  if (wrote) {
+  const canaryFile = MOUNT_VERIFY_CANARY_FILE;
+  const canary = path.join(MOUNT_POINT, canaryFile);
+  let seq = 0;
+  const drop = () => {
+    try {
+      fs.writeFileSync(canary, canaryToken(`${Date.now()}:${seq++}:${info.hostPath}`), { encoding: 'utf8', mode: 0o600 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const clear = () => {
     try {
       fs.unlinkSync(canary);
     } catch {
       /* best-effort */
     }
+  };
+
+  let verification: MountVerification = 'unknown';
+  if (drop()) {
+    const first = await runProbeContainer(info.hostPath, canaryFile);
+    clear();
+    // A refutation is persisted and refuses project creation, so it is never
+    // taken from a single observation: the probe asks again, against a FRESH
+    // canary, and only two consecutive refutations are positive knowledge.
+    verification =
+      first === 'refuted' && drop()
+        ? confirmProbeVerdict(first, await runProbeContainer(info.hostPath, canaryFile))
+        : first;
+    clear();
   }
 
-  const next: WorkspaceMountInfo = { ...info, verification };
+  // checkedAt follows the verdict: the physical check above just ran, so a new
+  // verification must never be stamped with the previous audit's timestamp.
+  const next: WorkspaceMountInfo = { ...info, verification, checkedAt: new Date().toISOString() };
   cached = next;
   cachedAtMs = Date.now();
   persist(next);

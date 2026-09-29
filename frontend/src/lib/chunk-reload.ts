@@ -30,16 +30,8 @@
  */
 export const CHUNK_RELOAD_KEY = 'wsd.chunkReload';
 
-/** The one automatic reload was CLAIMED but withheld because this document holds typed input; the app reads it to ask instead of reloading. Cleared with the guard by the boot hook. */
+/** The one automatic reload was CLAIMED but withheld because this document holds typed input; the app reads it to ask instead of reloading. Written by the inline shell script in index.html (it must catch `vite:preloadError` before any module loads), so this module only reads and clears it — there is deliberately no setter here. Cleared with the guard by the boot hook. */
 export const CHUNK_RELOAD_DEFERRED_KEY = 'wsd.chunkReloadDeferred';
-
-export function markChunkReloadDeferred(): void {
-  try {
-    sessionStorage.setItem(CHUNK_RELOAD_DEFERRED_KEY, '1');
-  } catch {
-    /* no persistable storage: the app still asks, it just cannot remember */
-  }
-}
 
 export function isChunkReloadDeferred(): boolean {
   try {

@@ -26,6 +26,11 @@ import {
   publicMountInfo,
   unescapeMountinfoField,
   MOUNT_CANARY_FILE,
+  MOUNT_VERIFY_CANARY_FILE,
+  buildProbeArgv,
+  probeVerdictFor,
+  probeExitCode,
+  confirmProbeVerdict,
   HOST_PATH_REDACTED,
   type MountinfoEntry,
   type WorkspaceMountInfo,
@@ -441,5 +446,128 @@ describe('hints + canary', () => {
     assert.notStrictEqual(canaryToken('a'), canaryToken('b'));
     assert.match(canaryToken('a'), /^madar-mount-canary-[0-9a-f]{8}$/);
     assert.strictEqual(MOUNT_CANARY_FILE, '.madar-mount-canary');
+  });
+});
+
+describe('probe canary separation', () => {
+  // REGRESSION GUARD. physicalCheck() is synchronous and unlinks its canary in a
+  // `finally`, so it can run during a verification's await (an MOUNT_AUDIT_MS
+  // cache expiry or the sweep tick) — while the probe container is booting. On
+  // one shared canary name that audit deleted the file the probe still had to
+  // see: `test -f` exited 1, the verdict was persisted as 'refuted', and
+  // mountRefusalCode() then refused EVERY project create with a 500 against a
+  // mount that was never broken. Two names make the interleaving impossible.
+  test('the probe canary is a DIFFERENT file from the physical check canary', () => {
+    assert.notStrictEqual(MOUNT_VERIFY_CANARY_FILE, MOUNT_CANARY_FILE);
+    assert.strictEqual(MOUNT_VERIFY_CANARY_FILE, '.madar-mount-verify-canary');
+  });
+
+  test('both canaries stay dotfiles at the root, and neither can name the other', () => {
+    for (const name of [MOUNT_CANARY_FILE, MOUNT_VERIFY_CANARY_FILE]) {
+      assert.ok(name.startsWith('.'), `${name} must be a dotfile (the janitor and the file UI skip those)`);
+      assert.ok(!name.includes('/') && !name.includes('\\'), `${name} must be a bare file name`);
+      assert.ok(!name.includes('..'), `${name} must not traverse`);
+    }
+    assert.ok(!MOUNT_VERIFY_CANARY_FILE.includes(MOUNT_CANARY_FILE.slice(1)));
+    assert.ok(!MOUNT_CANARY_FILE.includes(MOUNT_VERIFY_CANARY_FILE.slice(1)));
+  });
+
+  test('the probe argv defaults to the PROBE canary, never the audit canary', () => {
+    const argv = buildProbeArgv('D:\\Work\\madar\\workspaces', 'wsd/workspace:latest');
+    assert.deepStrictEqual(argv, [
+      'run',
+      '--rm',
+      '-v',
+      'D:\\Work\\madar\\workspaces:/probe',
+      'wsd/workspace:latest',
+      'test',
+      '-f',
+      `/probe/${MOUNT_VERIFY_CANARY_FILE}`,
+    ]);
+    assert.ok(argv[7].endsWith(MOUNT_VERIFY_CANARY_FILE));
+    assert.ok(!argv[7].endsWith(MOUNT_CANARY_FILE));
+  });
+
+  test('a passed canary name is the one the probe looks for (one source of truth)', () => {
+    assert.deepStrictEqual(
+      buildProbeArgv('/host/ws', 'img', MOUNT_VERIFY_CANARY_FILE),
+      buildProbeArgv('/host/ws', 'img'),
+    );
+    const override = buildProbeArgv('/host/ws', 'img', MOUNT_CANARY_FILE);
+    assert.strictEqual(override[7], `/probe/${MOUNT_CANARY_FILE}`);
+    assert.notStrictEqual(override[7], buildProbeArgv('/host/ws', 'img')[7]);
+  });
+
+  test('the argv is an argv, never a shell string (no quoting to get wrong)', () => {
+    const argv = buildProbeArgv('D:\\My Projects\\ws; rm -rf /', 'img');
+    assert.ok(Array.isArray(argv));
+    assert.strictEqual(argv[3], 'D:\\My Projects\\ws; rm -rf /:/probe');
+    assert.ok(!argv.some((a) => typeof a !== 'string' || a.includes("'")));
+  });
+});
+
+describe('probeVerdictFor', () => {
+  test('only the probe exit code 1 refutes the path', () => {
+    assert.strictEqual(probeVerdictFor(null, true), 'proved', 'a clean run proves the path');
+    assert.strictEqual(probeVerdictFor(1, false), 'refuted', 'test(1) = the canary was not visible');
+  });
+
+  test('docker 125+, a killed probe and a missing binary are all absent answers', () => {
+    for (const status of [125, 126, 127, 2, 143, null, undefined]) {
+      assert.strictEqual(probeVerdictFor(status, false), 'unknown', `status ${status} must stay permissive`);
+    }
+  });
+
+  // REGRESSION GUARD: Node's execFile error carries the exit code on `code` and
+  // has NO `status` key, so a mapping reading `err.status === 1` is dead code —
+  // every refutation degraded to 'unknown' and the strongest creation-gate signal
+  // never fired (measured live: an absent canary produced code:1, status:null).
+  test('probeExitCode reads Node\'s `code`, with `status` only as a fallback', () => {
+    assert.strictEqual(probeExitCode({ code: 1, killed: false, signal: null, cmd: 'docker run …' }), 1);
+    assert.strictEqual(probeExitCode({ code: 125 }), 125);
+    assert.strictEqual(probeExitCode({ status: 1 }), 1, 'a spawn-style error object still works');
+    for (const err of [null, undefined, {}, { code: null }, { code: 'ENOENT' }, { killed: true }]) {
+      assert.strictEqual(probeExitCode(err as any), null, `${JSON.stringify(err)} must read as "no answer"`);
+    }
+  });
+
+  test('an absent canary refutes through the real mapping (the dead-branch proof)', () => {
+    const execError = { code: 1, killed: false, signal: null, cmd: 'docker run …' };
+    assert.strictEqual(probeVerdictFor(probeExitCode(execError), false), 'refuted');
+  });
+
+  test('an unavailable probe stays permissive in the creation gate', () => {
+    assert.strictEqual(
+      mountRefusalCode({ hostPath: 'D:\\Work\\madar\\workspaces', state: 'ok', verification: 'unknown' }),
+      null,
+    );
+    assert.strictEqual(
+      mountRefusalCode({ hostPath: 'D:\\Work\\madar\\workspaces', state: 'ok', verification: 'refuted' }),
+      'refuted',
+    );
+    assert.strictEqual(
+      mountRefusalCode({ hostPath: 'D:\\Work\\madar\\workspaces', state: 'ok', verification: 'proved' }),
+      null,
+    );
+  });
+});
+
+describe('confirmProbeVerdict', () => {
+  // A refuted verdict is PERSISTED and refuses project creation, so it may never
+  // rest on one observation: a bind mount can hide a just-written file for a
+  // moment, and a single miss must not take project creation down.
+  test('two consecutive refutations are the only path to a blocking verdict', () => {
+    assert.strictEqual(confirmProbeVerdict('refuted', 'refuted'), 'refuted');
+  });
+
+  test('a lone refutation degrades to the permissive answer', () => {
+    assert.strictEqual(confirmProbeVerdict('refuted', 'unknown'), 'unknown');
+    assert.strictEqual(confirmProbeVerdict('refuted', 'proved'), 'proved');
+  });
+
+  test('a second look that proves the path always wins', () => {
+    assert.strictEqual(confirmProbeVerdict('unknown', 'proved'), 'proved');
+    assert.strictEqual(confirmProbeVerdict('proved', 'unknown'), 'unknown');
+    assert.strictEqual(confirmProbeVerdict('unknown', 'unknown'), 'unknown');
   });
 });

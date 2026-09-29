@@ -73,6 +73,7 @@ import {
   API_URL,
 } from './helpers.ts';
 import { EMBEDDED_PROBE_TIMEOUT_MS } from '../src/services/embedded-status-probe.ts';
+import { HOST_PATH_REDACTED } from '../src/services/workspaces-mount-core.ts';
 
 // ── Container / filesystem helpers (the repo's docker-exec convention) ──────
 
@@ -491,11 +492,17 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       assert.strictEqual(editorWs.verification, adminWs.verification);
       assert.strictEqual(editorWs.source, adminWs.source);
       assert.strictEqual(typeof editorWs.hint, 'string');
-      if (adminWs.hostPath) {
-        assert.notStrictEqual(editorWs.hostPath, adminWs.hostPath);
-        assert.ok(!asEditor.text.includes(adminWs.hostPath), 'the raw body leaked the host path to a non-admin');
-        assert.ok(!editorWs.hint.includes(adminWs.hostPath), 'the ok hint embeds the path — it must be scrubbed too');
-      }
+      // The precondition is ASSERTED, never assumed: on an install where the
+      // decoder fails, `hostPath` is null and every assertion below would pass
+      // vacuously — which is exactly the regression this row exists to catch.
+      assert.ok(
+        typeof adminWs.hostPath === 'string' && adminWs.hostPath.length > 1,
+        `precondition: the admin view must resolve a real host path to redaction-test against: ${JSON.stringify(adminWs)}`,
+      );
+      assert.notStrictEqual(editorWs.hostPath, adminWs.hostPath);
+      assert.strictEqual(editorWs.hostPath, HOST_PATH_REDACTED);
+      assert.ok(!asEditor.text.includes(adminWs.hostPath), 'the raw body leaked the host path to a non-admin');
+      assert.ok(!editorWs.hint.includes(adminWs.hostPath), 'the ok hint embeds the path — it must be scrubbed too');
       // The same redaction on the opencode status route.
       const ocViewer = await rawReq('GET', '/opencode/status', asUser(signUser(uniqueId('ea-redact'), 'ea-redact2', 'viewer')));
       assert.strictEqual(ocViewer.status, 200);
@@ -504,7 +511,8 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
         Object.keys(adminWs).sort(),
         'redaction must not change the opencode payload shape'
       );
-      if (adminWs.hostPath) assert.ok(!ocViewer.text.includes(adminWs.hostPath), '/opencode/status leaked the host path');
+      assert.strictEqual(ocViewer.json.workspace.hostPath, HOST_PATH_REDACTED);
+      assert.ok(!ocViewer.text.includes(adminWs.hostPath), '/opencode/status leaked the host path');
     });
 
     test("Object.hasOwn(ide,'password') is false — the secret is ABSENT, not just unused", async () => {
