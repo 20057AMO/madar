@@ -40,10 +40,36 @@
          drops a guard written by a different shell. When the guard refuses we
          do nothing at all, so the error travels on to the error boundary and
          the user gets honest copy. Without a persistable guard (private mode)
-         we never reload either. -->
+         we never reload either.
+
+         Typed-but-unsent input makes the reload lossy (a chat draft, a
+         half-typed prompt, a provider key), so it is only ever taken when
+         nothing is at stake: otherwise the guard is claimed and spent, the
+         reload is withheld, and the rejection travels on to the error
+         boundary, which asks instead. The sibling `wsd.chunkReloadDeferred`
+         flag is how the boundary tells "withheld" from "spent"; main.tsx
+         clears it with the guard, so it never outlives its decision. -->
     <script>
       (function () {
         var KEY = 'wsd.chunkReload';
+        var DEFERRED = 'wsd.chunkReloadDeferred';
+        /* Toggles and selects are skipped — a chosen option is not work in
+           progress. A false positive costs one click; a false negative costs
+           the user's text. */
+        function hasPendingInput() {
+          var nodes = document.querySelectorAll('input, textarea, [contenteditable]');
+          for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if (el.disabled || el.readOnly) continue;
+            var type = (el.type || '').toLowerCase();
+            if (type === 'checkbox' || type === 'radio' || type === 'file' ||
+                type === 'button' || type === 'submit' || type === 'reset' ||
+                type === 'hidden') continue;
+            if (el.value) return true;
+            if (el.isContentEditable && el.textContent && el.textContent.trim()) return true;
+          }
+          return false;
+        }
         window.addEventListener('vite:preloadError', function (e) {
           var entry = document.querySelector('script[type="module"][src]');
           var shell = (entry && entry.getAttribute('src')) || window.location.pathname;
@@ -52,6 +78,10 @@
             if (window.sessionStorage.getItem(KEY)) return;
             window.sessionStorage.setItem(KEY, shell + '|' + failure);
           } catch (err) {
+            return;
+          }
+          if (hasPendingInput()) {
+            try { window.sessionStorage.setItem(DEFERRED, '1'); } catch (err) { }
             return;
           }
           e.preventDefault();

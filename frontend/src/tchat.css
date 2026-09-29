@@ -1060,8 +1060,8 @@ mark.tchat-search-hit {
   min-height: 36px;
   max-height: 120px;
 }
-.tchat-textarea:focus { outline: none; }
-.tchat-textarea:focus-visible { outline: none; }
+/* The composer is borderless, so the shared :focus-visible ring is the only
+   keyboard focus cue it has (WCAG 2.4.7). */
 .tchat-textarea::placeholder { color: var(--text-3); }
 
 /* Circular send/mic button — swaps with content (WhatsApp behavior) */

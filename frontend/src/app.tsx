@@ -39,7 +39,14 @@ import {
 } from './api';
 import { UPDATE_RUNNING_STATES } from './views/settings-shared';
 import { Avatar } from './components/Avatar';
-import { claimChunkReload, isStaleChunkError } from './lib/chunk-reload';
+import { claimChunkReload, isChunkReloadDeferred, isStaleChunkError } from './lib/chunk-reload';
+import {
+  announceRouteLanding,
+  routeLabel,
+  ROUTE_LANDING_EVENT,
+  useRouteFocusReturn,
+  type RouteLanding,
+} from './lib/route-landing';
 import {
   capturePostLoginRoute,
   clearPostLoginRoute,
@@ -110,38 +117,47 @@ function prefetchLikelyChunks() {
 
 
 interface ErrorBoundaryProps { children: ComponentChildren; }
-interface ErrorBoundaryState { error: Error | null; reloading: boolean; }
+interface ErrorBoundaryState { error: Error | null; reloading: boolean; deferred: boolean; }
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null, reloading: false };
+  state: ErrorBoundaryState = { error: null, reloading: false, deferred: false };
+
+  // The fallback replaces the whole app, so its action must own the focus.
+  private focusPrimary = (el: HTMLButtonElement | null) => {
+    if (el) el.focus();
+  };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { error, reloading: false };
+    return { error, reloading: false, deferred: false };
   }
 
   /**
-   * Fallback trigger for the stale-chunk self-heal. In practice the inline
-   * listener in index.html gets there first — every route loader goes through
-   * Vite's preload helper, which dispatches vite:preloadError — so this only
-   * runs if that inline script is unavailable or a future import bypasses the
-   * helper. It claims the same one-shot guard, so whichever path fires first
-   * the reload still happens at most once per shell.
+   * Claims the same one-shot guard as the inline listener, so whichever path
+   * fires first the reload still happens at most once per shell. `deferred`
+   * means the inline script already claimed it and withheld the reload over
+   * typed input — taking it here would destroy that input, so the fallback
+   * explains what is at stake and makes the reload an explicit choice.
    */
   componentDidCatch(error: Error) {
-    if (this.state.reloading || !isStaleChunkError(error)) return;
+    if (this.state.reloading || this.state.deferred) return;
+    if (!isStaleChunkError(error)) return;
+    if (isChunkReloadDeferred()) {
+      this.setState({ deferred: true });
+      return;
+    }
     if (!claimChunkReload(error.message)) return;
     this.setState({ reloading: true });
     window.location.reload();
   }
 
   render() {
-    const { error, reloading } = this.state;
+    const { error, reloading, deferred } = this.state;
     if (error) {
       if (reloading) {
         return (
           <div class="error-boundary">
             <div class="error-boundary-box">
-              <div class="error-boundary-icon">⚠</div>
+              <div class="error-boundary-icon" aria-hidden="true">⚠</div>
               <h2>Updating Madar</h2>
               <p class="error-boundary-msg">Loading the files this update replaced — this takes a second.</p>
             </div>
@@ -151,24 +167,34 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       const stale = isStaleChunkError(error);
       return (
         <div class="error-boundary">
-          <div class="error-boundary-box">
-            <div class="error-boundary-icon">⚠</div>
-            <h2>{stale ? 'Madar was updated' : 'Something went wrong'}</h2>
-            <p class="error-boundary-msg">
+          <div
+            class="error-boundary-box"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="eb-title"
+            aria-describedby="eb-msg"
+          >
+            <div class="error-boundary-icon" aria-hidden="true">⚠</div>
+            <h2 id="eb-title">{stale ? 'Madar was updated' : 'Something went wrong'}</h2>
+            <p class="error-boundary-msg" id="eb-msg">
               {stale
-                ? 'The app was updated while this tab was open — reload to continue. The page you were on is kept.'
+                ? deferred
+                  ? 'Madar was updated while this tab was open, so this page stopped loading. Reload to continue — anything you typed in this tab will be lost.'
+                  : 'The app was updated while this tab was open — reload to continue. The page you were on is kept.'
                 : error.message}
             </p>
             <div class="error-boundary-actions">
-              <button class="error-boundary-btn" onClick={() => window.location.reload()}>
+              <button class="error-boundary-btn" ref={this.focusPrimary} onClick={() => window.location.reload()}>
                 Reload
               </button>
-              <button
-                class="error-boundary-btn secondary"
-                onClick={() => { this.setState({ error: null, reloading: false }); navigate('/'); }}
-              >
-                Go to Dashboard
-              </button>
+              {!deferred && (
+                <button
+                  class="error-boundary-btn secondary"
+                  onClick={() => { this.setState({ error: null, reloading: false, deferred: false }); navigate('/'); }}
+                >
+                  Go to Dashboard
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -481,6 +507,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/projects': 'Projects',
   '/chat': 'Team Chat',
   '/planner': 'Planner',
+  '/agents': 'Agents',
   '/terminals': 'Terminals',
   '/ide': 'VS Code',
   '/opencode': 'opencode',
@@ -504,6 +531,33 @@ function RouteTitle() {
   return null;
 }
 
+/**
+ * Names the destination of a restored deep link, once, in a polite live region.
+ * Mounted for the whole session and empty until it has something to say: a
+ * region the screen reader is already watching announces reliably, one that
+ * arrives filled does not. Empty-then-set is what makes a repeat announce work.
+ */
+function RouteAnnouncer() {
+  const { t, t2 } = useI18n();
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    const onLanding = (e: Event) => {
+      const route = (e as CustomEvent<string>).detail || '';
+      if (!route) return;
+      setMessage('');
+      const text = `${t2('تم تسجيل الدخول — أنت الآن في', 'Signed in — now on')} ${routeLabel(route, t, t2)}`;
+      requestAnimationFrame(() => setMessage(text));
+    };
+    window.addEventListener(ROUTE_LANDING_EVENT, onLanding);
+    return () => window.removeEventListener(ROUTE_LANDING_EVENT, onLanding);
+  }, [t, t2]);
+  return (
+    <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {message}
+    </div>
+  );
+}
+
 function Shell() {
   const [location] = useHashLocation();
   const { user, loading } = useAuth();
@@ -516,9 +570,18 @@ function Shell() {
   // lose the route, so the value is pinned here and released on the next
   // non-/login location.
   const landingRef = useRef('');
+  // As state, not the ref: the focus effect must keep running while the lazy
+  // destination mounts, which a next-render release of the ref would cancel.
+  const [landing, setLanding] = useState<RouteLanding | null>(null);
   useEffect(() => {
-    if (location !== '/login') landingRef.current = '';
+    if (location === '/login') return;
+    const route = landingRef.current;
+    landingRef.current = '';
+    if (!route) return;
+    setLanding((prev) => ({ route, seq: (prev?.seq || 0) + 1 }));
+    announceRouteLanding(route);
   }, [location]);
+  useRouteFocusReturn(landing);
   // One-shot speculative chunk prefetch once the shell is up and the user is
   // known — never during the login/setup flow (no wasted bytes there).
   const prefetchedRef = useRef(false);
@@ -776,6 +839,7 @@ export function App() {
           <AuthProvider>
             <Router hook={useHashLocation}>
               <RouteTitle />
+              <RouteAnnouncer />
               <Shell />
               <IdeKeepAlive />
               <OpencodeKeepAlive />

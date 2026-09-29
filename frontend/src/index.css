@@ -19,6 +19,10 @@
   --text-2: #9ba0a8;
   --text-3: #7d8289;
   --accent: #ffffff;
+  /* Focus ring — WCAG 1.4.11 needs 3:1 against whatever it sits on. Mid-gray
+     clears both ends (4.1:1 on --bg, 3.8:1 on the near-white .btn-primary
+     fill); a light ring vanishes on buttons, a dark one vanishes on panels. */
+  --focus-ring: #6f757e;
   --green: #3fb950;
   --yellow: #d29922;
   --red: #f85149;
@@ -95,7 +99,7 @@ input, select { font: inherit; color: inherit; }
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .modern-input::placeholder { color: var(--text-3); }
-.modern-input:focus { border-color: var(--text-3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 25%, transparent); }
+.modern-input:focus { border-color: var(--text-3); box-shadow: 0 0 0 3px var(--focus-ring); }
 select.modern-input { appearance: none; cursor: pointer; }
 
 .btn-primary {
@@ -134,14 +138,8 @@ select.modern-input { appearance: none; cursor: pointer; }
 .btn-danger:hover { background: rgba(248,81,73,0.2); }
 .btn-danger.sm { padding: 6px 12px; font-size: 0.75rem; }
 
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
-}
+/* The keyboard focus ring for every control lives further down with the rest
+   of the effects layer (`:focus-visible` → --focus-ring). */
 
 /* Skip link — visually hidden until focused (WCAG 2.4.1) */
 .skip-link {
@@ -2366,10 +2364,10 @@ input[type="file"].modern-file::file-selector-button {
    Subtle motion Â· focus rings Â· entrances Â· watermark life
    â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* Keyboard focus rings (a11y + crisp identity) */
+/* Keyboard focus rings (a11y + crisp identity) — see --focus-ring in :root. */
 :focus { outline: none; }
 :focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--text) 55%, transparent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }

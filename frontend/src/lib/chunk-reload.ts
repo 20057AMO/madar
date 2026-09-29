@@ -30,6 +30,33 @@
  */
 export const CHUNK_RELOAD_KEY = 'wsd.chunkReload';
 
+/** The one automatic reload was CLAIMED but withheld because this document holds typed input; the app reads it to ask instead of reloading. Cleared with the guard by the boot hook. */
+export const CHUNK_RELOAD_DEFERRED_KEY = 'wsd.chunkReloadDeferred';
+
+export function markChunkReloadDeferred(): void {
+  try {
+    sessionStorage.setItem(CHUNK_RELOAD_DEFERRED_KEY, '1');
+  } catch {
+    /* no persistable storage: the app still asks, it just cannot remember */
+  }
+}
+
+export function isChunkReloadDeferred(): boolean {
+  try {
+    return sessionStorage.getItem(CHUNK_RELOAD_DEFERRED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function clearChunkReloadDeferred(): void {
+  try {
+    sessionStorage.removeItem(CHUNK_RELOAD_DEFERRED_KEY);
+  } catch {
+    /* nothing persisted */
+  }
+}
+
 /** The entry script of the running document — the build identity of this boot. */
 export function currentShellId(): string {
   try {
@@ -68,7 +95,8 @@ export function claimChunkReload(failure: string): boolean {
 /**
  * Boot hook: forget a guard left by a shell this document is not. A guard that
  * matches the running shell is deliberately KEPT — that shell already failed
- * once, so the one-shot stays spent.
+ * once, so the one-shot stays spent. A deferred flag never survives a boot:
+ * the document that owed the user a decision is gone.
  */
 export function clearChunkReloadGuard(): void {
   try {
@@ -77,4 +105,5 @@ export function clearChunkReloadGuard(): void {
   } catch {
     /* nothing persisted, nothing to clear */
   }
+  clearChunkReloadDeferred();
 }

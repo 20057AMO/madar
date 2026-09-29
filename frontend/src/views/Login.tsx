@@ -41,8 +41,9 @@ export function Login() {
             <p class="login-sub">{t('login.twoFactorHint')}</p>
           </div>
           <form onSubmit={handleVerify} class="login-form">
-            <label class="field-label">{t('login.twoFactor')}</label>
+            <label class="field-label" for="login-otp">{t('login.twoFactor')}</label>
             <input
+              id="login-otp"
               class="modern-input login-otp"
               type="text"
               inputMode="numeric"
@@ -120,23 +121,27 @@ export function Login() {
         </div>
 
         <form onSubmit={handleSubmit} class="login-form">
-          <label class="field-label">{t('login.username')}</label>
+          <label class="field-label" for="login-username">{t('login.username')}</label>
           <input
+            id="login-username"
             class="modern-input"
             type="text"
             dir="auto"
             placeholder={t2('أدخل اسم المستخدم', 'Enter username')}
+            autoComplete="username"
             autoFocus
             value={username}
             onInput={(e: any) => setUsername(e.target.value)}
           />
 
-          <label class="field-label">{t('login.password')}</label>
+          <label class="field-label" for="login-password">{t('login.password')}</label>
           <input
+            id="login-password"
             class="modern-input"
             type="password"
             dir="ltr"
             placeholder={isSetup ? t2('6 أحرف على الأقل', 'Min 6 characters') : t2('أدخل كلمة المرور', 'Enter password')}
+            autoComplete={isSetup ? 'new-password' : 'current-password'}
             value={password}
             onInput={(e: any) => setPassword(e.target.value)}
           />
@@ -144,12 +149,14 @@ export function Login() {
 
           {isSetup && (
             <>
-              <label class="field-label">{t('login.confirmPassword')}</label>
+              <label class="field-label" for="login-confirm">{t('login.confirmPassword')}</label>
               <input
+                id="login-confirm"
                 class="modern-input"
                 type="password"
                 dir="ltr"
                 placeholder={t('login.confirmPassword')}
+                autoComplete="new-password"
                 value={confirm}
                 onInput={(e: any) => setConfirm(e.target.value)}
               />
