@@ -2364,8 +2364,16 @@ input[type="file"].modern-file::file-selector-button {
    Subtle motion Â· focus rings Â· entrances Â· watermark life
    â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* Keyboard focus rings (a11y + crisp identity) — see --focus-ring in :root. */
+/* Keyboard focus rings (a11y + crisp identity) — see --focus-ring in :root.
+   The native control types are element-qualified deliberately: a bare
+   `:focus-visible` is 0,1,0, so any `outline: none` declared LATER in this file
+   (.cn-section-select) ties with it and wins. Qualified, they outrank it. */
 :focus { outline: none; }
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible,
 :focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -2773,6 +2781,11 @@ input[type="file"].modern-file::file-selector-button {
   font-size: 0.75rem;
   max-width: 140px;
   outline: none;
+}
+.cn-section-select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-color: var(--accent);
 }
 .cn-save-state {
   display: inline-flex;
@@ -3204,7 +3217,15 @@ input[type="file"].modern-file::file-selector-button {
   outline: none;
   box-sizing: border-box;
   z-index: 2;
-  box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.2);
+}
+/* The halo used to be unconditional, which made it the RESTING state — focused
+   and unfocused measured identical. The 1px accent border is the resting
+   affordance (7.7–8.4:1 on every note colour) and the ring is focus only; it
+   stays on #7dd3fc because --focus-ring is only 2.75:1 on .cn-node.c-yellow. */
+.cn-editor:focus-visible {
+  outline: 2px solid #7dd3fc;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px rgba(125, 211, 252, 0.25);
 }
 
 .cn-empty {

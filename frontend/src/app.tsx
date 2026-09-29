@@ -39,7 +39,7 @@ import {
 } from './api';
 import { UPDATE_RUNNING_STATES } from './views/settings-shared';
 import { Avatar } from './components/Avatar';
-import { claimChunkReload, isChunkReloadDeferred, isStaleChunkError } from './lib/chunk-reload';
+import { claimChunkReload, clearChunkReloadDeferred, isChunkReloadDeferred, isStaleChunkError } from './lib/chunk-reload';
 import {
   announceRouteLanding,
   routeLabel,
@@ -136,12 +136,15 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
    * fires first the reload still happens at most once per shell. `deferred`
    * means the inline script already claimed it and withheld the reload over
    * typed input — taking it here would destroy that input, so the fallback
-   * explains what is at stake and makes the reload an explicit choice.
+   * explains what is at stake and makes the reload an explicit choice. The flag
+   * is dropped as it is read, so its "your input will be lost" wording can never
+   * be lent to a later, unrelated failure.
    */
   componentDidCatch(error: Error) {
     if (this.state.reloading || this.state.deferred) return;
     if (!isStaleChunkError(error)) return;
     if (isChunkReloadDeferred()) {
+      clearChunkReloadDeferred();
       this.setState({ deferred: true });
       return;
     }
@@ -536,20 +539,43 @@ function RouteTitle() {
  * Mounted for the whole session and empty until it has something to say: a
  * region the screen reader is already watching announces reliably, one that
  * arrives filled does not. Empty-then-set is what makes a repeat announce work.
+ *
+ * The label is re-resolved across a bounded window rather than frozen on the
+ * first frame: a project page can only name itself once its own chunk and
+ * payload have landed, so an immediate read would almost always say the generic
+ * "Project". The first CHANGE commits it, and so does the ceiling.
  */
+const LABEL_MAX_FRAMES = 90;
+
 function RouteAnnouncer() {
   const { t, t2 } = useI18n();
   const [message, setMessage] = useState('');
   useEffect(() => {
+    let raf = 0;
     const onLanding = (e: Event) => {
       const route = (e as CustomEvent<string>).detail || '';
       if (!route) return;
+      window.cancelAnimationFrame(raf);
       setMessage('');
-      const text = `${t2('تم تسجيل الدخول — أنت الآن في', 'Signed in — now on')} ${routeLabel(route, t, t2)}`;
-      requestAnimationFrame(() => setMessage(text));
+      let frames = 0;
+      let first = '';
+      const settle = () => {
+        const label = routeLabel(route, t, t2);
+        if (!first) first = label;
+        if (label && label === first && ++frames < LABEL_MAX_FRAMES) {
+          raf = window.requestAnimationFrame(settle);
+          return;
+        }
+        raf = 0;
+        setMessage(`${t2('تم تسجيل الدخول — أنت الآن في', 'Signed in — now on')} ${label}`);
+      };
+      raf = window.requestAnimationFrame(settle);
     };
     window.addEventListener(ROUTE_LANDING_EVENT, onLanding);
-    return () => window.removeEventListener(ROUTE_LANDING_EVENT, onLanding);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener(ROUTE_LANDING_EVENT, onLanding);
+    };
   }, [t, t2]);
   return (
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">

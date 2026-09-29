@@ -400,6 +400,7 @@ export function Project({ params }: { params: { slug: string } }) {
   const [nameDraft, setNameDraft] = useState('');
   const renameSaveRef = useRef<HTMLButtonElement | null>(null);
   const renameTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const renameReturnArmed = useRef(false);
   const [copied, setCopied] = useState(false);
   const [zipping, setZipping] = useState(false);
 
@@ -521,9 +522,14 @@ export function Project({ params }: { params: { slug: string } }) {
   // modified draft stays open for Save or Escape. Restoring focus to the
   // rename trigger happens post-commit rather than inline: the input unmount
   // right after Escape fires onBlur, and cancelRename/handleSaveName run
-  // before the re-render actually swaps the pencil button back in.
+  // before the re-render actually swaps the pencil button back in. The
+  // handoff is ARMED by the trigger's own click, so the mount pass never fires
+  // it — that steal dumped a restored-login user on this icon button instead of
+  // the heading useRouteFocusReturn had just handed them.
   useEffect(() => {
-    if (!renaming && renameTriggerRef.current?.isConnected) {
+    if (renaming || !renameReturnArmed.current) return;
+    renameReturnArmed.current = false;
+    if (renameTriggerRef.current?.isConnected) {
       try { renameTriggerRef.current.focus(); } catch { /* noop */ }
     }
   }, [renaming]);
@@ -599,7 +605,7 @@ export function Project({ params }: { params: { slug: string } }) {
                     title={t('misc.renameProject')}
                     aria-label={t('misc.renameProject')}
                     ref={renameTriggerRef}
-                    onClick={() => { setNameDraft(project?.name || ''); setRenaming(true); }}
+                    onClick={() => { renameReturnArmed.current = true; setNameDraft(project?.name || ''); setRenaming(true); }}
                   >
                     <Pencil width={13} height={13} class="icon" />
                   </button>

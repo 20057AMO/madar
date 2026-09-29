@@ -302,6 +302,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   // Primary (first) selected node — most UI reads only the head of the set.
   const selNode = selNodes[0] ?? null;
   const [editing, setEditing] = useState<string | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -1559,6 +1560,13 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   };
 
   // ── editing (inline textarea) ─────────────────────────────────
+  // The textarea is inserted on the same tick editing starts, and an autofocus
+  // attribute is inert on a dynamically created element — so "double-click to
+  // edit" used to leave the keyboard on the canvas, unable to type and unable
+  // to ever see the editor's focus ring.
+  useEffect(() => {
+    if (editing) editorRef.current?.focus();
+  }, [editing]);
   const startEdit = (id: string) => {
     if (readOnly) return;
     const node = docRef.current?.nodes.find((n) => n.id === id);
@@ -2281,8 +2289,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   <textarea
                     class="cn-editor"
                     data-id={n.id}
+                    ref={editorRef}
                     value={n.text}
-                    autofocus
                     placeholder={n.type === 'card' ? t('canvas.cardPlaceholder') : t('canvas.notePlaceholder')}
                     onInput={(e: any) => onEditorInput(n.id, e)}
                     onBlur={commitEdit}
