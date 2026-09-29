@@ -473,6 +473,40 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       assert.strictEqual(typeof res.json.ide.lanReachable, 'boolean');
     });
 
+    // The absolute host path of the checkout is operator information (it
+    // discloses the machine's directory layout and username) and BOTH status
+    // routes are readable by any authenticated user, so it is admin-only. The
+    // verdict itself must survive redaction — an operator diagnosing a broken
+    // mount still needs state/reason/verification.
+    test('the host path is admin-only; a non-admin gets the redacted verdict, not the path', async () => {
+      const admin = await rawReq('GET', '/ide/status', authHeaders());
+      assert.strictEqual(admin.status, 200);
+      const asEditor = await rawReq('GET', '/ide/status', asUser(signUser(uniqueId('ea-redact'), 'ea-redact', 'editor')));
+      assert.strictEqual(asEditor.status, 200);
+
+      const adminWs = admin.json.ide.workspace;
+      const editorWs = asEditor.json.ide.workspace;
+      assert.deepStrictEqual(Object.keys(editorWs).sort(), Object.keys(adminWs).sort(), 'redaction must not change the payload shape');
+      assert.strictEqual(editorWs.state, adminWs.state);
+      assert.strictEqual(editorWs.verification, adminWs.verification);
+      assert.strictEqual(editorWs.source, adminWs.source);
+      assert.strictEqual(typeof editorWs.hint, 'string');
+      if (adminWs.hostPath) {
+        assert.notStrictEqual(editorWs.hostPath, adminWs.hostPath);
+        assert.ok(!asEditor.text.includes(adminWs.hostPath), 'the raw body leaked the host path to a non-admin');
+        assert.ok(!editorWs.hint.includes(adminWs.hostPath), 'the ok hint embeds the path — it must be scrubbed too');
+      }
+      // The same redaction on the opencode status route.
+      const ocViewer = await rawReq('GET', '/opencode/status', asUser(signUser(uniqueId('ea-redact'), 'ea-redact2', 'viewer')));
+      assert.strictEqual(ocViewer.status, 200);
+      assert.deepStrictEqual(
+        Object.keys(ocViewer.json.workspace).sort(),
+        Object.keys(adminWs).sort(),
+        'redaction must not change the opencode payload shape'
+      );
+      if (adminWs.hostPath) assert.ok(!ocViewer.text.includes(adminWs.hostPath), '/opencode/status leaked the host path');
+    });
+
     test("Object.hasOwn(ide,'password') is false — the secret is ABSENT, not just unused", async () => {
       const res = await rawReq('GET', '/ide/status', authHeaders());
       assert.strictEqual(res.status, 200);

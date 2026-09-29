@@ -49,7 +49,7 @@ import * as snapAuto from './services/project-snapshots-auto';
 import { getIdeStatus } from './services/ide-service';
 import { createStatusCache, resolveEmbeddedPort, isLanReachableHost, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
 import { probeEmbeddedPort } from './services/embedded-status-probe';
-import { getWorkspaceMount, startWorkspaceMountAudit } from './services/workspaces-mount';
+import { getWorkspaceMount, publicMountInfo, startWorkspaceMountAudit, type WorkspaceMountInfo } from './services/workspaces-mount';
 import { detectIp } from './services/server-info';
 import { getChatConfig, updateChatConfig, listModels, type ChatConfig } from './services/chat-config';
 import {
@@ -1069,10 +1069,17 @@ app.post('/api/providers/:id/test', requireAdmin, providersManagement, async (re
 
 // ── Unified Web IDE status (running + host port) ──────────────
 // `?fresh=1` bypasses the probe cache (same convention as GET /api/storage).
+// Both status routes below are readable by ANY authenticated user, so the
+// absolute host path of the checkout is admin-only: the verdict (state, reason,
+// verification) stays, the path does not.
+function forCaller<T extends { workspace: WorkspaceMountInfo }>(payload: T, req: any): T {
+  return { ...payload, workspace: publicMountInfo(payload.workspace, req.user?.role === 'admin') };
+}
+
 app.get('/api/ide/status', async (req, res) => {
   try {
     const fresh = req.query?.fresh === '1' || req.query?.fresh === 'true';
-    res.json({ ide: await getIdeStatus({ fresh }) });
+    res.json({ ide: forCaller(await getIdeStatus({ fresh }), req) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1133,17 +1140,22 @@ export function invalidateOpencodeStatusCache(): void {
 app.get('/api/opencode/status', async (req, res) => {
   try {
     const fresh = req.query?.fresh === '1' || req.query?.fresh === 'true';
-    res.json(await opencodeStatusCache.get({ fresh }));
+    res.json(forCaller(await opencodeStatusCache.get({ fresh }), req));
   } catch (err: any) {
     // Unreachable in theory (the load never rejects) — but a hard 500 on a
     // status poll is the one shape the client cannot recover from, so degrade
     // honestly instead.
-    res.json({
-      running: false,
-      port: OPENCODE_PORT,
-      workspace: getWorkspaceMount(),
-      lanReachable: isLanReachableHost(process.env.WSD_EMBEDDED_PUBLISH_HOST),
-    });
+    res.json(
+      forCaller(
+        {
+          running: false,
+          port: OPENCODE_PORT,
+          workspace: getWorkspaceMount(),
+          lanReachable: isLanReachableHost(process.env.WSD_EMBEDDED_PUBLISH_HOST),
+        },
+        req,
+      ),
+    );
   }
 });
 

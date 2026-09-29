@@ -22,8 +22,13 @@ import {
   resolveHostDir,
   mountHint,
   canaryToken,
+  mountRefusalCode,
+  publicMountInfo,
+  unescapeMountinfoField,
   MOUNT_CANARY_FILE,
+  HOST_PATH_REDACTED,
   type MountinfoEntry,
+  type WorkspaceMountInfo,
 } from '../src/services/workspaces-mount-core.ts';
 
 /**
@@ -195,6 +200,156 @@ describe('decodeBindSource — posix binds, volumes, root fs (rules 3-6)', () =>
     assert.strictEqual(decoded.ok && decoded.hostPath, '/weird/place');
     const junk = decodeBindSource(entry({ root: 'relative/path', fsType: 'tmpfs', superOpts: 'rw' }));
     assert.deepStrictEqual(junk, { ok: false, reason: 'unresolved_source' });
+  });
+});
+
+describe('kernel octal escapes in mountinfo (a path with a space is NOT a broken decoder)', () => {
+  test('exactly the four kernel escapes are decoded, and nothing else', () => {
+    assert.strictEqual(unescapeMountinfoField('/Users/First\\040Last'), '/Users/First Last');
+    assert.strictEqual(unescapeMountinfoField('/a\\011b'), '/a\tb');
+    assert.strictEqual(unescapeMountinfoField('/a\\012b'), '/a\nb');
+    assert.strictEqual(unescapeMountinfoField('/a\\134b'), '/a\\b');
+    // Only those four codes exist; any other \NNN is literal text and must stay.
+    assert.strictEqual(unescapeMountinfoField('/a\\123b\\04c'), '/a\\123b\\04c');
+    assert.strictEqual(unescapeMountinfoField('/plain/path'), '/plain/path');
+    assert.strictEqual(unescapeMountinfoField(undefined as unknown as string), '');
+  });
+
+  test('the escaping is a single left-to-right pass (an escaped backslash cannot re-open one)', () => {
+    // A directory literally named "\040" is reported as \134040; decoding twice
+    // would turn it into a space, i.e. into a path that does not exist.
+    assert.strictEqual(unescapeMountinfoField('/a\\134040b'), '/a\\040b');
+  });
+
+  test('a live-shaped drvfs line with an escaped space decodes to the REAL host path', () => {
+    const spaced = LIVE_LINE.replace('/Work/madar/workspaces', '/Users/First\\040Last/madar/workspaces');
+    const [parsed] = parseMountinfo(spaced);
+    assert.ok(parsed, 'the escaped line must still parse as ONE record');
+    assert.strictEqual(parsed.root, '/Users/First\\040Last/madar/workspaces');
+    const decoded = decodeBindSource(parsed);
+    assert.strictEqual(decoded.ok && decoded.hostPath, 'D:\\Users\\First Last\\madar\\workspaces');
+    // Round trip through the top-level decision, which is what createProject uses.
+    assert.strictEqual(
+      resolveHostDir({ envValue: '', mountinfoText: spaced }).hostPath,
+      'D:\\Users\\First Last\\madar\\workspaces',
+    );
+  });
+
+  test('escapes survive every rule: virtiofs drive promotion and the posix bind', () => {
+    const virtiofs = decodeBindSource(
+      entry({ root: '/c/Users/First\\040Last/workspaces', fsType: 'virtiofs', superOpts: 'rw' })
+    );
+    assert.strictEqual(virtiofs.ok && virtiofs.hostPath, 'C:/Users/First Last/workspaces');
+    const posix = decodeBindSource(
+      entry({ root: '/srv/team\\040space/workspaces', fsType: 'ext4', source: '/dev/sda1', superOpts: 'rw' })
+    );
+    assert.strictEqual(posix.ok && posix.hostPath, '/srv/team space/workspaces');
+  });
+
+  test('an escaped backslash in a directory name is preserved as a backslash', () => {
+    const decoded = decodeBindSource(
+      entry({ root: '/srv/odd\\134name/workspaces', fsType: 'ext4', source: '/dev/sda1', superOpts: 'rw' })
+    );
+    assert.strictEqual(decoded.ok && decoded.hostPath, '/srv/odd\\name/workspaces');
+  });
+
+  test('a mount point with an escaped space is still matched EXACTLY', () => {
+    const line = '42 41 0:33 /host/team\\040space /workspaces\\040old rw,noatime - 9p D:\\134 rw,aname=drvfs;path=D:\\;symlinkroot=/mnt/host/';
+    const entries = parseMountinfo(line);
+    assert.strictEqual(pickMount(entries, '/workspaces old')?.root, '/host/team\\040space');
+    assert.strictEqual(pickMount(entries, '/workspaces'), null);
+  });
+
+  test('unescaping never turns a volume root or the root fs into a host path', () => {
+    const volume = decodeBindSource(
+      entry({ root: '/var/lib/docker/volumes/wsd\\040data/_data', fsType: 'ext4', superOpts: 'rw' })
+    );
+    assert.deepStrictEqual(volume, { ok: false, reason: 'named_volume' });
+    assert.deepStrictEqual(
+      decodeBindSource(entry({ root: '/', fsType: 'overlay', superOpts: 'rw' })),
+      { ok: false, reason: 'root_fs' },
+    );
+  });
+});
+
+describe('mountRefusalCode — what may a project container bind to?', () => {
+  const ok = { hostPath: 'D:\\Work\\WSD-Pro\\workspaces', state: 'ok' } as const;
+
+  test('a proved mount on a healthy state is the only shape that creates', () => {
+    assert.strictEqual(mountRefusalCode({ ...ok, verification: 'proved' }), null);
+  });
+
+  test('an UNKNOWN verdict is permissive (an absent probe is not proof of breakage)', () => {
+    assert.strictEqual(mountRefusalCode({ ...ok, verification: 'unknown' }), null);
+  });
+
+  test('a REFUTED proof refuses — the probe saw a different directory than we write', () => {
+    assert.strictEqual(mountRefusalCode({ ...ok, verification: 'refuted' }), 'refuted');
+  });
+
+  test('no host path refuses as unresolvable, whatever the verdict says', () => {
+    assert.strictEqual(
+      mountRefusalCode({ hostPath: null, state: 'unresolved', verification: 'unknown' }),
+      'unresolvable',
+    );
+    // 'broken' outranks 'refuted': the mount we audit is already unusable, which
+    // is the more actionable refusal to report.
+    assert.strictEqual(
+      mountRefusalCode({ ...ok, state: 'missing', verification: 'refuted' }),
+      'broken',
+    );
+  });
+
+  test('every non-ok state refuses as broken', () => {
+    for (const state of ['missing', 'not_a_directory', 'unreadable', 'unresolved'] as const) {
+      assert.strictEqual(mountRefusalCode({ ...ok, state, verification: 'proved' }), 'broken', state);
+    }
+  });
+});
+
+describe('publicMountInfo — the host path is operator information', () => {
+  const info: WorkspaceMountInfo = {
+    state: 'ok',
+    hostPath: 'D:\\Users\\First Last\\WSD-Pro\\workspaces',
+    source: 'mountinfo',
+    reason: null,
+    hint: mountHint('ok', null, 'D:\\Users\\First Last\\WSD-Pro\\workspaces', '/workspaces'),
+    checkedAt: '2026-09-29T10:00:00.000Z',
+    verification: 'proved',
+  };
+
+  test('an admin keeps the whole verdict verbatim', () => {
+    assert.strictEqual(publicMountInfo(info, true), info);
+  });
+
+  test('a non-admin keeps state / reason / source / verification but never the path', () => {
+    const view = publicMountInfo(info, false);
+    assert.strictEqual(view.state, 'ok');
+    assert.strictEqual(view.verification, 'proved');
+    assert.strictEqual(view.source, 'mountinfo');
+    assert.strictEqual(view.hint.length > 10, true);
+    assert.strictEqual(view.hostPath, HOST_PATH_REDACTED);
+    assert.ok(!view.hint.includes('D:\\Users'), 'the ok hint embeds the path — it must be scrubbed too');
+    assert.ok(!JSON.stringify(view).includes('D:\\'), 'no host path may survive anywhere in the payload');
+  });
+
+  test('the cached object is never mutated (the same snapshot serves every caller)', () => {
+    publicMountInfo(info, false);
+    assert.strictEqual(info.hostPath, 'D:\\Users\\First Last\\WSD-Pro\\workspaces');
+    assert.ok(info.hint.includes('D:\\Users\\First Last'));
+  });
+
+  test('an unresolved path stays null (honest, not redacted), for admins and viewers alike', () => {
+    const unresolved: WorkspaceMountInfo = {
+      ...info,
+      state: 'unresolved',
+      hostPath: null,
+      reason: 'named_volume',
+      verification: 'unknown',
+      hint: mountHint('unresolved', 'named_volume', null, '/workspaces'),
+    };
+    assert.strictEqual(publicMountInfo(unresolved, false).hostPath, null);
+    assert.strictEqual(publicMountInfo(unresolved, false).hint, unresolved.hint);
   });
 });
 

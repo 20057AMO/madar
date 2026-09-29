@@ -25,7 +25,7 @@ import { recordActivity, loadActivity, type ActivityEntry } from './project-acti
 import { loadNotes, saveNotes } from './project-notes';
 import { loadCanvas, saveCanvas } from './project-canvas';
 import { purgeOpencodeProjectRows } from './opencode-store';
-import { getWorkspaceMount } from './workspaces-mount';
+import { getWorkspaceMount, mountRefusalCode } from './workspaces-mount';
 import { dispatchWebhook } from './webhook-sender';
 import { parseCpu, parseMemory, sanitizeLimitsPatch, limitsEqual, isEmptyLimits, checkCeilings, resolveDefaultLimits, getHostInfo, formatMemory, formatCpu, type ProjectLimits } from './project-limits';
 import { runSweep } from './workspace-janitor';
@@ -50,9 +50,10 @@ const docker = new Docker(); // uses /var/run/docker.sock by default
 const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 // The HOST-side path of the same directory is deliberately NOT a module-level
 // constant: bind sources are resolved by the Docker daemon (the Docker Desktop
-// VM), so it must be a real host path, and getWorkspacesHostDir() resolves +
-// audits it on every call (env override, else decoded from mountinfo, never a
-// value that can go stale after a folder move).
+// VM), so it must be a real host path, and getWorkspaceMount() resolves + audits
+// it on every call (env override, else decoded from mountinfo, never a value
+// that can go stale after a folder move). Its verdict — including a refuted
+// probe — gates project creation right below.
 
 // Base image used for project workspaces (Ubuntu + dev tooling)
 const BASE_IMAGE = process.env.WSD_WORKSPACE_IMAGE || 'wsd/workspace:latest';
@@ -422,11 +423,13 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
   // A wrong-or-stale bind source is a silent-wrong-mount trap: dockerode hands
   // the string to the daemon, which resolves it on the daemon host (Docker
   // Desktop VM), not inside this container — and a stale-but-existing path
-  // mounts happily, so every project file lands where nobody can see it. Two
-  // DISTINCT refusals, both naming the real cause. Checked BEFORE touching the
+  // mounts happily, so every project file lands where nobody can see it. Three
+  // DISTINCT refusals, each naming its real cause. Checked BEFORE touching the
   // mount, so a broken one reports its own cause instead of a raw ENOENT.
   const mount = getWorkspaceMount();
-  if (!mount.hostPath) {
+  const refusal = mountRefusalCode(mount);
+  const hostPath = mount.hostPath;
+  if (refusal === 'unresolvable' || !hostPath) {
     throw new HttpError(
       500,
       'The host path of the workspaces directory could not be determined — ' +
@@ -434,7 +437,7 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
         mount.hint,
     );
   }
-  if (mount.state !== 'ok') {
+  if (refusal === 'broken') {
     throw new HttpError(
       500,
       `The workspaces bind mount is broken (${mount.state}) — project containers ` +
@@ -442,8 +445,22 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
         mount.hint,
     );
   }
+  if (refusal === 'refuted') {
+    // Positive knowledge of breakage: a probe container looked at the decoded
+    // host path and did not see the canary this app wrote, so the daemon mounts a
+    // different directory than the one we audited. The message deliberately
+    // omits the decoded path (creators are not necessarily admins).
+    throw new HttpError(
+      500,
+      'The decoded workspaces host path was REFUTED by the probe container — ' +
+        'project containers would mount a different directory than the one this ' +
+        'app writes to, so creation is refused. Fix the bind mount (or set ' +
+        'WSD_WORKSPACES_HOST_DIR in .env to the absolute host path of ./workspaces) ' +
+        'and retry.',
+    );
+  }
   ensureWorkspaceDir(slug);
-  const bindSource = `${mount.hostPath.replace(/\\/g, '/')}/${slug}`;
+  const bindSource = `${hostPath.replace(/\\/g, '/')}/${slug}`;
   const containerName = `wsd-${slug}`;
   const image = clean.image || BASE_IMAGE;
   await ensureImage(image);

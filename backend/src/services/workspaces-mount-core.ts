@@ -66,6 +66,17 @@ export type MountReason = MountDecodeReason | MountIoReason | 'no_mount_entry';
 /** The honest verdict on the bind mount. */
 export type WorkspaceMountState = 'ok' | 'missing' | 'not_a_directory' | 'unreadable' | 'unresolved';
 
+/**
+ * Did a probe container agree that the decoded host path is the directory this
+ * app container writes to? Ternary on purpose: 'unknown' is a real answer
+ * (verification disabled or unavailable) and must never be reported as 'proved',
+ * nor treated as breakage.
+ */
+export type MountVerification = 'proved' | 'refuted' | 'unknown';
+
+/** Why project creation must be refused, in the order the rules apply. */
+export type MountRefusalCode = 'unresolvable' | 'broken' | 'refuted';
+
 /** Full operator-facing mount description, surfaced by both status routes. */
 export interface WorkspaceMountInfo {
   state: WorkspaceMountState;
@@ -81,8 +92,11 @@ export interface WorkspaceMountInfo {
    * Ternary on purpose: 'unknown' is a real answer (verification disabled or
    * unavailable) and must never be reported as 'proved'.
    */
-  verification: 'proved' | 'refuted' | 'unknown';
+  verification: MountVerification;
 }
+
+/** Placeholder the non-privileged view carries instead of the absolute path. */
+export const HOST_PATH_REDACTED = '<redacted>';
 
 /** Name of the writability canary, written at the ROOT of the workspaces dir. */
 export const MOUNT_CANARY_FILE = '.madar-mount-canary';
@@ -119,10 +133,33 @@ export function parseMountinfo(text: string): MountinfoEntry[] {
   return out;
 }
 
+/**
+ * The kernel escapes the four characters that would break its whitespace-
+ * separated field format, in EVERY path field of mountinfo: space `\040`, tab
+ * `\011`, newline `\012`, backslash `\134`. A checkout under
+ * `C:\Users\First Last\` is therefore reported as `/Users/First\040Last/`, and
+ * building a host path without undoing that yields a path that does not exist —
+ * the very regression this module exists to prevent.
+ *
+ * Only these four codes are decoded (a single left-to-right pass, so an escaped
+ * backslash cannot re-open an escape sequence); any other `\NNN` is literal text.
+ */
+/** The kernel's escape vocabulary, mapped back to the character it stands for. */
+const MOUNTINFO_UNESCAPE: Record<string, string> = {
+  '\\040': ' ',
+  '\\011': '\t',
+  '\\012': '\n',
+  '\\134': '\\',
+};
+
+export function unescapeMountinfoField(value: string): string {
+  return String(value ?? '').replace(/\\(?:040|011|012|134)/g, (esc) => MOUNTINFO_UNESCAPE[esc]);
+}
+
 /** Exact mount-point match. Duplicated mount points are not a thing here. */
 export function pickMount(entries: MountinfoEntry[], mountPoint: string): MountinfoEntry | null {
   if (!mountPoint) return null;
-  return entries.find((e) => e.mountPoint === mountPoint) || null;
+  return entries.find((e) => unescapeMountinfoField(e.mountPoint) === mountPoint) || null;
 }
 
 // ── bind-source decoding ──────────────────────────────────────────────────
@@ -140,11 +177,11 @@ const DRVFS = /aname=drvfs;path=([A-Za-z]:)[\\/]/;
 const DRIVE_SEGMENT = /^\/([a-zA-Z])(?=\/|$)/;
 
 /** A volume is either explicitly shared (master:) or rooted in docker/volumes. */
-function looksLikeVolume(entry: MountinfoEntry): boolean {
+function looksLikeVolume(entry: MountinfoEntry, root: string): boolean {
   return (
     entry.superOpts.includes('master:') ||
-    VOLUME_ROOT.test(entry.root) ||
-    VOLUME_ROOT.test(entry.mountPoint)
+    VOLUME_ROOT.test(root) ||
+    VOLUME_ROOT.test(unescapeMountinfoField(entry.mountPoint))
   );
 }
 
@@ -161,9 +198,14 @@ function looksLikeVolume(entry: MountinfoEntry): boolean {
  *  4. shared/volume-shaped mount → 'named_volume' (a volume name is not a path).
  *  5. `root === '/'` → the container's own filesystem, not a bind.
  *  6. anything else → 'unresolved_source'.
+ *
+ * The subtree root is kernel-unescaped (`\040` → space, …) before any rule reads
+ * it, so a path with a space decodes to the directory that actually exists.
  */
 export function decodeBindSource(entry: MountinfoEntry): DecodedBind {
-  const root = String(entry?.root ?? '');
+  // Decoded ONCE here, before any path construction: every rule below that reads
+  // the subtree root must see real characters, never the kernel's `\040` escapes.
+  const root = unescapeMountinfoField(String(entry?.root ?? ''));
 
   const drvfs = DRVFS.exec(String(entry?.superOpts ?? ''));
   if (drvfs) {
@@ -185,11 +227,11 @@ export function decodeBindSource(entry: MountinfoEntry): DecodedBind {
     return { ok: false, reason: 'unresolved_source' };
   }
 
-  if (REAL_FS.test(String(entry?.fsType ?? '')) && root !== '/' && !looksLikeVolume(entry)) {
+  if (REAL_FS.test(String(entry?.fsType ?? '')) && root !== '/' && !looksLikeVolume(entry, root)) {
     return { ok: true, hostPath: root, kind: 'posix' };
   }
 
-  if (looksLikeVolume(entry)) return { ok: false, reason: 'named_volume' };
+  if (looksLikeVolume(entry, root)) return { ok: false, reason: 'named_volume' };
   if (root === '/') return { ok: false, reason: 'root_fs' };
   return { ok: false, reason: 'unresolved_source' };
 }
@@ -248,6 +290,35 @@ export function resolveHostDir(input: ResolveHostDirInput): ResolvedHostDir {
   return { hostPath: trimTrailingSeparators(decoded.hostPath), source: 'mountinfo', reason: null };
 }
 
+// ── creation gate ──────────────────────────────────────────────────────────
+
+/**
+ * May a project container be created on this verdict? Returns the refusal code
+ * or null. A wrong bind source is the silent failure class this whole module
+ * exists for, so all three are refusals:
+ *
+ *  - 'unresolvable' — no host path at all: dockerode would hand the daemon a
+ *    string that is not a path (and the daemon resolves it on ITS host).
+ *  - 'broken'       — the mount this app container writes through does not work.
+ *  - 'refuted'      — the probe container looked at the decoded host path and
+ *    did NOT see the canary this container wrote, which is positive knowledge
+ *    that the daemon mounts a different directory than the one we audited.
+ *
+ * 'unknown' stays PERMISSIVE: an unavailable probe (no docker binary, daemon
+ * down, timeout) is an absence of proof, never a refutation, and refusing on it
+ * would take a healthy install offline whenever Docker hiccups.
+ */
+export function mountRefusalCode(input: {
+  hostPath: string | null;
+  state: WorkspaceMountState;
+  verification: MountVerification;
+}): MountRefusalCode | null {
+  if (!input?.hostPath) return 'unresolvable';
+  if (input.state !== 'ok') return 'broken';
+  if (input.verification === 'refuted') return 'refuted';
+  return null;
+}
+
 // ── hints + canary ────────────────────────────────────────────────────────
 
 /**
@@ -283,6 +354,24 @@ export function mountHint(
         'set WSD_WORKSPACES_HOST_DIR in .env to the absolute host path of ./workspaces.'
       );
   }
+}
+
+/**
+ * The view a caller may see. The status routes are viewer-readable, but the
+ * absolute host path of the checkout is operator information (it discloses the
+ * machine's directory layout and username), so it is admin-only. Everything that
+ * makes the verdict useful stays: the state, the reason, the source, the
+ * verification ternary and a hint with the path masked out of its sentence.
+ * The input is never mutated — the cached object is shared by every caller.
+ */
+export function publicMountInfo(info: WorkspaceMountInfo, privileged: boolean): WorkspaceMountInfo {
+  if (privileged || !info) return info;
+  const hostPath = info.hostPath ? HOST_PATH_REDACTED : null;
+  return {
+    ...info,
+    hostPath,
+    hint: info.hostPath ? info.hint.split(info.hostPath).join(HOST_PATH_REDACTED) : info.hint,
+  };
 }
 
 /**

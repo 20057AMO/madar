@@ -22,7 +22,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 
 import { recordAudit } from './audit-store';
 import {
@@ -30,14 +30,17 @@ import {
   canaryToken,
   classifyMountError,
   mountHint,
+  publicMountInfo,
+  mountRefusalCode,
   resolveHostDir,
   type MountReason,
+  type MountVerification,
   type WorkspaceMountInfo,
   type WorkspaceMountState,
 } from './workspaces-mount-core';
 
-export { MOUNT_CANARY_FILE, canaryToken, mountHint };
-export type { WorkspaceMountInfo, WorkspaceMountState };
+export { MOUNT_CANARY_FILE, canaryToken, mountHint, publicMountInfo, mountRefusalCode };
+export type { MountVerification, WorkspaceMountInfo, WorkspaceMountState };
 
 const DATA_DIR = process.env.WSD_DATA_DIR || path.join(__dirname, '..', '..', 'data');
 /** Last boot-time host-path verification verdict (survives a restart). */
@@ -59,7 +62,7 @@ const VERIFY_ENABLED = String(process.env.WSD_VERIFY_MOUNT ?? '1') !== '0';
 
 interface PersistedVerdict {
   hostPath: string | null;
-  verification: 'proved' | 'refuted' | 'unknown';
+  verification: MountVerification;
   checkedAt: string;
 }
 
@@ -209,36 +212,43 @@ export function getWorkspaceMount(): WorkspaceMountInfo {
   return cached;
 }
 
-/** Host bind source for project containers, or null when unresolvable. */
-export function getWorkspacesHostDir(): string | null {
-  return getWorkspaceMount().hostPath;
-}
-
 /**
  * Prove the decoded path is the SAME directory this container writes to: drop a
  * canary through the bind, then ask a throwaway container mounting the decoded
  * path to look for it. A visible non-zero exit refutes the path; an inability
  * to run the container at all (no docker binary, timeout) is 'unknown'.
+ *
+ * ASYNC on purpose: a synchronous `execFileSync` blocks the single Node event
+ * loop for the whole 30 s ceiling, so every HTTP request and WebSocket frame
+ * stalls while the probe container boots. This never rejects — a probe can only
+ * ever produce a verdict, never an exception.
  */
-function runProbeContainer(hostPath: string): 'proved' | 'refuted' | 'unknown' {
-  try {
-    execFileSync(
-      'docker',
-      ['run', '--rm', '-v', `${hostPath}:/probe`, PROBE_IMAGE, 'test', '-f', `/probe/${MOUNT_CANARY_FILE}`],
-      { timeout: PROBE_TIMEOUT_MS, stdio: 'ignore' },
-    );
-    return 'proved';
-  } catch (err: any) {
-    // Only the probe's OWN failure code (test(1) on a missing canary) refutes the
-    // path. Docker reserves 125+ for "could not run the container" (daemon down,
-    // image missing, bad mount) and the client reports spawn failure with no
-    // status at all — both are the absence of an answer, never a refutation.
-    return err?.status === 1 ? 'refuted' : 'unknown';
-  }
+function runProbeContainer(hostPath: string): Promise<MountVerification> {
+  return new Promise<MountVerification>((resolve) => {
+    try {
+      execFile(
+        'docker',
+        ['run', '--rm', '-v', `${hostPath}:/probe`, PROBE_IMAGE, 'test', '-f', `/probe/${MOUNT_CANARY_FILE}`],
+        { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+        (err) => {
+          // Only the probe's OWN failure code (test(1) on a missing canary)
+          // refutes the path. Docker reserves 125+ for "could not run the
+          // container" (daemon down, image missing, bad mount), a ceiling kill
+          // leaves no status at all, and a missing docker binary fails to spawn
+          // — all of which are the absence of an answer, never a refutation.
+          if (!err) return resolve('proved');
+          resolve((err as { status?: number | null }).status === 1 ? 'refuted' : 'unknown');
+        },
+      );
+    } catch {
+      resolve('unknown');
+    }
+  });
 }
 
-/** Boot-only host-path proof. Never throws; updates the cached verdict. */
-export function verifyHostPath(): WorkspaceMountInfo {
+let verifyInFlight: Promise<WorkspaceMountInfo> | null = null;
+
+async function runVerification(): Promise<WorkspaceMountInfo> {
   const info = cached ?? auditMount();
   if (!VERIFY_ENABLED || !info.hostPath) return info;
 
@@ -251,7 +261,7 @@ export function verifyHostPath(): WorkspaceMountInfo {
   } catch {
     wrote = false;
   }
-  const verification = wrote ? runProbeContainer(info.hostPath) : 'unknown';
+  const verification = wrote ? await runProbeContainer(info.hostPath) : 'unknown';
   if (wrote) {
     try {
       fs.unlinkSync(canary);
@@ -270,18 +280,40 @@ export function verifyHostPath(): WorkspaceMountInfo {
   return next;
 }
 
+/**
+ * Boot/sweep host-path proof. Singleflighted, never rejects and never throws:
+ * concurrent callers share the one in-flight probe instead of spawning several
+ * probe containers, and a failure degrades to the current verdict.
+ */
+export function verifyHostPath(): Promise<WorkspaceMountInfo> {
+  if (verifyInFlight) return verifyInFlight;
+  const run: Promise<WorkspaceMountInfo> = runVerification()
+    .catch((err: any) => {
+      console.warn('[workspaces] mount verification failed:', err?.message || err);
+      return getWorkspaceMount();
+    })
+    .finally(() => {
+      verifyInFlight = null;
+    });
+  verifyInFlight = run;
+  return run;
+}
+
 /** Boot + every MOUNT_AUDIT_MS. Fire-and-forget: never blocks or fails boot. */
 export function startWorkspaceMountAudit(): () => void {
   const boot = setTimeout(() => {
-    try {
-      verifyHostPath();
-    } catch (err: any) {
-      console.warn('[workspaces] mount verification failed:', err?.message || err);
-    }
+    void verifyHostPath();
   }, 5_000);
   const timer = setInterval(() => {
     try {
-      auditMount();
+      const info = auditMount();
+      // Re-prove whenever the verdict is not already a positive proof: a
+      // 'refuted' verdict now REFUSES project creation, so an operator who fixes
+      // the bind must not have to restart the app to get creation back, and an
+      // 'unknown' verdict (docker was unavailable) would otherwise never
+      // recover. 'proved' is the steady state, so the steady state costs no
+      // extra container runs.
+      if (info.verification !== 'proved') void verifyHostPath();
     } catch (err: any) {
       console.warn('[workspaces] mount audit failed:', err?.message || err);
     }
