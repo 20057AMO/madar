@@ -5,21 +5,30 @@ DATA_DIR="${WSD_DATA_DIR:-/app/data}"
 mkdir -p "$DATA_DIR"
 
 # ── Web IDE ───────────────────────────────────────────────────
-# Both embedded surfaces run UNAUTHENTICATED. The host-side publish is pinned to
-# loopback (WSD_EMBEDDED_PUBLISH_HOST in docker-compose.yml), which is what keeps
-# them off the LAN. The in-container bind must therefore stay 0.0.0.0: Docker's
-# published-port path DNATs to the container's bridge address, so a 127.0.0.1
-# listener is unreachable through it — host AND project containers alike. The
-# knobs stay for the network-isolated / proxied layout of a later round.
-IDE_BIND="${WSD_IDE_BIND:-0.0.0.0}"
-OPENCODE_BIND="${WSD_OPENCODE_BIND:-0.0.0.0}"
+# BOTH embedded surfaces run UNAUTHENTICATED code execution as ROOT beside
+# /var/run/docker.sock, so they listen on the app container's LOOPBACK and
+# nothing else. This is the load-bearing control: a 127.0.0.1 listener has no
+# address on any docker network, so NO container — on the app network, on the
+# default bridge, on any user-defined network — can route to it. Publishing the
+# port on the host with HostIp 127.0.0.1 never helped: that only constrains
+# traffic arriving in the HOST network namespace, while a container on the
+# default bridge reaches the container's bridge address directly (live-proven:
+# a project container on 172.17.0.x got 200 from opencode and 302 from
+# code-server on 172.18.0.2, then drove opencode to a session + prompt).
+#
+# The browser reaches both through the Madar embedded-surface proxy
+# (services/embed-proxy.ts, port WSD_EMBED_PROXY_PORT), which requires an
+# editor+ Madar session. That is why 0.0.0.0 upstream binds are gone: the
+# published port now points at the authenticated proxy, never at these.
+IDE_BIND="${WSD_IDE_BIND:-127.0.0.1}"
+OPENCODE_BIND="${WSD_OPENCODE_BIND:-127.0.0.1}"
 
-echo "Madar: starting supervised code-server IDE on ${IDE_BIND}:8080 (no auth)"
+echo "Madar: starting supervised code-server IDE on ${IDE_BIND}:8080 (no auth, loopback-only)"
 # NOTE: code-server reads the PORT env var and it overrides --bind-addr,
 # so unset it (PORT is used by the dashboard node app).
-# Auth disabled (--auth none) — the only access control is the loopback
-# publish on the host side; do not widen WSD_EMBEDDED_PUBLISH_HOST on an
-# untrusted network.
+# Auth disabled (--auth none) — the ONLY access control is this loopback bind
+# plus the authenticated proxy in front of it. WSD_IDE_BIND exists purely so
+# the setting is explicit in one place; do not widen it to 0.0.0.0.
 # Supervised restart loop: same pattern as opencode below — if code-server
 # crashes or is killed (e.g. version update), the loop revives it within ~2s.
 # PID of the live child is published in $DATA_DIR/code-server.pid for the
@@ -51,7 +60,7 @@ if [ -f "$OPENCODE_DB" ] && command -v python3 >/dev/null 2>&1; then
   python3 /app/opencode-purge.py "$DATA_DIR" || true
 fi
 
-echo "Madar: starting supervised opencode web on ${OPENCODE_BIND}:${WSD_OPENCODE_PORT:-4096} (cwd /workspaces)"
+echo "Madar: starting supervised opencode web on ${OPENCODE_BIND}:${WSD_OPENCODE_PORT:-4096} (cwd /workspaces, loopback-only)"
 mkdir -p "$DATA_DIR/opencode"
 # Supervised restart loop: the Studio Update button kills the running
 # opencode process after installing a newer binary — this loop revives it

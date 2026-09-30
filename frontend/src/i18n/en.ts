@@ -500,6 +500,8 @@ export const en = {
     folderTitle: 'Opens the project folder in the IDE',
     folderLabel: 'Project folder to open in VS Code',
     allProjects: 'All Projects…',
+    needsEditor:
+      'VS Code runs inside the app container with full access, so it needs editor access or above.',
     offline: 'VS Code offline',
     offlineBody:
       'VS Code is not answering inside the app container. It runs as a supervised background service, so no project needs to be running — it usually comes back on its own within a few seconds.',

@@ -58,6 +58,7 @@ export type AuditEvent =
   | 'project-files-deleted'
   | 'opencode-open'
   | 'opencode-open-failed'
+  | 'embed-session'
   | 'opencode-studio'
   | 'opencode-update'
   | 'opencode-update-failed'

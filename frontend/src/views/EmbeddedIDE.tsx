@@ -5,6 +5,7 @@ import { getIdeStatus, listProjects } from '../api';
 import { VSCodeIcon } from '../components/brand-icons';
 import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
+import { useEmbedSession } from '../lib/embed-session';
 import { useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
 import { projectOptionLabel } from '../lib/project-label';
 import { startFrameTimer } from '../lib/perf-metrics';
@@ -27,7 +28,10 @@ export function EmbeddedIDE() {
   const [, setLocation] = useHashLocation();
   const { t } = useI18n();
   const [running, setRunning] = useState<boolean | null>(null);
-  const [port, setPort] = useState(8100);
+  // The AUTHENTICATED PROXY port; /api/ide/status confirms it. 4097 is the
+  // proxy default and the only port published to the IDE — code-server's own
+  // 8100 is not published at all, so a stale default would be a dead link.
+  const [port, setPort] = useState(4097);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<{ slug: string; name: string }[]>([]);
   const [folder, setFolder] = useState(readSavedFolder);
@@ -37,11 +41,20 @@ export function EmbeddedIDE() {
   // Match the page protocol so the iframe is not blocked as mixed content
   // when the dashboard itself is served over HTTPS.
   const proto = window.location.protocol === 'https:' ? 'https' : 'http';
-  const ideUrl = `${proto}://${host}:${port}/?folder=${encodeURIComponent(folder)}`;
+  // `port` is the AUTHENTICATED PROXY port reported by /api/ide/status, not
+  // code-server's own port: the upstream is loopback-bound inside the app
+  // container and no longer published, so this URL is the only route to it.
+  // code-server serves relative asset URLs, so the /ide prefix is safe.
+  const ideUrl = `${proto}://${host}:${port}/ide/?folder=${encodeURIComponent(folder)}`;
   const pickedSlug = folder === '/workspaces' ? '' : folder.replace('/workspaces/', '');
 
+  // The proxy needs its session cookie before the frame can load, so the frame
+  // stays unmounted (in the honest "checking…" state) until the exchange lands.
+  const embed = useEmbedSession(true);
+  const awaitingCredential = !embed.ready && !embed.forbidden;
+
   const { frameKey, state: frameState, onLoad: onFrameLoad, remount, isReady } = useFrameLoad(
-    !loading && running !== false,
+    !loading && !awaitingCredential && running !== false,
     ideUrl,
   );
   const overlayRef = useFrameFocusReturn(frameState);
@@ -240,6 +253,10 @@ export function EmbeddedIDE() {
       ? t('ide.frameLoading')
       : t('ide.frameRunning');
 
+  // The frame is unmounted until the proxy credential exists, so "loading"
+  // and "no credential yet" share the one honest pre-frame state.
+  const pending = loading || (running !== false && awaitingCredential);
+
   return (
     <main class="opencode-page" id="ide-main" tabIndex={-1}>
       <div class="opencode-toolbar">
@@ -247,7 +264,9 @@ export function EmbeddedIDE() {
         <h1 style="display:inline-flex;align-items:center;gap:6px;margin-left:8px;font-weight:600;font-size:0.9rem">
           <VSCodeIcon width={15} height={15} /> VS Code
         </h1>
-        <a class="btn-ghost sm" href={ideUrl} target="_blank" rel="noreferrer">{t('ide.openNewTab')}</a>
+        {embed.ready && running !== null && (
+          <a class="btn-ghost sm" href={ideUrl} target="_blank" rel="noreferrer">{t('ide.openNewTab')}</a>
+        )}
         <span style="display:inline-flex;align-items:center;gap:6px;margin-left:12px" title={t('ide.folderTitle')}>
           <FolderOpen width={13} height={13} class="icon" />
           <label class="sr-only" for="ide-project-select">{t('ide.folderLabel')}</label>
@@ -268,20 +287,22 @@ export function EmbeddedIDE() {
         <span style="font-size: 0.68rem; color: var(--text-3); margin-left: 12px" role="status">
           {running === false
             ? t('ide.offline')
-            : running
-              ? frameStatus
-              : ''}
+            : embed.forbidden
+              ? t('ide.needsEditor')
+              : running
+                ? frameStatus
+                : ''}
       </span>
       </div>
-      {loading ? (
+      {pending ? (
         <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="status">
           <div class="big-icon"><VSCodeIcon width={30} height={30} /></div>
           {t('ide.loadingStatus')}
         </div>
-      ) : running === false ? (
+      ) : running === false || embed.forbidden ? (
         <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="status">
           <div class="big-icon"><VSCodeIcon width={30} height={30} /></div>
-          {t('ide.offlineBody')}
+          {embed.forbidden ? t('ide.needsEditor') : t('ide.offlineBody')}
           <div style="margin-top:14px">
             <button class="btn-ghost sm" onClick={retry}>
               <RefreshCw width={13} height={13} class="icon" /> {t('common.retry')}

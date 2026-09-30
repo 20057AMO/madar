@@ -48,6 +48,9 @@ import { exportProjectZip } from './services/project-zip';
 import * as snapAuto from './services/project-snapshots-auto';
 import { getIdeStatus } from './services/ide-service';
 import { createStatusCache, resolveEmbeddedPort, isLanReachableHost, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
+import { EMBED_COOKIE_NAME, embedCookieClearOptions, embedCookieOptions } from './services/embed-core';
+import { startEmbedProxy, EMBED_PROXY_PORT } from './services/embed-proxy';
+import { signEmbedToken, EMBED_TOKEN_TTL_SEC } from './services/user-store';
 import { probeEmbeddedPort } from './services/embedded-status-probe';
 import { getWorkspaceMount, publicMountInfo, startWorkspaceMountAudit, type WorkspaceMountInfo } from './services/workspaces-mount';
 import { detectIp } from './services/server-info';
@@ -1090,7 +1093,12 @@ app.get('/api/ide/status', async (req, res) => {
 // degrade to 4096 exactly like WSD_IDE_PORT does in ide-service.ts, otherwise a
 // -1/99999 value reaches the client as a broken iframe `src` and net.connect
 // throws ERR_SOCKET_BAD_PORT synchronously.
-const OPENCODE_PORT = resolveEmbeddedPort(process.env.WSD_OPENCODE_PORT, 4096);
+//
+// Two ports, deliberately: the INTERNAL one is where opencode actually listens
+// (loopback, probed below), the REPORTED one is the authenticated proxy port the
+// browser must use — opencode's own 4096 is no longer published, so reporting
+// it would hand the client a dead endpoint.
+const OPENCODE_INTERNAL_PORT = resolveEmbeddedPort(process.env.WSD_OPENCODE_PORT, 4096);
 
 // Plain TCP connect, identical to the IDE probe (ide-service.ts): we only need
 // to know that something is LISTENING, so the status line + headers + body of
@@ -1101,14 +1109,14 @@ const OPENCODE_PORT = resolveEmbeddedPort(process.env.WSD_OPENCODE_PORT, 4096);
 // still fails instantly (ECONNREFUSED on loopback), so the wider ceiling is
 // free in the common case and bounded against a wedged process.
 async function opencodeRunning(): Promise<boolean> {
-  return probeEmbeddedPort(OPENCODE_PORT);
+  return probeEmbeddedPort(OPENCODE_INTERNAL_PORT);
 }
 
 // Same probe contract as the IDE status: short TTL + singleflight, a failed
 // probe is an honest `running:false` (never a 500), and `?fresh=1` bypasses it.
 // `workspace` + `lanReachable` mirror the IDE payload: the process being alive
-// says nothing about the bind mount it serves from, and an off-host publish of
-// an unauthenticated surface is a fact the operator must see.
+// says nothing about the bind mount it serves from, and whether the surfaces
+// are reachable off-host is a fact the operator must see.
 const opencodeStatusCache = createStatusCache<{
   running: boolean;
   port: number;
@@ -1125,7 +1133,7 @@ const opencodeStatusCache = createStatusCache<{
     }
     return {
       running,
-      port: OPENCODE_PORT,
+      port: EMBED_PROXY_PORT,
       workspace: getWorkspaceMount(),
       lanReachable: isLanReachableHost(process.env.WSD_EMBEDDED_PUBLISH_HOST),
     };
@@ -1149,7 +1157,7 @@ app.get('/api/opencode/status', async (req, res) => {
       forCaller(
         {
           running: false,
-          port: OPENCODE_PORT,
+          port: EMBED_PROXY_PORT,
           workspace: getWorkspaceMount(),
           lanReachable: isLanReachableHost(process.env.WSD_EMBEDDED_PUBLISH_HOST),
         },
@@ -1159,6 +1167,36 @@ app.get('/api/opencode/status', async (req, res) => {
   }
 });
 
+
+// ── Embedded-surface proxy session ─────────────────────────────────
+// code-server and opencode web are unauthenticated root code-execution
+// surfaces bound to 127.0.0.1 in-container, reachable only through the proxy
+// (services/embed-proxy.ts, WSD_EMBED_PROXY_PORT). An iframe `src` cannot carry
+// the session's Authorization header, so this route hands the browser a
+// purpose-scoped credential as an HttpOnly cookie. `scope:'embed'` makes
+// verifyToken reject it, so the cookie is useless as a dashboard session.
+//
+// Cookies ignore ports, so the cookie set on :3000 is what :4097 receives —
+// that is what makes the surfaces work over the LAN through one listener.
+app.post('/api/embed/session', userWriteLimiter, (req: any, res) => {
+  const user = req.user;
+  if (!user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  // Editor+ matches the proxy's own gate: both surfaces execute code in a root
+  // container that holds the docker socket, so a viewer must never reach them.
+  if (user.role !== 'admin' && user.role !== 'editor') {
+    res.setHeader('Set-Cookie', `${EMBED_COOKIE_NAME}=; ${embedCookieClearOptions()}`);
+    return res.status(403).json({ error: 'Editor access required' });
+  }
+  const token = signEmbedToken(user.id);
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  res.setHeader('Set-Cookie', `${EMBED_COOKIE_NAME}=${token}; ${embedCookieOptions(EMBED_TOKEN_TTL_SEC)}`);
+  recordAudit('embed-session', true, req.ip, user.id);
+  res.json({ ok: true, port: EMBED_PROXY_PORT, expiresIn: EMBED_TOKEN_TTL_SEC });
+});
 
 // ── Agents API ────────────────────────────────────────────────
 import {
@@ -1392,6 +1430,9 @@ app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async 
     const PORT = Number(process.env.PORT) || 3000;
     const IDE_PORT = Number(process.env.WSD_IDE_PORT) || 8100;
     const OPENCODE_PORT = Number(process.env.WSD_OPENCODE_PORT) || 4096;
+    // The embedded-surface proxy is a published host port too — reserving it
+    // keeps a project from colliding with the only route to the IDE/opencode.
+    const EMBED_PORT = Number(process.env.WSD_EMBED_PROXY_PORT) || 4097;
     const seen = new Set<number>();
     const cleanPorts =
       Array.isArray(ports)
@@ -1399,7 +1440,7 @@ app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async 
             .map(Number)
             .filter((n: number) => {
               if (!Number.isInteger(n) || n < 1024 || n > 65535) return false;
-              if (n === PORT || n === IDE_PORT || n === OPENCODE_PORT) return false;
+              if (n === PORT || n === IDE_PORT || n === OPENCODE_PORT || n === EMBED_PORT) return false;
               if (seen.has(n)) return false;
               seen.add(n);
               return true;
@@ -2932,14 +2973,28 @@ app.use((err: any, _req: any, res: any, next: any) => {
 const server = http.createServer(app);
 attachWebSockets(server);
 
+// Embedded-surface proxy: the ONLY route to code-server + opencode web, both
+// of which are loopback-bound inside this container. Separate listener because
+// opencode hardcodes absolute asset paths and therefore has to own its own
+// origin root; the dashboard's own origin is already spoken for by the SPA.
+const embedProxyServer = startEmbedProxy(EMBED_PROXY_PORT);
+
 server.listen(PORT, HOST, () => {
   console.log(`[Madar] Dashboard on http://${HOST}:${PORT}`);
   console.log(`[Madar] WebSocket hub on ws://${HOST}:${PORT}/ws`);
   console.log(`[Madar] Workspaces root: ${WORKSPACES_ROOT}`);
-  console.log(`[Madar] opencode web on port ${OPENCODE_PORT}`);
+  console.log(`[Madar] opencode web (loopback-only) on port ${OPENCODE_INTERNAL_PORT}`);
   console.log(`[Madar] Chat model: ${getChatConfig().model}`);
   console.log(`[Madar] Docker socket: /var/run/docker.sock`);
 });
+
+function shutdown(): void {
+  embedProxyServer.close();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 // Automatic orphaned-workspace cleanup (boot + every WSD_JANITOR_INTERVAL_MS).
 startJanitor();

@@ -5,6 +5,7 @@ import { canOpenProjectWorkspace, getOpencodeStatus, openOpencodeProject, listPr
 import { useAuth } from '../auth';
 import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
+import { useEmbedSession } from '../lib/embed-session';
 import { useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
 import { buildOpencodeUrl } from '../lib/opencode-link';
 import { projectOptionLabel } from '../lib/project-label';
@@ -20,7 +21,9 @@ export function Opencode() {
   const { user } = useAuth();
   const { t } = useI18n();
   const [running, setRunning] = useState<boolean | null>(null);
-  const [port, setPort] = useState(4096);
+  // The AUTHENTICATED PROXY port; /api/opencode/status confirms it. opencode's
+  // own 4096 is not published any more, so this default must be the proxy.
+  const [port, setPort] = useState(4097);
   const [projects, setProjects] = useState<{ slug: string; name: string; openable: boolean }[]>([]);
   const [picked, setPicked] = useState('');
   const pickedRef = useRef('');
@@ -33,15 +36,25 @@ export function Opencode() {
   // Match the page protocol so the iframe is not blocked as mixed content
   // when the dashboard itself is served over HTTPS.
   const proto = window.location.protocol === 'https:' ? 'https' : 'http';
+  // `port` is the AUTHENTICATED PROXY port reported by /api/opencode/status,
+  // not opencode's own 4096: the upstream is loopback-bound inside the app
+  // container and no longer published, so this is the only route to it. No
+  // path prefix here on purpose — opencode's shell hardcodes absolute asset
+  // paths and therefore owns the origin root (the IDE takes /ide instead).
   // A picked project deep-links straight into that directory; with no target
   // the bare root is used and opencode opens on its own home screen.
   const url = buildOpencodeUrl({ proto, host, port, directory });
+
+  // The proxy needs its session cookie before the frame can load, so the frame
+  // stays unmounted (in the honest "checking…" state) until the exchange lands.
+  const embed = useEmbedSession(true);
+  const awaitingCredential = !embed.ready && !embed.forbidden;
 
   // The frame only mounts once the status endpoint has answered once: before
   // that the default port is an assumption and a wrong one 404s the frame into
   // the error overlay instead of the honest "checking…" state.
   const { frameKey, state: frameState, onLoad: onFrameLoad, remount, isReady } = useFrameLoad(
-    running !== null && running !== false,
+    running !== null && running !== false && !awaitingCredential,
     url,
   );
   const overlayRef = useFrameFocusReturn(frameState);
@@ -278,9 +291,11 @@ export function Opencode() {
       <div class="opencode-toolbar">
         <h1 class="sr-only">opencode</h1>
         <button class="btn-ghost sm" onClick={() => setLocation('/')}>‹ {t('common.back')}</button>
-        <a class="btn-ghost sm" href={url} target="_blank" rel="noreferrer">
-          {t('opencode.openNewTab')}
-        </a>
+        {embed.ready && running !== null && (
+          <a class="btn-ghost sm" href={url} target="_blank" rel="noreferrer">
+            {t('opencode.openNewTab')}
+          </a>
+        )}
         <span style="display:inline-flex;align-items:center;gap:6px;margin-left:12px" title={t('opencode.pickerTitle')}>
           <FolderOpen width={13} height={13} class="icon" />
           <label class="sr-only" for="oc-project-select">{t('opencode.pickerLabel')}</label>
@@ -308,11 +323,13 @@ export function Opencode() {
             ? notice
             : running === false
               ? t('opencode.offline')
-              : opening
-                ? t('opencode.opening')
-                : running
-                  ? frameStatus
-                  : t('opencode.checking')}
+              : embed.forbidden
+                ? t('opencode.needsEditor')
+                : opening
+                  ? t('opencode.opening')
+                  : running
+                    ? frameStatus
+                    : t('opencode.checking')}
         </span>
       </div>
       {openErr && (
@@ -324,10 +341,10 @@ export function Opencode() {
           {openErr}
         </div>
       )}
-      {running === false ? (
+      {running === false || embed.forbidden ? (
         <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="alert">
           <div class="big-icon"><SquareTerminal width={30} height={30} class="icon" /></div>
-          {t('opencode.offlineBody')}
+          {embed.forbidden ? t('opencode.needsEditor') : t('opencode.offlineBody')}
           <div style="margin-top:14px">
             <button class="btn-ghost sm" onClick={retry}>
               <RefreshCw width={13} height={13} class="icon" /> {t('common.retry')}

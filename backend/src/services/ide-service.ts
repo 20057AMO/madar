@@ -2,15 +2,15 @@
  * ide-service.ts
  * Madar — Unified VS Code service (single code-server in the main container,
  * rooted at /workspaces, so it sees every project).
- * The dashboard only needs to know whether it is up and on which host port.
- * code-server runs with `--auth none`, so there is NO IDE password: nothing to
- * mint, persist or echo.
+ * The dashboard only needs to know whether it is up and on which port to point
+ * the iframe at. code-server runs with `--auth none`, so there is NO IDE
+ * password: nothing to mint, persist or echo.
  *
  * `running` describes the PROCESS and nothing else — which is exactly why the
  * payload also carries the workspaces mount verdict (`workspace`) and whether
- * the port is published off-host (`lanReachable`). An IDE that is running and
- * serving an empty directory is NOT healthy, and a published unauthenticated
- * IDE is NOT a safe default.
+ * the authenticated proxy is published off-host (`lanReachable`). An IDE that
+ * is running and serving an empty directory is NOT healthy, and a published
+ * IDE is only as safe as the proxy in front of it.
  */
 import {
   createStatusCache,
@@ -22,15 +22,21 @@ import {
 import { probeEmbeddedPort } from './embedded-status-probe';
 import { getWorkspaceMount, type WorkspaceMountInfo } from './workspaces-mount';
 
-/** Host-facing port (compose maps WSD_IDE_PORT -> the internal bind below). */
-const IDE_HOST_PORT = resolveEmbeddedPort(process.env.WSD_IDE_PORT, 8100);
 /** code-server's own bind inside the main container (the entrypoint's arg). */
 const IDE_INTERNAL_PORT = resolveEmbeddedPort(process.env.WSD_IDE_INTERNAL_PORT, 8080);
-/** Interface the IDE port is published on — loopback unless the operator opts in. */
+/**
+ * Interface the AUTHENTICATED proxy is published on. The raw code-server port
+ * is no longer published at all — the upstreams are loopback-bound and only
+ * this proxy reaches them — so this knob now describes a session-checked
+ * route, not an open one.
+ */
 const IDE_PUBLISH_HOST = resolveEmbeddedPublishHost(process.env.WSD_EMBEDDED_PUBLISH_HOST);
+/** The only port the browser may use: the Madar embedded-surface proxy. */
+const EMBED_PORT = resolveEmbeddedPort(process.env.WSD_EMBED_PROXY_PORT, 4097);
 
 export interface IdeStatus {
   running: boolean;
+  /** Proxy port the iframe must point at (the IDE is NOT published directly). */
   port: number;
   /**
    * The workspaces bind mount — reported here because `running:true` only
@@ -38,7 +44,7 @@ export interface IdeStatus {
    * Explorer, which this payload used to call "healthy".
    */
   workspace: WorkspaceMountInfo;
-  /** True when the IDE is published beyond loopback (see resolveEmbeddedPublishHost). */
+  /** True when the authenticated proxy is published beyond loopback. */
   lanReachable: boolean;
 }
 
@@ -64,7 +70,7 @@ const ideStatusCache = createStatusCache<IdeStatus>({
     }
     return {
       running,
-      port: IDE_HOST_PORT,
+      port: EMBED_PORT,
       workspace: getWorkspaceMount(),
       lanReachable: isLanReachableHost(IDE_PUBLISH_HOST),
     };

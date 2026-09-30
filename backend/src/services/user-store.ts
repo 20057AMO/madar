@@ -535,6 +535,76 @@ function signPending2faToken(userId: string): string {
   return jwt.sign({ scope: '2fa-pending', id: user.id }, JWT_SECRET, { expiresIn: PENDING_2FA_EXPIRY });
 }
 
+// ── Embedded-surface proxy credential ────────────────────────
+//
+// The embed proxy (services/embed-proxy.ts) is the ONLY route to code-server
+// and opencode web, both of which run unauthenticated as root next to the
+// docker socket. An iframe `src` cannot carry the session's `Authorization`
+// header, so the browser proves itself with this purpose-scoped token instead,
+// carried in an HttpOnly cookie.
+//
+// It is a SEPARATE token on purpose: `scope: 'embed'` makes verifyToken reject
+// it (it refuses every scoped claim, like 'providers' and '2fa-pending'), so the
+// cookie can never be replayed as a dashboard session — and the dashboard
+// session token is never handed to the proxy, let alone to the upstreams.
+
+/** Embed credential lifetime — deliberately shorter than a session. */
+export const EMBED_TOKEN_TTL_SEC = 60 * 60 * 12;
+
+export interface EmbedIdentity {
+  id: string;
+  username: string;
+  role: UserRole;
+}
+
+export function signEmbedToken(userId: string): string | null {
+  if (usersMap.size === 0) loadUsers();
+  const user = getUserById(userId);
+  if (!user) return null;
+  return jwt.sign(
+    {
+      scope: 'embed',
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      tv: user.tokenVersion || 0,
+    },
+    JWT_SECRET,
+    { expiresIn: EMBED_TOKEN_TTL_SEC },
+  );
+}
+
+/**
+ * Verify an embed credential. Stricter than verifyToken on purpose: the live
+ * user MUST exist, must match the live tokenVersion (so logout-everywhere, a
+ * password change and account deletion all kill embed cookies), and the
+ * identity is reported with its LIVE role (so a demotion takes effect on the
+ * next request, not at expiry).
+ *
+ * verifyToken keeps an unknown-id fallback for test helpers that sign their own
+ * JWT, but this credential gates ROOT code execution beside the docker socket:
+ * accepting an id that is no longer in users.json would keep a deleted editor's
+ * cookie working for its whole 12h TTL, i.e. deleting the account would not
+ * actually revoke the surface. No test forges one — it is only ever minted by
+ * /api/embed/session — so there is nothing to trade here.
+ */
+export function verifyEmbedToken(token: string | null): EmbedIdentity | null {
+  if (!token) return null;
+  if (usersMap.size === 0) loadUsers();
+  try {
+    const decoded = jwt.verify(String(token), JWT_SECRET) as {
+      scope?: string; id?: string; username?: string; role?: UserRole; tv?: number;
+    };
+    if (decoded.scope !== 'embed' || !decoded.id) return null;
+    const user = usersMap.get(decoded.id);
+    if (!user) return null;
+    if ((decoded.tv || 0) !== (user.tokenVersion || 0)) return null;
+    return { id: user.id, username: user.username, role: user.role };
+  } catch {
+    return null;
+  }
+}
+
 export function verifyPending2faToken(token: string | null): string | null {
   if (usersMap.size === 0) loadUsers();
   try {

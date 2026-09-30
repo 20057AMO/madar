@@ -750,6 +750,17 @@ export const openOpencodeProject = (slug: string) =>
     body: JSON.stringify({ slug }),
   });
 
+/**
+ * Exchange the session for the embedded-surface proxy credential (an HttpOnly
+ * cookie). code-server and opencode web are loopback-bound inside the server
+ * container and reachable only through the authenticated proxy on
+ * `WSD_EMBED_PROXY_PORT`, so the two tool pages must hold this cookie before
+ * their iframes can load. Editor+ only — a viewer gets 403 here, exactly as the
+ * proxy itself would refuse them.
+ */
+export const ensureEmbedSession = () =>
+  api<{ ok: boolean; port: number; expiresIn: number }>('/api/embed/session', { method: 'POST' });
+
 // ── Opencode Studio ─────────────────────────────────────────────────────
 export interface StudioItem {
   name: string;

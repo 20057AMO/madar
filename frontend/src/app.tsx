@@ -40,6 +40,7 @@ import {
 import { UPDATE_RUNNING_STATES } from './views/settings-shared';
 import { Avatar } from './components/Avatar';
 import { claimChunkReload, clearChunkReloadDeferred, isChunkReloadDeferred, isStaleChunkError } from './lib/chunk-reload';
+import { useEmbedSession } from './lib/embed-session';
 import {
   announceRouteLanding,
   routeLabel,
@@ -340,7 +341,9 @@ function ProvidersUnlockBadge() {
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t, lang, toggleLang } = useI18n();
   const { user, logout } = useAuth();
-  const [ocPort, setOcPort] = useState(4096);
+  // The embedded-surface PROXY port (getOpencodeStatus confirms it). opencode's
+  // own 4096 is loopback-only and no longer published.
+  const [ocPort, setOcPort] = useState(4097);
   const [updatesFlag, setUpdatesFlag] = useState<'none' | 'available' | 'applying'>('none');
 
   useEffect(() => {
@@ -857,6 +860,23 @@ function OpencodeKeepAlive() {
   );
 }
 
+/**
+ * Embedded-surface credential warm-up.
+ *
+ * code-server and opencode web are only reachable through the authenticated
+ * Madar proxy, which reads an HttpOnly cookie minted by POST /api/embed/session.
+ * The two tool pages mint it on mount, but the sidebar "opencode" button opens
+ * the surface in a NEW TAB directly at the proxy — which would 401 for a user
+ * who had not visited either page yet. One exchange per session, for editor+
+ * only, closes that gap and warms the proxy hop at the same time.
+ */
+function EmbedSessionWarmup() {
+  const { user } = useAuth();
+  const allowed = user?.role === 'admin' || user?.role === 'editor';
+  useEmbedSession(!!user && allowed);
+  return null;
+}
+
 export function App() {
   return (
     <ErrorBoundary>
@@ -867,6 +887,7 @@ export function App() {
               <RouteTitle />
               <RouteAnnouncer />
               <Shell />
+              <EmbedSessionWarmup />
               <IdeKeepAlive />
               <OpencodeKeepAlive />
               <div class="watermark" aria-hidden="true">

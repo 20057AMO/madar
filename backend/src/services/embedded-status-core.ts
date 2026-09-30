@@ -88,19 +88,20 @@ export function resolveEmbeddedPort(raw: string | undefined, fallback: number): 
 }
 
 /**
- * Host interface the embedded surfaces are PUBLISHED on (compose
- * `WSD_EMBEDDED_PUBLISH_HOST`). Unset/blank degrades to loopback: both surfaces
- * run unauthenticated (`code-server --auth none`, `opencode web` with no
- * password), so publishing them on 0.0.0.0 is anonymous remote code execution
- * on a container that holds the docker socket. Loopback-only is the deliberate
- * stopgap until the authenticated same-port proxy lands — teammates reaching
- * the IDE over the LAN need that proxy, not an open bind.
+ * Host interface the AUTHENTICATED embedded-surface proxy is published on
+ * (compose `WSD_EMBEDDED_PUBLISH_HOST`). The raw code-server / opencode
+ * publishes are GONE: those upstreams are bound to 127.0.0.1 inside the app
+ * container and reachable only through the proxy, which demands an editor+
+ * Madar session. So this knob no longer widens an anonymous surface — it
+ * decides whether the LAN (or only the host itself) may reach the IDE and
+ * opencode, over a route that authenticates first. Unset/blank degrades to
+ * loopback, the conservative answer.
  */
 export function resolveEmbeddedPublishHost(raw: string | undefined): string {
   return String(raw ?? '').trim() || '127.0.0.1';
 }
 
-/** True when the publish host is anything other than this host's loopback. */
+/** True when the proxy is published beyond this host's loopback. */
 export function isLanReachableHost(raw: string | undefined): boolean {
   const host = resolveEmbeddedPublishHost(raw).toLowerCase();
   return host !== '127.0.0.1' && host !== 'localhost' && host !== '::1';
