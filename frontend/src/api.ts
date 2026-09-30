@@ -761,6 +761,23 @@ export const openOpencodeProject = (slug: string) =>
 export const ensureEmbedSession = () =>
   api<{ ok: boolean; port: number; expiresIn: number }>('/api/embed/session', { method: 'POST' });
 
+/**
+ * Revoke the embedded-surface proxy credential. Called from the sign-out paths
+ * so a shared browser cannot keep loading /ide and /opencode on the proxy for
+ * the rest of the cookie's 12h life.
+ *
+ * Deliberately non-fatal: the route is optional (a backend without it answers
+ * 404) and `keepalive` lets the request outlive the sign-out redirect, so every
+ * caller must swallow a rejection — the local reset in clearEmbedSession() is
+ * what actually makes the next frame mount safe.
+ */
+export const clearEmbedSessionCookie = () =>
+  api<{ ok: boolean }>('/api/embed/session/clear', {
+    method: 'POST',
+    skipAuthRedirect: true,
+    keepalive: true,
+  });
+
 // ── Opencode Studio ─────────────────────────────────────────────────────
 export interface StudioItem {
   name: string;

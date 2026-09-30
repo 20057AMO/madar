@@ -53,8 +53,14 @@ export function EmbeddedIDE() {
   const embed = useEmbedSession(true);
   const awaitingCredential = !embed.ready && !embed.forbidden;
 
+  // The frame mounts only once BOTH prerequisites are answered: the status
+  // endpoint (before that the default port is an assumption and a wrong one
+  // dead-ends the frame) and the proxy credential (before that the request is
+  // unauthenticated and the proxy answers 401 — reported as "did not load" for
+  // an editor that is running perfectly well).
+  const framePossible = !loading && running !== false && embed.ready;
   const { frameKey, state: frameState, onLoad: onFrameLoad, remount, isReady } = useFrameLoad(
-    !loading && !awaitingCredential && running !== false,
+    framePossible,
     ideUrl,
   );
   const overlayRef = useFrameFocusReturn(frameState);
@@ -62,13 +68,15 @@ export function EmbeddedIDE() {
   // First-paint timing (Settings → Performance): the wall-clock wait from the
   // first status-probe start to the frame's `load`. Started lazily per mount
   // so remounts (Retry, folder switch) refresh the "how long did it take"
-  // answer instead of blending into one sample.
+  // answer instead of blending into one sample. The clock starts only when the
+  // frame can actually mount — a failed credential must not be recorded as a
+  // frame that "errored".
   const frameTimerRef = useRef<ReturnType<typeof startFrameTimer> | null>(null);
   const probeStartRef = useRef<number | null>(null);
   const probeMsRef = useRef(0);
 
   useEffect(() => {
-    if (loading) return; // status not answered yet — the wait hasn't begun for the user
+    if (!framePossible) return; // status and/or credential not answered yet — the wait hasn't begun
     if (frameTimerRef.current) return; // this mount already timed
     probeStartRef.current = probeStartRef.current ?? performance.now();
     frameTimerRef.current = startFrameTimer('ide', probeMsRef.current);
@@ -79,7 +87,7 @@ export function EmbeddedIDE() {
       frameTimerRef.current = null;
       probeStartRef.current = null;
     };
-  }, [loading]);
+  }, [framePossible]);
 
   useEffect(() => {
     if (frameState === 'ready') {
@@ -236,7 +244,14 @@ export function EmbeddedIDE() {
   const retry = () => {
     refreshRef.current?.();
     remount();
+    // The credential may be the thing that actually failed (a frame that never
+    // mounted has nothing to remount), so re-run the exchange too.
+    embed.retry();
   };
+
+  // Credential-only failure: no frame was ever mounted, so there is nothing to
+  // remount and nothing to time — just re-run the exchange.
+  const retryCredential = () => embed.retry();
 
   const pickProject = (slug: string) => {
     applyFolder(slug ? `/workspaces/${slug}` : '/workspaces', true);
@@ -253,8 +268,8 @@ export function EmbeddedIDE() {
       ? t('ide.frameLoading')
       : t('ide.frameRunning');
 
-  // The frame is unmounted until the proxy credential exists, so "loading"
-  // and "no credential yet" share the one honest pre-frame state.
+  // The frame is unmounted until the proxy credential exists, so "loading" and
+  // "no credential yet" share the one honest pre-frame state.
   const pending = loading || (running !== false && awaitingCredential);
 
   return (
@@ -285,19 +300,34 @@ export function EmbeddedIDE() {
         </span>
         <span style="flex: 1" />
         <span style="font-size: 0.68rem; color: var(--text-3); margin-left: 12px" role="status">
-          {running === false
-            ? t('ide.offline')
-            : embed.forbidden
-              ? t('ide.needsEditor')
-              : running
-                ? frameStatus
-                : ''}
+          {embed.error
+            ? t('ide.credentialFailed')
+            : running === false
+              ? t('ide.offline')
+              : embed.forbidden
+                ? t('ide.needsEditor')
+                : running
+                  ? frameStatus
+                  : ''}
       </span>
       </div>
-      {pending ? (
+      {embed.error ? (
+        <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="alert">
+          <div class="big-icon"><TriangleAlert width={30} height={30} class="icon" style="color: var(--red)" /></div>
+          {t('ide.credentialError')}
+          <div class="mono dim" style="margin-top: 8px; font-size: 0.68rem; word-break: break-word">
+            {embed.error}
+          </div>
+          <div style="margin-top:14px">
+            <button class="btn-ghost sm" onClick={retryCredential}>
+              <RefreshCw width={13} height={13} class="icon" /> {t('common.retry')}
+            </button>
+          </div>
+        </div>
+      ) : pending ? (
         <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="status">
           <div class="big-icon"><VSCodeIcon width={30} height={30} /></div>
-          {t('ide.loadingStatus')}
+          {t('ide.credentialPending')}
         </div>
       ) : running === false || embed.forbidden ? (
         <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="status">

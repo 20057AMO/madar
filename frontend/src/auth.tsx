@@ -1,6 +1,7 @@
 import { createContext, type ComponentChildren } from 'preact';
 import { useState, useEffect, useContext, useCallback } from 'preact/hooks';
 import { relockProviders, clearProvidersUnlock, type UserProfile } from './api';
+import { clearEmbedSession } from './lib/embed-session';
 import { capturePostLoginRoute } from './lib/post-login-route';
 
 interface AuthUser {
@@ -151,7 +152,13 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
     await refreshUser();
   }, [refreshUser]);
 
+  // The embedded-surface proxy credential is an HttpOnly cookie that outlives
+  // the session, so it has to be revoked with the session — otherwise a browser
+  // on a shared machine keeps /ide and /opencode on :4097 for hours after the
+  // user is gone. Revoked BEFORE the token is dropped so the request still
+  // authenticates.
   const logout = useCallback(() => {
+    clearEmbedSession();
     localStorage.removeItem('wsd.token');
     setToken(null);
     setUser(null);
@@ -205,6 +212,9 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
         clearInterval(checker);
         events.forEach((ev) => window.removeEventListener(ev, markActive));
         window.removeEventListener('storage', onStorage);
+        // Same contract as logout(): the proxy credential dies with the
+        // session, not 12 hours later.
+        clearEmbedSession();
         localStorage.removeItem('wsd.token');
         setToken(null);
         setUser(null);

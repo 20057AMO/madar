@@ -50,11 +50,14 @@ export function Opencode() {
   const embed = useEmbedSession(true);
   const awaitingCredential = !embed.ready && !embed.forbidden;
 
-  // The frame only mounts once the status endpoint has answered once: before
-  // that the default port is an assumption and a wrong one 404s the frame into
-  // the error overlay instead of the honest "checking…" state.
+  // The frame only mounts once BOTH prerequisites are answered: the status
+  // endpoint (before that the default port is an assumption and a wrong one
+  // 404s the frame into the error overlay) and the proxy credential (before that
+  // the request is unauthenticated and the proxy answers 401 — a "did not load"
+  // overlay for a tool that is running perfectly well).
+  const framePossible = running === true && embed.ready;
   const { frameKey, state: frameState, onLoad: onFrameLoad, remount, isReady } = useFrameLoad(
-    running !== null && running !== false && !awaitingCredential,
+    framePossible,
     url,
   );
   const overlayRef = useFrameFocusReturn(frameState);
@@ -164,6 +167,10 @@ export function Opencode() {
   }, [user?.id, user?.role]);
 
   const openableProjects = projects.filter((p) => p.openable);
+  // "No project you can open yet" and "you are not an editor" are different
+  // answers — a global editor with an empty roster has a permissions problem
+  // only if they are a viewer.
+  const canWriteProjects = user?.role === 'admin' || user?.role === 'editor';
 
   const openProject = async (slug: string) => {
     pickedRef.current = slug;
@@ -263,19 +270,26 @@ export function Opencode() {
     frameTimerRef.current = startFrameTimer('opencode', probeMsRef.current);
     refreshRef.current?.();
     remount();
+    // The credential may be the thing that actually failed (a frame that never
+    // mounted has nothing to remount), so re-run the exchange too.
+    embed.retry();
   };
 
-  // Arm the timer when the frame becomes possible (status answered) — this is
-  // the same tick the user starts waiting. Unmount mid-load records an errored
-  // attempt; done() is idempotent-safe via the `finished` flag.
+  // Credential-only failure: no frame was ever mounted, so there is nothing to
+  // remount and nothing to time — just re-run the exchange.
+  const retryCredential = () => embed.retry();
+
+  // Arm the timer when the frame becomes possible — this is the same tick the
+  // user starts waiting. Unmount mid-load records an errored attempt; done() is
+  // idempotent-safe via the `finished` flag.
   useEffect(() => {
-    if (running === null) return;
+    if (!framePossible) return;
     if (!frameTimerRef.current) frameTimerRef.current = startFrameTimer('opencode', probeMsRef.current);
     return () => {
       frameTimerRef.current?.done({ errored: true });
       frameTimerRef.current = null;
     };
-  }, [running === null]);
+  }, [framePossible]);
 
   // A passing process-level probe says nothing about whether the client actually
   // rendered, so the toolbar reports the frame state and never claims "running"
@@ -313,23 +327,25 @@ export function Opencode() {
             ))}
           </select>
         </span>
-        {!openableProjects.length && (
+        {!openableProjects.length && !embed.forbidden && (
           <span class="term-title" style="font-size: 0.68rem; color: var(--text-3)">
-            {t('opencode.needsEditor')}
+            {canWriteProjects ? t('opencode.noProjects') : t('opencode.needsEditor')}
           </span>
         )}
         <span class="term-title" style="flex: 1; text-align: right; font-size: 0.7rem" role="status">
           {notice && frameState !== 'ready'
             ? notice
-            : running === false
-              ? t('opencode.offline')
-              : embed.forbidden
-                ? t('opencode.needsEditor')
-                : opening
-                  ? t('opencode.opening')
-                  : running
-                    ? frameStatus
-                    : t('opencode.checking')}
+            : embed.error
+              ? t('opencode.credentialFailed')
+              : running === false
+                ? t('opencode.offline')
+                : embed.forbidden
+                  ? t('opencode.needsEditor')
+                  : opening
+                    ? t('opencode.opening')
+                    : running
+                      ? frameStatus
+                      : t('opencode.checking')}
         </span>
       </div>
       {openErr && (
@@ -341,7 +357,25 @@ export function Opencode() {
           {openErr}
         </div>
       )}
-      {running === false || embed.forbidden ? (
+      {embed.error ? (
+        <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="alert">
+          <div class="big-icon"><TriangleAlert width={30} height={30} class="icon" style="color: var(--red)" /></div>
+          {t('opencode.credentialError')}
+          <div class="mono dim" style="margin-top: 8px; font-size: 0.68rem; word-break: break-word">
+            {embed.error}
+          </div>
+          <div style="margin-top:14px">
+            <button class="btn-ghost sm" onClick={retryCredential}>
+              <RefreshCw width={13} height={13} class="icon" /> {t('common.retry')}
+            </button>
+          </div>
+        </div>
+      ) : awaitingCredential || running === null ? (
+        <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="status">
+          <div class="big-icon"><SquareTerminal width={30} height={30} class="icon" /></div>
+          {t('opencode.credentialPending')}
+        </div>
+      ) : running === false || embed.forbidden ? (
         <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="alert">
           <div class="big-icon"><SquareTerminal width={30} height={30} class="icon" /></div>
           {embed.forbidden ? t('opencode.needsEditor') : t('opencode.offlineBody')}

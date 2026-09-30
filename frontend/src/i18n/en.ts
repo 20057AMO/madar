@@ -505,7 +505,10 @@ export const en = {
     offline: 'VS Code offline',
     offlineBody:
       'VS Code is not answering inside the app container. It runs as a supervised background service, so no project needs to be running — it usually comes back on its own within a few seconds.',
-    loadingStatus: 'Loading VS Code status…',
+    credentialPending: 'Establishing the secure connection to VS Code…',
+    credentialFailed: 'secure connection failed',
+    credentialError:
+      'Could not open a secure session for VS Code. It has to succeed before the editor can load — this is usually a temporary server problem.',
     loadingFrame: 'Loading VS Code…',
     frameLoading: 'VS Code: loading…',
     frameRunning: 'VS Code running',
@@ -520,12 +523,17 @@ export const en = {
     pickerLabel: 'Project to open as an opencode session',
     pickerHome: 'opencode home…',
     needsEditor: 'Opening a project workspace needs editor access',
+    noProjects: 'No project you can open yet',
     checking: 'opencode: …',
     opening: 'opening…',
     offline: 'opencode: offline',
     offlineBody:
       'opencode is not answering inside the app container. It runs as a supervised background service, so no project needs to be running — after an update it normally returns within a couple of seconds.',
     loadingFrame: 'Loading opencode…',
+    credentialPending: 'Establishing the secure connection to opencode…',
+    credentialFailed: 'secure connection failed',
+    credentialError:
+      'Could not open a secure session for opencode. It has to succeed before the page can load — this is usually a temporary server problem.',
     frameLoading: 'opencode: loading…',
     frameRunning: 'opencode: running',
     frameError: 'opencode: did not load',

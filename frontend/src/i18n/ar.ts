@@ -506,7 +506,10 @@ export const ar: Dict = {
     offline: '‏VS Code غير متصل',
     offlineBody:
       '‏VS Code لا يستجيب داخل حاوية التطبيق. يعمل كخدمة خلفية مُراقَبة، فلا يلزم أن يكون أي مشروع قيد التشغيل — ويعود للعمل تلقائيًا خلال ثوانٍ عادةً.',
-    loadingStatus: 'جارٍ التحقق من حالة VS Code…',
+    credentialPending: 'جارٍ إنشاء الاتصال الآمن بـ VS Code…',
+    credentialFailed: 'فشل الاتصال الآمن',
+    credentialError:
+      'تعذّر فتح جلسة آمنة لـ VS Code. يجب أن تنجح قبل أن يُحمَّل المحرر — وغالبًا ما يكون ذلك عطلًا مؤقتًا في الخادم.',
     loadingFrame: 'جارٍ تحميل VS Code…',
     frameLoading: '‏VS Code: جارٍ التحميل…',
     frameRunning: '‏VS Code يعمل',
@@ -521,12 +524,17 @@ export const ar: Dict = {
     pickerLabel: 'المشروع الذي سيُفتح كجلسة opencode',
     pickerHome: 'الصفحة الرئيسية لـ opencode…',
     needsEditor: 'فتح مساحة عمل المشروع يتطلب صلاحية محرر',
+    noProjects: 'لا يوجد مشروع يمكنك فتحه بعد',
     checking: 'opencode: …',
     opening: 'جارٍ الفتح…',
     offline: 'opencode: غير متصل',
     offlineBody:
       'opencode لا يستجيب داخل حاوية التطبيق. يعمل كخدمة خلفية مُراقَبة، فلا يلزم أن يكون أي مشروع قيد التشغيل — ويعود للعمل خلال ثوانٍ بعد التحديث عادةً.',
     loadingFrame: 'جارٍ تحميل opencode…',
+    credentialPending: 'جارٍ إنشاء الاتصال الآمن بـ opencode…',
+    credentialFailed: 'فشل الاتصال الآمن',
+    credentialError:
+      'تعذّر فتح جلسة آمنة لـ opencode. يجب أن تنجح قبل أن تُحمَّل الصفحة — وغالبًا ما يكون ذلك عطلًا مؤقتًا في الخادم.',
     frameLoading: 'opencode: جارٍ التحميل…',
     frameRunning: 'opencode يعمل',
     frameError: 'opencode: لم يُحمَّل',

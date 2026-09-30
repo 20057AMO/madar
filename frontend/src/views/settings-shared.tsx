@@ -72,6 +72,7 @@ export const AUDIT_LABELS_AR: Record<string, string> = {
   'updates-check': 'التحقق من التحديثات',
   'agent-run': 'اكتمال تشغيل الوكيل',
   'agent-run-failed': 'فشل تشغيل الوكيل',
+  'embed-session': 'فتح جلسة مساحة العمل المضمّنة',
 };
 
 /** EN label map for audit events. */
@@ -145,6 +146,7 @@ export const AUDIT_LABELS_EN: Record<string, string> = {
   'updates-check': 'Updates checked',
   'agent-run': 'Agent run completed',
   'agent-run-failed': 'Agent run failed',
+  'embed-session': 'Embedded workspace session opened',
 };
 
 export type Msg = { type: 'ok' | 'err'; text: string } | null;

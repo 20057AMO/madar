@@ -865,10 +865,13 @@ function OpencodeKeepAlive() {
  *
  * code-server and opencode web are only reachable through the authenticated
  * Madar proxy, which reads an HttpOnly cookie minted by POST /api/embed/session.
- * The two tool pages mint it on mount, but the sidebar "opencode" button opens
- * the surface in a NEW TAB directly at the proxy — which would 401 for a user
- * who had not visited either page yet. One exchange per session, for editor+
- * only, closes that gap and warms the proxy hop at the same time.
+ * The two tool pages need it before their frames mount, but the sidebar
+ * "opencode" button opens the surface in a NEW TAB directly at the proxy —
+ * which would 401 for a user who has not visited either page yet. One exchange
+ * per page load, for editor+ only, closes that gap and warms the proxy hop at
+ * the same time: the exchange is a module-level single flight, so this warm-up,
+ * the hidden /ide layer and the hidden /opencode layer all share the one answer
+ * instead of each minting (and auditing) their own cookie.
  */
 function EmbedSessionWarmup() {
   const { user } = useAuth();
