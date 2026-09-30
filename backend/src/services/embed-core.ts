@@ -170,7 +170,14 @@ export function parseCookies(header: string | undefined): Record<string, string>
  * Drop any upstream `Set-Cookie` that would clobber the embed credential —
  * an upstream that could name `madar_embed` must not be able to overwrite the
  * session gate (nor inherit a laxer attribute set than HttpOnly/SameSite).
- * Everything else passes through: the surfaces own their own session cookies.
+ *
+ * This is the RESPONSE direction only: everything else passes through, because
+ * the surfaces own their own session cookies. The REQUEST direction is the
+ * opposite rule — `buildUpstreamHeaders` drops the whole `Cookie` header rather
+ * than filtering it, since the embed credential rides in it and the upstreams
+ * run `--auth none` (they have no use for any cookie). Do not "fix" that by
+ * forwarding a filtered Cookie header: that is exactly how madar_embed would
+ * reach a root code-execution surface.
  */
 export function sanitizeSetCookie(values: string[] | undefined, embedCookieName = EMBED_COOKIE_NAME): string[] {
   if (!Array.isArray(values)) return [];
@@ -180,16 +187,46 @@ export function sanitizeSetCookie(values: string[] | undefined, embedCookieName 
   });
 }
 
-/** Attributes for the embed cookie: HttpOnly, SameSite=Strict, host-scoped. */
-export function embedCookieOptions(maxAgeSeconds: number): string {
+/**
+ * Should the embed cookie carry `Secure`?
+ *
+ * True only when the request that minted it arrived over TLS, which costs
+ * nothing on an HTTPS install and cuts the LAN-sniffing window there. It is
+ * deliberately NOT unconditional: the documented deployment is a plain-HTTP LAN
+ * (the dashboard is published on :3000 with no TLS terminator), and a browser
+ * silently DROPS a `Secure` cookie received over http:// — the IDE would then
+ * fail to load with no error anywhere. `forwardedProto` is honoured only when
+ * the operator opted into trusting one proxy hop (WSD_TRUST_PROXY), because
+ * that header is attacker-controlled otherwise.
+ */
+export function embedCookieSecure(req: {
+  encrypted?: boolean;
+  forwardedProto?: string;
+  trustProxy?: boolean;
+}): boolean {
+  if (req.encrypted === true) return true;
+  if (req.trustProxy !== true) return false;
+  const first = String(req.forwardedProto || '').split(',')[0]?.trim().toLowerCase();
+  return first === 'https';
+}
+
+/**
+ * Attributes for the embed cookie: HttpOnly, SameSite=Strict, host-scoped.
+ * `Secure` is conditional (see embedCookieSecure) and the clearing form must
+ * carry the same decision, so a TLS install expires the cookie it minted.
+ */
+export function embedCookieOptions(maxAgeSeconds: number, secure = false): string {
   const attrs = ['HttpOnly', 'SameSite=Strict', 'Path=/'];
   if (Number.isFinite(maxAgeSeconds) && maxAgeSeconds > 0) {
     attrs.push(`Max-Age=${Math.floor(maxAgeSeconds)}`);
   }
+  if (secure) attrs.push('Secure');
   return attrs.join('; ');
 }
 
 /** Clear the embed cookie (logout, or a role that no longer qualifies). */
-export function embedCookieClearOptions(): string {
-  return 'HttpOnly; SameSite=Strict; Path=/; Max-Age=0';
+export function embedCookieClearOptions(secure = false): string {
+  const attrs = ['HttpOnly', 'SameSite=Strict', 'Path=/', 'Max-Age=0'];
+  if (secure) attrs.push('Secure');
+  return attrs.join('; ');
 }

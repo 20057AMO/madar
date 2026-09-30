@@ -18,16 +18,13 @@ services:
       WSD_WORKSPACES_HOST_DIR: "${WSD_WORKSPACES_HOST_DIR:-}"
       WSD_WORKSPACE_IMAGE: wsd/workspace:latest
       WSD_IDE_PORT: ${WSD_IDE_PORT:-8100}
-      # In-container bind of code-server + opencode web. LOOPBACK ONLY: both
-      # are unauthenticated root code-execution surfaces holding the docker
-      # socket, and a 127.0.0.1 listener has no address on any docker network
-      # — not the app network, not the default bridge a project container
-      # sits on. Do not widen: a 0.0.0.0 bind is exactly the hole this closes.
-      WSD_IDE_BIND: ${WSD_IDE_BIND:-127.0.0.1}
-      WSD_OPENCODE_BIND: ${WSD_OPENCODE_BIND:-127.0.0.1}
       # The embedded-surface proxy: the ONLY route to code-server/opencode.
       # Requires an editor+ Madar session (HttpOnly cookie), proxies HTTP and
-      # websockets, and forwards to the loopback upstreams above.
+      # websockets, and forwards to the loopback upstreams.
+      # The upstreams' in-container bind is NOT configurable (no WSD_IDE_BIND /
+      # WSD_OPENCODE_BIND): the entrypoint hard-codes 127.0.0.1 and ignores any
+      # stale value, because both are unauthenticated root code-execution
+      # surfaces and a 0.0.0.0 bind is exactly the hole this closes.
       WSD_EMBED_PROXY_PORT: ${WSD_EMBED_PROXY_PORT:-4097}
       # Interface the AUTHENTICATED proxy is published on. It now mirrors the
       # dashboard's own exposure: teammates reach Madar on 3000 from the LAN,

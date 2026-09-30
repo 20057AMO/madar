@@ -20,15 +20,25 @@ mkdir -p "$DATA_DIR"
 # (services/embed-proxy.ts, port WSD_EMBED_PROXY_PORT), which requires an
 # editor+ Madar session. That is why 0.0.0.0 upstream binds are gone: the
 # published port now points at the authenticated proxy, never at these.
-IDE_BIND="${WSD_IDE_BIND:-127.0.0.1}"
-OPENCODE_BIND="${WSD_OPENCODE_BIND:-127.0.0.1}"
+#
+# The bind is HARD-CODED and deliberately NOT an env knob. A knob here is an
+# opt-out of the only control that keeps these surfaces unreachable, and the
+# pre-change .env.example shipped WSD_IDE_BIND=0.0.0.0 with instructions to
+# widen it for LAN sharing — every host that followed that advice would have
+# silently reopened the original hole on upgrade (a comment saying "do not
+# widen it" is not a control). A stale value in an existing .env is reported
+# loudly and ignored, never honoured.
+if [ -n "${WSD_IDE_BIND:-}" ] || [ -n "${WSD_OPENCODE_BIND:-}" ]; then
+  echo "Madar: WSD_IDE_BIND / WSD_OPENCODE_BIND are no longer read — the embedded upstreams are always loopback-bound. Delete them from .env; the value there has NO effect." >&2
+fi
+IDE_BIND=127.0.0.1
+OPENCODE_BIND=127.0.0.1
 
 echo "Madar: starting supervised code-server IDE on ${IDE_BIND}:8080 (no auth, loopback-only)"
 # NOTE: code-server reads the PORT env var and it overrides --bind-addr,
 # so unset it (PORT is used by the dashboard node app).
 # Auth disabled (--auth none) — the ONLY access control is this loopback bind
-# plus the authenticated proxy in front of it. WSD_IDE_BIND exists purely so
-# the setting is explicit in one place; do not widen it to 0.0.0.0.
+# plus the authenticated proxy in front of it, and the bind is not configurable.
 # Supervised restart loop: same pattern as opencode below — if code-server
 # crashes or is killed (e.g. version update), the loop revives it within ~2s.
 # PID of the live child is published in $DATA_DIR/code-server.pid for the

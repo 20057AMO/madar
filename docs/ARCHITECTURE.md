@@ -22,14 +22,16 @@ Madar is a single Docker Compose stack: one `app` container serves the whole pro
 │  │  └───────────────┘   │  - providers / agents / chat       │  │  │
 │  │                      │  - storage / snapshots / archive   │  │  │
 │  │  ┌───────────────┐   │  - webhooks / alerts               │  │  │
-│  │  │  code-server  │   └────────────┬───────────────────────┘  │  │
-│  │  │  (port 8100)  │                │                         │  │
-│  │  └───────────────┘                │ WebSocket (ws)           │  │
+│  │  │  code-server  │   │  - embed proxy (4097, editor+)     │  │  │
+│  │  │ (127.0.0.1:   │   └────────────┬───────────────────────┘  │  │
+│  │  │  8080, only via│               │                         │  │
+│  │  │  the proxy)   │                │ WebSocket (ws)           │  │
+│  │  └───────────────┘                │                         │  │
 │  │  ┌───────────────┐   ┌────────────▼────────────────────────┐ │  │
 │  │  │  opencode web │   │ /ws/projects/status                 │ │  │
-│  │  │  (port 4096)  │   │ /ws/projects/:slug/{status,logs,    │ │  │
-│  │  └───────────────┘   │   terminal}                         │ │  │
-│  │                      │ /ws/chat/:slug/:chatId (AI chat)    │ │  │
+│  │  │ (127.0.0.1:   │   │ /ws/projects/:slug/{status,logs,    │ │  │
+│  │  │  4096, only via│  │ terminal}                         │ │  │
+│  │  │  the proxy)   │   │ /ws/chat/:slug/:chatId (AI chat)    │ │  │
 │  │                      │ /ws/agent/:id/:chatId               │ │  │
 │  │                      │ /ws/chat-team (team chat)           │ │  │
 │  │                      └─────────────────────────────────────┘ │  │
@@ -286,8 +288,9 @@ python backend/tests/e2e/reviews_ui.py
 | Item | Value |
 |------|-------|
 | Dashboard / API | `3000` (env `PORT`) |
-| Web IDE (code-server) | `8100` (`WSD_IDE_PORT`) |
-| opencode web | `4096` (`WSD_OPENCODE_PORT`) |
+| Embedded-surface proxy (the ONLY route to the IDE / opencode) | `4097` (`WSD_EMBED_PROXY_PORT`), editor+ `madar_embed` cookie |
+| Web IDE (code-server) | `127.0.0.1:8080` in-container (`WSD_IDE_INTERNAL_PORT`) — not published; `8100` stays reserved |
+| opencode web | `127.0.0.1:4096` in-container (`WSD_OPENCODE_PORT`) — not published |
 | App container | `wsd-pro` |
 | App image | `wsd-pro-app` |
 | Project containers | `wsd-<slug>` |

@@ -29,6 +29,7 @@ import {
   cloneIntoWorkspace,
   duplicateProject,
   validatePortSet,
+  reservedMadarPorts,
   canonicalProjectSlug,
   updateProjectPorts,
   updateProjectLimits,
@@ -48,9 +49,15 @@ import { exportProjectZip } from './services/project-zip';
 import * as snapAuto from './services/project-snapshots-auto';
 import { getIdeStatus } from './services/ide-service';
 import { createStatusCache, resolveEmbeddedPort, isLanReachableHost, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
-import { EMBED_COOKIE_NAME, embedCookieClearOptions, embedCookieOptions } from './services/embed-core';
-import { startEmbedProxy, EMBED_PROXY_PORT } from './services/embed-proxy';
-import { signEmbedToken, EMBED_TOKEN_TTL_SEC } from './services/user-store';
+import {
+  EMBED_COOKIE_NAME,
+  embedCookieClearOptions,
+  embedCookieOptions,
+  embedCookieSecure,
+  parseCookies,
+} from './services/embed-core';
+import { startEmbedProxy, embedProxyListening, EMBED_PROXY_PORT } from './services/embed-proxy';
+import { signEmbedToken, verifyEmbedToken, EMBED_TOKEN_TTL_SEC } from './services/user-store';
 import { probeEmbeddedPort } from './services/embedded-status-probe';
 import { getWorkspaceMount, publicMountInfo, startWorkspaceMountAudit, type WorkspaceMountInfo } from './services/workspaces-mount';
 import { detectIp } from './services/server-info';
@@ -247,6 +254,21 @@ const userWriteLimiter = (req: any, res: any, next: any) => {
   next();
 };
 
+/**
+ * Should the embed cookie carry `Secure` for THIS request? True when the
+ * connection itself is TLS, or when the operator opted into trusting one proxy
+ * hop that reported https. Off on the documented plain-HTTP LAN, where a
+ * `Secure` cookie would be dropped by the browser and the IDE would silently
+ * fail to load. The rule itself lives in embed-core so it is unit-tested.
+ */
+function embedRequestIsSecure(req: any): boolean {
+  return embedCookieSecure({
+    encrypted: req?.socket?.encrypted === true,
+    forwardedProto: String(req?.headers?.['x-forwarded-proto'] || ''),
+    trustProxy: process.env.WSD_TRUST_PROXY === '1' || process.env.WSD_TRUST_PROXY === 'true',
+  });
+}
+
 function rateLimit(scope: string, windowMs: number, max: number) {
   return (req: any, res: any, next: any) => {
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -391,6 +413,25 @@ app.post('/api/auth/login/verify', totpLimiter, (req: any, res) => {
   const result = signLoginSession(pendingUserId);
   recordAudit('login', true, req.ip, pendingUserId);
   res.json(result);
+});
+
+// ── Embedded-surface credential teardown (unauthenticated BY DESIGN) ──
+// The HttpOnly madar_embed cookie outlives a dashboard logout by up to 12h, so
+// on a shared machine the next person could still load /ide on the proxy port
+// (code-server + opencode run as root beside the docker socket). Logout and the
+// idle timeout call this to expire the cookie — the honest counterpart to the
+// mint.
+//
+// Deliberately registered BEFORE authMiddleware: the two paths that most need
+// it are exactly the ones with no usable session left (a 401 expiry, an idle
+// timeout, a token already dropped from localStorage). Nothing server-side
+// changes here, so there is no session to verify and nothing to audit: the only
+// effect is expiring a cookie in the caller's own jar. Expired cookies are the
+// cheap direction to get wrong — a stale cookie is a live 12h credential, a
+// cleared one costs the next page load one re-mint.
+app.post('/api/embed/session/clear', (req: any, res) => {
+  res.setHeader('Set-Cookie', `${EMBED_COOKIE_NAME}=; ${embedCookieClearOptions(embedRequestIsSecure(req))}`);
+  res.json({ ok: true });
 });
 
 // ── User avatars (public by design: <img> tags carry no auth header) ──
@@ -1108,7 +1149,12 @@ const OPENCODE_INTERNAL_PORT = resolveEmbeddedPort(process.env.WSD_OPENCODE_PORT
 // "offline" exactly right after an update or a restart. A stopped service
 // still fails instantly (ECONNREFUSED on loopback), so the wider ceiling is
 // free in the common case and bounded against a wedged process.
+//
+// The proxy is part of the answer for the same reason as on the IDE route: it
+// is the only route the browser has, so a bind failure must read as NOT running
+// rather than as a healthy opencode behind a dead port.
 async function opencodeRunning(): Promise<boolean> {
+  if (!embedProxyListening()) return false;
   return probeEmbeddedPort(OPENCODE_INTERNAL_PORT);
 }
 
@@ -1178,6 +1224,12 @@ app.get('/api/opencode/status', async (req, res) => {
 //
 // Cookies ignore ports, so the cookie set on :3000 is what :4097 receives —
 // that is what makes the surfaces work over the LAN through one listener.
+//
+// The credential is minted REPEATEDLY on purpose (the two tool pages + the
+// hidden warm-ups all exchange before they mount), so the audit is written only
+// when a genuinely NEW credential is created — a refresh of a live cookie for
+// the same user still rolls the TTL forward but stays out of the 100-entry
+// security log, which would otherwise be evicted by warm-up traffic alone.
 app.post('/api/embed/session', userWriteLimiter, (req: any, res) => {
   const user = req.user;
   if (!user) {
@@ -1185,16 +1237,19 @@ app.post('/api/embed/session', userWriteLimiter, (req: any, res) => {
   }
   // Editor+ matches the proxy's own gate: both surfaces execute code in a root
   // container that holds the docker socket, so a viewer must never reach them.
+  const secure = embedRequestIsSecure(req);
   if (user.role !== 'admin' && user.role !== 'editor') {
-    res.setHeader('Set-Cookie', `${EMBED_COOKIE_NAME}=; ${embedCookieClearOptions()}`);
+    res.setHeader('Set-Cookie', `${EMBED_COOKIE_NAME}=; ${embedCookieClearOptions(secure)}`);
     return res.status(403).json({ error: 'Editor access required' });
   }
   const token = signEmbedToken(user.id);
   if (!token) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  res.setHeader('Set-Cookie', `${EMBED_COOKIE_NAME}=${token}; ${embedCookieOptions(EMBED_TOKEN_TTL_SEC)}`);
-  recordAudit('embed-session', true, req.ip, user.id);
+  const existing = verifyEmbedToken(parseCookies(req.headers.cookie)[EMBED_COOKIE_NAME]);
+  const isRefresh = !!existing && existing.id === user.id;
+  res.setHeader('Set-Cookie', `${EMBED_COOKIE_NAME}=${token}; ${embedCookieOptions(EMBED_TOKEN_TTL_SEC, secure)}`);
+  if (!isRefresh) recordAudit('embed-session', true, req.ip, user.id);
   res.json({ ok: true, port: EMBED_PROXY_PORT, expiresIn: EMBED_TOKEN_TTL_SEC });
 });
 
@@ -1427,12 +1482,11 @@ app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async 
     const { name, slug, description, ports } = req.body || {};
     // Defense-in-depth: mirror validateProjectSpec's port rules (privileged +
     // reserved + dedup) so the route never relies solely on downstream checks.
-    const PORT = Number(process.env.PORT) || 3000;
-    const IDE_PORT = Number(process.env.WSD_IDE_PORT) || 8100;
-    const OPENCODE_PORT = Number(process.env.WSD_OPENCODE_PORT) || 4096;
-    // The embedded-surface proxy is a published host port too — reserving it
-    // keeps a project from colliding with the only route to the IDE/opencode.
-    const EMBED_PORT = Number(process.env.WSD_EMBED_PROXY_PORT) || 4097;
+    // The reserved set comes from reservedMadarPorts() — the same single source
+    // validatePortSet uses — so a new Madar service port can never be missing
+    // from one of the two lists (a proxy port claimed by a project once made
+    // the IDE route stop binding).
+    const reserved = new Set(reservedMadarPorts().map((r) => r.port));
     const seen = new Set<number>();
     const cleanPorts =
       Array.isArray(ports)
@@ -1440,7 +1494,7 @@ app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async 
             .map(Number)
             .filter((n: number) => {
               if (!Number.isInteger(n) || n < 1024 || n > 65535) return false;
-              if (n === PORT || n === IDE_PORT || n === OPENCODE_PORT || n === EMBED_PORT) return false;
+              if (reserved.has(n)) return false;
               if (seen.has(n)) return false;
               seen.add(n);
               return true;

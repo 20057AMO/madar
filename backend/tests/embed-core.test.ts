@@ -27,6 +27,7 @@ import {
   sanitizeSetCookie,
   embedCookieOptions,
   embedCookieClearOptions,
+  embedCookieSecure,
 } from '../src/services/embed-core.ts';
 
 describe('resolveEmbedRoute - surface ownership', () => {
@@ -229,5 +230,52 @@ describe('embed cookie attributes', () => {
     assert.match(embedCookieClearOptions(), /Max-Age=0/);
     assert.match(embedCookieClearOptions(), /HttpOnly/);
     assert.match(embedCookieClearOptions(), /SameSite=Strict/);
+  });
+
+  test('Secure appears on both the mint and the clear form, and only when asked', () => {
+    // The clearing form MUST carry the same decision as the mint: a TLS install
+    // that expires its cookie with a different attribute set leaves a stale
+    // cookie the browser keeps sending.
+    assert.ok(!/Secure/i.test(embedCookieOptions(3600, false)));
+    assert.match(embedCookieOptions(3600, true), /Secure/);
+    assert.ok(!/Secure/i.test(embedCookieClearOptions(false)));
+    assert.match(embedCookieClearOptions(true), /Secure/);
+    // Everything else is unchanged, so the conditional flag cannot weaken the
+    // HttpOnly / SameSite / Path guarantees.
+    for (const attrs of [embedCookieOptions(3600, true), embedCookieClearOptions(true)]) {
+      assert.match(attrs, /HttpOnly/);
+      assert.match(attrs, /SameSite=Strict/);
+      assert.match(attrs, /Path=\//);
+    }
+  });
+});
+
+describe('embedCookieSecure - Secure is earned, not assumed', () => {
+  test('a TLS request gets it, a plain-HTTP one does not', () => {
+    assert.strictEqual(embedCookieSecure({ encrypted: true }), true);
+    assert.strictEqual(embedCookieSecure({ encrypted: false }), false);
+    assert.strictEqual(embedCookieSecure({}), false);
+  });
+
+  test('a spoofed X-Forwarded-Proto is ignored unless the operator trusts a hop', () => {
+    // Off by default: directly-published ports must not be able to flip the
+    // attribute (and, more importantly, must not be able to make the server
+    // believe it is behind TLS).
+    assert.strictEqual(embedCookieSecure({ forwardedProto: 'https' }), false);
+    assert.strictEqual(embedCookieSecure({ forwardedProto: 'https', trustProxy: false }), false);
+    assert.strictEqual(embedCookieSecure({ forwardedProto: 'https', trustProxy: true }), true);
+  });
+
+  test('the trusted header is parsed like a real proxy chain, junk included', () => {
+    assert.strictEqual(embedCookieSecure({ forwardedProto: 'HTTPS', trustProxy: true }), true);
+    assert.strictEqual(embedCookieSecure({ forwardedProto: ' https , http', trustProxy: true }), true);
+    assert.strictEqual(embedCookieSecure({ forwardedProto: 'http', trustProxy: true }), false);
+    assert.strictEqual(embedCookieSecure({ forwardedProto: 'httpsx', trustProxy: true }), false);
+    assert.strictEqual(embedCookieSecure({ forwardedProto: '', trustProxy: true }), false);
+    assert.strictEqual(embedCookieSecure({ trustProxy: true }), false);
+    // TLS on the socket wins even without the header, and a non-boolean
+    // "encrypted" must never be read as true.
+    assert.strictEqual(embedCookieSecure({ encrypted: true, forwardedProto: 'http', trustProxy: true }), true);
+    assert.strictEqual(embedCookieSecure({ encrypted: 'yes' as unknown as boolean }), false);
   });
 });

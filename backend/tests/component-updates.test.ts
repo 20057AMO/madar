@@ -177,17 +177,40 @@ function tcpProbeHost(port: number, timeoutMs = 2000): Promise<boolean> {
   });
 }
 
+/**
+ * Host port the embedded IDE is actually reachable on.
+ *
+ * The raw code-server publish is GONE: the upstream is loopback-bound inside the
+ * container and the only published route is the authenticated proxy
+ * (WSD_EMBED_PROXY_PORT). `docker port <container> 8080` therefore returns
+ * nothing and the old fallback to 8100 polled a port no listener has ever had
+ * for the whole 60s budget, inside after()'s tryStep — so the waste was
+ * invisible in the pass count. Read the proxy port from the container itself
+ * (an override must be honored) and resolve its host side.
+ */
 async function resolveIdeHostPort(): Promise<number> {
+  // A port that reaches net.connect must be a real integer: NaN/0/-1 all throw
+  // ERR_SOCKET_BAD_PORT, and a thrown probe inside after()'s tryStep reads as a
+  // "proxy is down" verdict when the truth is a parsing accident.
+  const usable = (n: number): number => (Number.isInteger(n) && n > 0 && n < 65536 ? n : -1);
+  let containerPort = 4097;
   try {
-    const { stdout } = await execFileOut('docker', ['port', CONTAINER, '8080'], { timeout: 30_000 });
-    // The publish interface is loopback by default (both embedded surfaces run
-    // unauthenticated), so the old /0\.0\.0\.0:(\d+)/ match silently fell back
-    // to 8100 and would have ignored a WSD_IDE_PORT override. Match any
-    // host:port pair instead.
-    const m = stdout.match(/[\d.]+:(\d+)/);
-    if (m) return Number(m[1]);
+    const env = await dockerExec(['sh', '-c', 'printenv WSD_EMBED_PROXY_PORT || true']);
+    const m = String(env || '').trim().match(/^(\d+)$/);
+    const parsed = m ? Number(m[1]) : -1;
+    if (usable(parsed) !== -1) containerPort = parsed;
+  } catch { /* container restarting — use the default */ }
+  try {
+    const { stdout } = await execFileOut('docker', ['port', CONTAINER, String(containerPort)], { timeout: 30_000 });
+    // The publish interface is 0.0.0.0 by default (the proxy is the LAN route),
+    // so match any host:port pair instead of assuming 0.0.0.0.
+    const m = String(stdout || '').match(/[\d.]+:(\d+)/);
+    if (m) {
+      const hostPort = Number(m[1]);
+      if (usable(hostPort) !== -1) return hostPort;
+    }
   } catch { /* fall through */ }
-  return 8100;
+  return containerPort;
 }
 
 async function waitForCodeServerVersion(timeoutMs: number): Promise<string> {
@@ -1314,13 +1337,16 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
 
     await tryStep('clear updates state', clearUpdatesState);
 
-    await tryStep('wait for embedded IDE on host port', async () => {
+    await tryStep('wait for the embedded-surface proxy on its host port', async () => {
+      // The IDE is only reachable through the authenticated proxy now, so this
+      // waits on THAT port — probing the dead 8100 burned the whole budget.
+      const hostIde = await resolveIdeHostPort();
       const deadline = Date.now() + 60_000;
       while (Date.now() < deadline) {
-        if (await tcpProbeHost(8100, 1500)) return;
+        if (await tcpProbeHost(hostIde, 1500)) return;
         await sleep(2000);
       }
-      throw new Error('IDE not answering on host 8100 after restore');
+      throw new Error(`embedded-surface proxy not answering on host ${hostIde} after restore`);
     });
 
     await tryStep('delete temp admin account', async () => {

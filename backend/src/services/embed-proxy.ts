@@ -51,12 +51,46 @@ const OPENCODE_UPSTREAM_PORT = resolveEmbeddedPort(process.env.WSD_OPENCODE_PORT
  */
 export const EMBED_PROXY_PORT = resolveEmbeddedPort(process.env.WSD_EMBED_PROXY_PORT, 4097);
 
+/**
+ * Ceiling on the websocket UPGRADE handshake, armed on the upstream request so
+ * an upstream that accepts the TCP connection and then stalls cannot hold the
+ * browser's socket (and this one) open forever. Overridable so the handshake
+ * guard is testable in milliseconds instead of 15s, and clamped so it can never
+ * be configured away into a half-open hang.
+ */
+const UPGRADE_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.WSD_EMBED_UPGRADE_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return 15_000;
+  return Math.min(Math.max(Math.floor(raw), 100), 60_000);
+})();
+
 const UPSTREAM_HOST = '127.0.0.1';
 
 /** editor+ is the floor: both surfaces run code as root beside the docker socket. */
 function roleAllows(identity: EmbedIdentity | null): boolean {
   if (!identity) return false;
   return identity.role === 'admin' || identity.role === 'editor';
+}
+
+/**
+ * Listen state of the proxy, derived from the live server rather than tracked
+ * by hand: the browser is pointed at the PROXY port, so a proxy that never
+ * bound made every embedded `running:true` a lie — the page rendered a frame src
+ * on a port nothing answers, with no error anywhere. `server.listening` is
+ * false before the bind lands, after it is closed, and when it failed, which is
+ * exactly the set of answers the status contract must not paper over.
+ */
+let proxyServer: http.Server | null = null;
+let listenError = '';
+
+/** True only while the proxy is actually accepting connections. */
+export function embedProxyListening(): boolean {
+  return proxyServer?.listening === true;
+}
+
+/** Why the bind failed (empty when the proxy is healthy or merely unstarted). */
+export function embedProxyListenError(): string {
+  return listenError;
 }
 
 function upstreamPortFor(surface: EmbedSurface): number {
@@ -86,9 +120,16 @@ function refuse(res: http.ServerResponse, status: number, message: string): void
 }
 
 /**
- * Headers forwarded upstream. The embed cookie and the dashboard session token
- * are REMOVED: neither upstream has any business seeing a Madar credential,
- * and a leak there would hand a code-execution surface a reusable one.
+ * Headers forwarded upstream.
+ *
+ * The ENTIRE `Cookie` header is dropped, not filtered: the embed credential
+ * rides in it, the dashboard session token rides in `Authorization`, and both
+ * upstreams run `--auth none` so neither has any use for a cookie at all. That
+ * is the REQUEST direction of the same rule `sanitizeSetCookie` implements for
+ * the response direction (there, the surfaces' own cookies pass and only
+ * `madar_embed` is dropped). Never re-add a filtered `Cookie` header here —
+ * that is precisely how the credential guarding two root code-execution
+ * surfaces would leak downstream.
  */
 function buildUpstreamHeaders(
   req: http.IncomingMessage,
@@ -178,13 +219,27 @@ function proxyUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer, p
     headers: buildUpstreamHeaders(req, route.surface, true),
   });
 
+  // The upgrade leg is bounded too: the socket timeout has to be armed on the
+  // REQUEST, not only after `upgrade` fires, or an upstream that accepts the TCP
+  // connection and never completes the handshake holds the client's socket (and
+  // this one) open forever. Cleared again once the relay starts — a long-lived
+  // websocket legitimately goes idle.
+  const upgradeDeadline = setTimeout(() => upstreamReq.destroy(new Error('upstream upgrade timeout')), UPGRADE_TIMEOUT_MS);
+  upgradeDeadline.unref?.();
+  let spliced = false;
+
   // Authenticated already — the upgrade is now a blind byte relay, which is why
   // no frame is ever parsed here and why a websocket needs no separate gate.
   upstreamReq.on('upgrade', (upRes, upSocket, upHead) => {
+    // The handshake is over: the guard has done its job and must be cleared or
+    // it would fire mid-session and destroy a perfectly healthy relay.
+    clearTimeout(upgradeDeadline);
     if (!upSocket) {
       socket.destroy();
       return;
     }
+    spliced = true;
+    upSocket.setTimeout(0);
     const lines = [`HTTP/1.1 ${upRes.statusCode || 101} ${upRes.statusMessage || 'Switching Protocols'}`];
     for (const [key, value] of Object.entries(upRes.headers)) {
       if (key.toLowerCase() === 'location') continue;
@@ -196,14 +251,43 @@ function proxyUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer, p
     if (upHead && upHead.length) socket.write(upHead);
     if (head && head.length) upSocket.write(head);
     socket.pipe(upSocket).pipe(socket);
-    socket.on('error', () => upSocket.destroy());
-    upSocket.on('error', () => socket.destroy());
+    // A blind byte relay cannot speak the WebSocket close handshake, and BOTH
+    // sides of an upgraded socket are half-open by construction: pipe() forwards
+    // a FIN upstream, but nothing ever closed the pair. So a browser tab that
+    // navigated away (or a reload) left code-server / opencode holding the
+    // session — and its memory — open until the process itself gave up. Verified
+    // live: with only 'close'/'error' listeners a client FIN left the upstream
+    // socket readable-ended and open indefinitely.
+    //
+    // Completing the close on the first FIN is the fix: graceful end() first so
+    // bytes already in flight are flushed (destroy() alone drops them), then a
+    // guaranteed destroy so the pair can never linger. Idempotent, because
+    // 'end', 'close' and 'error' can all fire for one teardown.
+    let torn = false;
+    const teardown = () => {
+      if (torn) return;
+      torn = true;
+      socket.end();
+      upSocket.end();
+      const kill = setTimeout(() => {
+        socket.destroy();
+        upSocket.destroy();
+      }, 250);
+      kill.unref?.();
+    };
+    socket.on('end', teardown);
+    upSocket.on('end', teardown);
+    socket.on('error', teardown);
+    upSocket.on('error', teardown);
+    socket.on('close', teardown);
+    upSocket.on('close', teardown);
   });
 
   // An upstream that answers a normal (non-101) response to an upgrade request
   // (a restart mid-handshake, an auth redirect) still has to reach the browser
   // as a real HTTP response instead of an abrupt reset.
   upstreamReq.on('response', (upRes) => {
+    clearTimeout(upgradeDeadline);
     if (upRes.statusCode === 101) return;
     const lines = [`HTTP/1.1 ${upRes.statusCode} ${upRes.statusMessage || ''}`];
     const headers = stripHopByHop(upRes.headers as Record<string, string | string[] | undefined>);
@@ -221,14 +305,24 @@ function proxyUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer, p
     socket.write(lines.join('\r\n'));
     upRes.pipe(socket);
     socket.on('error', () => upRes.destroy());
+    socket.on('close', () => upRes.destroy());
   });
 
   upstreamReq.on('error', () => {
+    clearTimeout(upgradeDeadline);
+    // Once the relay is spliced these two sockets ARE one WebSocket byte
+    // stream: writing an HTTP response into it would inject a response body
+    // into a frame stream the browser is already parsing. Tear the pair down.
+    if (spliced) {
+      socket.destroy();
+      return;
+    }
     if (!socket.destroyed && !socket.writableEnded) {
       socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
     }
   });
   socket.on('error', () => upstreamReq.destroy());
+  socket.on('close', () => upstreamReq.destroy());
   upstreamReq.end();
 }
 
@@ -274,7 +368,18 @@ export function startEmbedProxy(port: number = EMBED_PROXY_PORT): http.Server {
     );
   });
   server.on('error', (err) => {
-    console.error(`[Madar] Embedded-surface proxy failed to start on :${port}: ${err.message}`);
+    // A failed bind (EADDRINUSE, EACCES) used to be logged and then ignored, so
+    // both status routes kept reporting the surfaces as running while every
+    // frame pointed at a port nothing answers. It is fail-CLOSED — the only
+    // route to the upstreams is simply gone, which is the safe direction — so
+    // the process stays up (the dashboard is still useful) and the honest
+    // `running:false` comes from embedProxyListening() above.
+    listenError = err.message;
+    console.error(
+      `[Madar] Embedded-surface proxy failed to start on :${port}: ${err.message} — ` +
+        `the IDE and opencode will report as NOT running until this is fixed (docker compose logs app).`,
+    );
   });
+  proxyServer = server;
   return server;
 }

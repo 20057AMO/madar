@@ -298,6 +298,8 @@ interface Raw {
   status: number;
   text: string;
   json: any;
+  /** Response headers — the embed-credential rows assert on Set-Cookie. */
+  headers: Headers;
 }
 
 /** Raw fetch (text in hand) with the repo's 429 Retry-After backoff. */
@@ -320,7 +322,7 @@ async function rawReq(
     if (res.status !== 429 || attempt >= 3) {
       let json: any = null;
       try { json = JSON.parse(text); } catch { /* non-JSON body */ }
-      return { status: res.status, text, json };
+      return { status: res.status, text, json, headers: res.headers };
     }
     const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '2'), 10));
     await new Promise((r) => setTimeout(r, secs * 1000 + 250));
@@ -550,28 +552,37 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       assert.ok(!res.text.toLowerCase().includes('password'));
     });
 
-    test('the reported port is the container-configured WSD_IDE_PORT (structure cross-check)', async (t) => {
+    test('the reported port is the EMBEDDED PROXY port, never the raw code-server one', async (t) => {
       // Deliberately NOT a timing assertion: the TTL/singleflight rules are
       // unit-tested offline in embedded-status-core.test.ts, and probe frequency
-      // is not observable from outside. What IS observable is that the reported
-      // port really is the configured one.
+      // is not observable from outside. What IS observable is WHICH port the
+      // browser is told to use: the raw upstream is loopback-bound and not
+      // published, so reporting WSD_IDE_PORT would hand every client a dead
+      // endpoint. The proxy port is the only published route.
       let expected: string | null = null;
+      let rawIde: string | null = null;
       try {
         const env = inContainer(['env']);
-        expected = env.split(/\r?\n/).find((l) => l.startsWith('WSD_IDE_PORT='))?.split('=')[1] || null;
+        expected = env.split(/\r?\n/).find((l) => l.startsWith('WSD_EMBED_PROXY_PORT='))?.split('=')[1] || null;
+        rawIde = env.split(/\r?\n/).find((l) => l.startsWith('WSD_IDE_PORT='))?.split('=')[1] || null;
       } catch {
         return t.skip(`container '${CONTAINER}' not reachable via docker exec`);
       }
       const res = await rawReq('GET', '/ide/status', authHeaders());
       assert.strictEqual(res.status, 200);
-      if (expected) {
-        assert.strictEqual(
+      assert.strictEqual(
+        res.json.ide.port,
+        Number(expected || 4097),
+        `ide/status port ${res.json.ide.port} != container WSD_EMBED_PROXY_PORT ${expected}`,
+      );
+      // Control: the raw code-server port is a DIFFERENT number, so the
+      // assertion above is really discriminating and not a coincidence.
+      if (rawIde) {
+        assert.notStrictEqual(
           res.json.ide.port,
-          Number(expected),
-          `ide/status port ${res.json.ide.port} != container WSD_IDE_PORT ${expected}`
+          Number(rawIde),
+          `ide/status reports the raw WSD_IDE_PORT ${rawIde} — that port is loopback-only and answers nothing from a browser`,
         );
-      } else {
-        assert.strictEqual(res.json.ide.port, 8100, 'WSD_IDE_PORT unset in the container → the 8100 default');
       }
     });
   });
@@ -1001,6 +1012,130 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
   });
 
   // ── Audit trail ──────────────────────────────────────────────────────────
+  describe('POST /api/embed/session — the credential the proxy actually checks', () => {
+    /** The raw Set-Cookie list of a response (Node folds repeats into an array). */
+    function setCookies(res: any): string[] {
+      const raw = res.headers?.get?.('set-cookie');
+      if (!raw) return [];
+      return Array.isArray(raw) ? raw : [raw];
+    }
+
+    test('an editor MEMBER gets the HttpOnly cookie and the PROXY port (not the internal one)', async (t) => {
+      if (!usersCreated) return t.skip('setup did not complete');
+      const res = await rawReq('POST', '/embed/session', asUser(editorToken));
+      if (res.status === 429) return t.skip('rate limited (429)');
+      assert.strictEqual(res.status, 200, `editor mint: ${res.status} -> ${res.text}`);
+      assert.strictEqual(res.json?.ok, true);
+      const cookie = setCookies(res).find((c) => c.startsWith('madar_embed='));
+      assert.ok(cookie, `no embed cookie minted: ${JSON.stringify(setCookies(res))}`);
+      assert.match(cookie, /HttpOnly/);
+      assert.match(cookie, /SameSite=Strict/);
+      assert.match(cookie, /Path=\//);
+      assert.match(cookie, /Max-Age=\d+/);
+      // The LAN is plain HTTP here, so Secure must NOT be set — a browser would
+      // drop the cookie and the IDE would fail with no error anywhere. (The
+      // attribute rules themselves are unit-tested in embed-core.test.ts.)
+      assert.ok(!/;\s*Secure/i.test(cookie), `Secure on a plain-HTTP install would break the cookie: ${cookie}`);
+      // And the port handed to the client must be the proxy's — the same one the
+      // status routes report (which the row above pins to the container's
+      // WSD_EMBED_PROXY_PORT), never a raw upstream port.
+      const status = await rawReq('GET', '/ide/status', authHeaders());
+      assert.strictEqual(status.status, 200);
+      assert.strictEqual(
+        res.json?.port,
+        status.json?.ide?.port,
+        `the mint reports ${res.json?.port} but the status route reports ${status.json?.ide?.port}`,
+      );
+    });
+
+    test('a VIEWER MEMBER is refused AND its cookie is actively expired', async (t) => {
+      if (!usersCreated) return t.skip('setup did not complete');
+      // A viewer may already hold a cookie from an earlier promotion, so the
+      // refusal has to clear it — otherwise the demoted user's browser keeps a
+      // working credential until the TTL runs out (and the proxy, which reads the
+      // role live, would refuse it anyway — but the stale cookie is still a leak).
+      const stale = 'madar_embed=stale.viewer.cookie';
+      // NOTE: asUser() returns the header object itself, so the Cookie merges
+      // INTO it — nesting it under a `headers` key would silently drop it and
+      // this row would then assert the server's unconditional clear instead of
+      // the stale-credential case it exists to cover.
+      const res = await rawReq('POST', '/embed/session', { ...asUser(viewerToken), Cookie: stale });
+      if (res.status === 429) return t.skip('rate limited (429)');
+      assert.strictEqual(res.status, 403, `viewer mint: ${res.status} -> ${res.text}`);
+      const cleared = setCookies(res).find((c) => c.startsWith('madar_embed='));
+      assert.ok(cleared, 'the viewer refusal did not expire the embed cookie');
+      assert.match(cleared, /Max-Age=0/);
+    });
+
+    test('re-minting with a VALID cookie of the same user is not audited twice', async (t) => {
+      if (!usersCreated) return t.skip('setup did not complete');
+      const readCount = async (): Promise<number> => {
+        const res = await reqAuth('GET', '/auth/audit?limit=100');
+        if (res.status !== 200) return -1;
+        const entries = (await res.json()).entries as any[];
+        return entries.filter((e) => e.event === 'embed-session' && e.userId === editorId).length;
+      };
+      const first = await rawReq('POST', '/embed/session', asUser(editorToken));
+      if (first.status === 429) return t.skip('rate limited (429)');
+      assert.strictEqual(first.status, 200);
+      const minted = setCookies(first).find((c) => c.startsWith('madar_embed='));
+      const value = minted!.split(';')[0].split('=').slice(1).join('=');
+      const before = await readCount();
+      if (before < 0) return t.skip('the admin audit log is not readable here');
+      // Same user, already holding a valid cookie: the frame-retry path that
+      // would otherwise fill the security log with one entry per page load.
+      const again = await rawReq('POST', '/embed/session', {
+        ...asUser(editorToken),
+        Cookie: `madar_embed=${value}`,
+      });
+      assert.strictEqual(again.status, 200, `refresh mint: ${again.status} -> ${again.text}`);
+      const after = await readCount();
+      assert.strictEqual(after, before, `a cookie refresh was audited again (+${after - before})`);
+    });
+  });
+
+  describe('POST /api/embed/session/clear — a signed-out browser can drop the cookie', () => {
+    function clearCookieOf(res: any): string | undefined {
+      const raw = res.headers?.get?.('set-cookie');
+      const list = !raw ? [] : Array.isArray(raw) ? raw : [raw];
+      return list.find((c: string) => c.startsWith('madar_embed='));
+    }
+
+    test('works with NO Authorization header at all (the logout case)', async () => {
+      // A signed-out browser still holds the 12h HttpOnly cookie, so the clear
+      // route must sit BEFORE the auth middleware — otherwise logout could never
+      // revoke the embedded surfaces.
+      const res = await rawReq('POST', '/embed/session/clear');
+      assert.strictEqual(res.status, 200, `unauthenticated clear: ${res.status} -> ${res.text}`);
+      assert.strictEqual(res.json?.ok, true);
+      const cookie = clearCookieOf(res);
+      assert.ok(cookie, 'the clear route did not expire the cookie');
+      assert.match(cookie, /Max-Age=0/);
+      assert.match(cookie, /HttpOnly/);
+      assert.match(cookie, /SameSite=Strict/);
+      assert.match(cookie, /Path=\//);
+    });
+
+    test('is idempotent for a garbage cookie and for an editor who also has one', async (t) => {
+      const junk = await rawReq('POST', '/embed/session/clear', { headers: { Cookie: 'madar_embed=not.a.jwt' } });
+      assert.strictEqual(junk.status, 200, `junk-cookie clear: ${junk.status} -> ${junk.text}`);
+      assert.match(clearCookieOf(junk) || '', /Max-Age=0/);
+      if (!usersCreated) return t.skip('setup did not complete (the editor row)');
+      const res = await rawReq('POST', '/embed/session/clear', asUser(editorToken));
+      if (res.status === 429) return t.skip('rate limited (429)');
+      assert.strictEqual(res.status, 200, `editor clear: ${res.status} -> ${res.text}`);
+      assert.match(clearCookieOf(res) || '', /Max-Age=0/);
+    });
+
+    test('a clear is not audited (it is not a session event)', async () => {
+      const res = await reqAuth('GET', '/auth/audit?limit=100');
+      if (res.status !== 200) return;
+      const entries = (await res.json()).entries as any[];
+      const clears = entries.filter((e) => String(e.event || '').includes('embed') && e.event !== 'embed-session');
+      assert.deepStrictEqual(clears, [], `the clear route is audited as ${JSON.stringify(clears)}`);
+    });
+  });
+
   describe('audit trail for opencode/open', () => {
     /** Read the ADMIN-ONLY global security log: GET /api/auth/audit (index.ts:414). */
     async function findAudit(match: (e: any) => boolean): Promise<any | null> {

@@ -6,11 +6,15 @@
  * the iframe at. code-server runs with `--auth none`, so there is NO IDE
  * password: nothing to mint, persist or echo.
  *
- * `running` describes the PROCESS and nothing else — which is exactly why the
- * payload also carries the workspaces mount verdict (`workspace`) and whether
- * the authenticated proxy is published off-host (`lanReachable`). An IDE that
- * is running and serving an empty directory is NOT healthy, and a published
- * IDE is only as safe as the proxy in front of it.
+ * `running` answers "can the browser load the IDE right now", which is the
+ * conjunction of two facts: code-server answers on its internal port AND the
+ * authenticated proxy in front of it is listening. A proxy that failed to bind
+ * makes a perfectly healthy code-server unreachable from anywhere, so it must
+ * not read as `running:true` with a `port` nothing serves. The payload then
+ * also carries the workspaces mount verdict (`workspace`) and whether the
+ * authenticated proxy is published off-host (`lanReachable`): an IDE that is
+ * running and serving an empty directory is NOT healthy, and a published IDE is
+ * only as safe as the proxy in front of it.
  */
 import {
   createStatusCache,
@@ -20,6 +24,7 @@ import {
   EMBEDDED_STATUS_DEFAULT_TTL_MS,
 } from './embedded-status-core';
 import { probeEmbeddedPort } from './embedded-status-probe';
+import { embedProxyListening } from './embed-proxy';
 import { getWorkspaceMount, type WorkspaceMountInfo } from './workspaces-mount';
 
 /** code-server's own bind inside the main container (the entrypoint's arg). */
@@ -35,13 +40,14 @@ const IDE_PUBLISH_HOST = resolveEmbeddedPublishHost(process.env.WSD_EMBEDDED_PUB
 const EMBED_PORT = resolveEmbeddedPort(process.env.WSD_EMBED_PROXY_PORT, 4097);
 
 export interface IdeStatus {
+  /** code-server is up AND the authenticated proxy in front of it is listening. */
   running: boolean;
   /** Proxy port the iframe must point at (the IDE is NOT published directly). */
   port: number;
   /**
-   * The workspaces bind mount — reported here because `running:true` only
-   * describes the PROCESS: a broken mount left code-server serving an empty
-   * Explorer, which this payload used to call "healthy".
+   * The workspaces bind mount — reported separately from `running` because a
+   * broken mount left code-server serving an empty Explorer, which this payload
+   * used to call "healthy".
    */
   workspace: WorkspaceMountInfo;
   /** True when the authenticated proxy is published beyond loopback. */
@@ -49,11 +55,16 @@ export interface IdeStatus {
 }
 
 /**
- * Check whether code-server is up (it runs inside the same main container on
- * the internal port — the dashboard host port is WSD_IDE_PORT).
- * Shared plain-TCP probe: auth/healthz behavior never matters.
+ * Check whether the IDE is USABLE: code-server is up on the internal port
+ * (ide-service.ts) AND the authenticated proxy in front of it is actually
+ * listening (embed-proxy). Both are required, because the proxy is the only
+ * route the browser has — a running code-server behind a proxy that failed to
+ * bind is reachable from nowhere, so reporting it as running is what used to
+ * send the page to a dead port. Shared plain-TCP probe: auth/healthz behavior
+ * never matters.
  */
-function isIdeRunning(): Promise<boolean> {
+async function isIdeRunning(): Promise<boolean> {
+  if (!embedProxyListening()) return false;
   return probeEmbeddedPort(IDE_INTERNAL_PORT);
 }
 

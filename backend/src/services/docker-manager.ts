@@ -179,6 +179,30 @@ function normalizeEnv(env?: Record<string, string>): Record<string, string> {
 }
 
 /**
+ * Host ports Madar itself owns and a project may never claim — THE canonical
+ * list (validatePortSet rejects them, currentUsedPorts pre-seeds them, and the
+ * duplicate route filters on them; one definition, so the three can never drift
+ * the way an inline copy does).
+ *
+ *  - PORT / dashboard — the authenticated surface.
+ *  - WSD_IDE_PORT / WSD_OPENCODE_PORT — the embedded upstreams' own ports. They
+ *    are loopback-bound in-container and NOT published any more, but they are
+ *    still the addresses code-server/opencode listen on inside the app container,
+ *    so a project holding them can collide with a future publish.
+ *  - WSD_EMBED_PROXY_PORT — the ONLY published route to those two surfaces; a
+ *    project on this port would simply fail to bind (and would put an
+ *    unauthenticated-looking listener where the session gate belongs).
+ */
+export function reservedMadarPorts(): { port: number; label: string }[] {
+  return [
+    { port: Number(process.env.PORT) || 3000, label: 'the Madar dashboard' },
+    { port: Number(process.env.WSD_IDE_PORT) || 8100, label: 'the Madar VS Code service' },
+    { port: Number(process.env.WSD_OPENCODE_PORT) || 4096, label: 'the Madar opencode web UI' },
+    { port: Number(process.env.WSD_EMBED_PROXY_PORT) || 4097, label: 'the Madar embedded-surface proxy' },
+  ];
+}
+
+/**
  * Validate + dedupe a raw port array using the exact rules as project
  * creation: integers 1-65535, no privileged system ports (<1024), no Madar
  * reserved service ports. Sharing this with the create path keeps edit,
@@ -189,6 +213,7 @@ export function validatePortSet(ports: unknown, opts?: { max?: number }): number
   const rawPorts = Array.isArray(ports) ? [...ports] : [];
   const seen = new Set<number>();
   const cleanPorts: number[] = [];
+  const reserved = reservedMadarPorts();
 
   for (const raw of rawPorts) {
     const port = Number(raw);
@@ -198,17 +223,9 @@ export function validatePortSet(ports: unknown, opts?: { max?: number }): number
     if (port < 1024) {
       throw new HttpError(400, `Port ${port} is a privileged system port (1-1023) and cannot be used.`);
     }
-    const dashboardPort = Number(process.env.PORT) || 3000;
-    const idePort = Number(process.env.WSD_IDE_PORT) || 8100;
-    const opencodePort = Number(process.env.WSD_OPENCODE_PORT) || 4096;
-    if (port === dashboardPort) {
-      throw new HttpError(400, `Port ${port} is reserved for the Madar dashboard.`);
-    }
-    if (port === idePort) {
-      throw new HttpError(400, `Port ${port} is reserved for the Madar VS Code service.`);
-    }
-    if (port === opencodePort) {
-      throw new HttpError(400, `Port ${port} is reserved for the Madar opencode web UI.`);
+    const clash = reserved.find((r) => r.port === port);
+    if (clash) {
+      throw new HttpError(400, `Port ${port} is reserved for ${clash.label}.`);
     }
 
     if (seen.has(port)) continue;
@@ -232,7 +249,7 @@ export function validatePortSet(ports: unknown, opts?: { max?: number }): number
  */
 export async function currentUsedPorts(): Promise<Set<number>> {
   const used = new Set<number>();
-  const reserved = [Number(process.env.PORT) || 3000, Number(process.env.WSD_IDE_PORT) || 8100, Number(process.env.WSD_OPENCODE_PORT) || 4096];
+  const reserved = reservedMadarPorts().map((r) => r.port);
   for (const p of reserved) used.add(p);
   for (const proj of await listProjects()) {
     for (const p of proj.ports || []) used.add(p);
