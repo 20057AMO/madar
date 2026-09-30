@@ -1,8 +1,13 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
+import { register } from 'node:module';
 import { signTestToken, API_URL, initTestAuth } from './helpers.ts';
-import { isSealed, maskStored, openSecret, sealSecret } from '../src/services/secret-box.ts';
+
+// secret-box imports ./jwt-secret extensionless (correct for the compiled CJS,
+// unresolvable by node's ESM loader) — see tests/ts-ext-resolve.mjs.
+register(new URL('./ts-ext-resolve.mjs', import.meta.url).href);
+const { isSealed, maskStored, openSecret, sealSecret } = await import('../src/services/secret-box.ts');
 
 /**
  * ════════════════════════════════════════════════════════════════

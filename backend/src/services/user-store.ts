@@ -5,10 +5,15 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { generateTotpSecret, verifyTotp } from './totp';
 import { isReservedUsername } from './chat-team-core';
+import { jwtSecretValue } from './jwt-secret';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || '/app/data';
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const JWT_SECRET = process.env.JWT_SECRET || 'wsd-pro-default-secret-change-me';
+// Resolved ONCE, from the environment when it holds a strong value and
+// otherwise from the secret generated once and persisted in the data dir —
+// there is no in-repo default any more, so nothing here can sign with a value
+// published in this repository. Every sign/verify below reads this one value.
+const JWT_SECRET = jwtSecretValue();
 const JWT_EXPIRY = '24h';
 const PROVIDERS_UNLOCK_EXPIRY = '30m';
 const PENDING_2FA_EXPIRY = '5m';

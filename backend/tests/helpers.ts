@@ -4,9 +4,12 @@
  * relative imports must include the explicit `.ts` extension.
  */
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import dotenv from 'dotenv';
+import { classifyJwtSecret } from '../src/services/jwt-secret-core.ts';
 
 // Load secrets: repo-root .env first, then backend/.env (no override).
 // Tests run with cwd = backend/, so the root .env is one level up.
@@ -15,7 +18,44 @@ if (fs.existsSync(rootEnv)) dotenv.config({ path: rootEnv });
 dotenv.config();
 
 export const API_URL = process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api';
-export const JWT_SECRET = process.env.JWT_SECRET || 'wsd-pro-default-secret-change-me';
+
+/**
+ * The signing secret the server actually uses, resolved the same way the
+ * server does — there is no in-repo default to fall back on any more, so a
+ * helper that invented one would only produce 401s:
+ *   1. JWT_SECRET in the environment (CI, and the documented repo-root `.env`
+ *      contract, both of which the server sees too).
+ *   2. The secret the container generated and persisted at /app/data/jwt.secret
+ *      — read through the local docker daemon, which is already a prerequisite
+ *      for every live suite. Override the container with WSD_TEST_CONTAINER.
+ *   3. A random per-process value plus a loud warning, so a missing step fails
+ *      visibly instead of quietly signing with a public literal.
+ */
+function resolveServerJwtSecret(): string {
+  const configured = (process.env.JWT_SECRET || '').trim();
+  if (classifyJwtSecret(configured) === null) return configured;
+
+  const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
+  try {
+    const fromContainer = execFileSync('docker', ['exec', container, 'cat', '/app/data/jwt.secret'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (classifyJwtSecret(fromContainer) === null) return fromContainer;
+  } catch { /* no docker / no container / no persisted secret */ }
+
+  const random = `suite-only-${crypto.randomBytes(16).toString('hex')}`;
+  console.warn(
+    `[helpers] Could not resolve the server JWT signing secret: JWT_SECRET is not set in this ` +
+    `environment and 'docker exec ${container} cat /app/data/jwt.secret' did not answer. ` +
+    `Forged tokens will be REFUSED by the server — set JWT_SECRET (same value the server uses) ` +
+    `or point WSD_TEST_CONTAINER at the running app container.`,
+  );
+  return random;
+}
+
+export const JWT_SECRET = resolveServerJwtSecret();
 
 export const JSON_HEADERS: Record<string, string> = { 'Content-Type': 'application/json' };
 

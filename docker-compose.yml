@@ -33,9 +33,13 @@ services:
       WSD_EMBEDDED_PUBLISH_HOST: ${WSD_EMBEDDED_PUBLISH_HOST:-0.0.0.0}
       WSD_CHAT_MODEL: ${WSD_CHAT_MODEL:-qwen3:30b}
       WSD_DATA_DIR: /app/data
-      # JWT signing secret — set JWT_SECRET in .env (see .env.example) or tokens
-      # are signed with this publicly known fallback (dev only!).
-      JWT_SECRET: ${JWT_SECRET:-wsd-pro-insecure-default}
+      # JWT signing secret. Set JWT_SECRET in .env (see .env.example) to take
+      # control of it. There is NO default any more: an unset (or known-weak /
+      # too-short) value makes the app generate a random secret ONCE and persist
+      # it as /app/data/jwt.secret (0600, inside the wsd-data volume), so
+      # sessions stay valid across restarts and are never signed with a value
+      # published in this repository.
+      JWT_SECRET: ${JWT_SECRET:-}
       OLLAMA_HOST: https://ollama.com
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}

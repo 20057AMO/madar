@@ -187,10 +187,11 @@ The `entrypoint.sh` also:
 
 ### 5.4 At-rest encryption (secret box)
 - Provider API keys sealed with AES-256-GCM: `enc1:<iv>:<tag>:<ct>:<last4>`
-- Key = scrypt(`WSD_ENCRYPTION_KEY` → fallback `JWT_SECRET`), salt persisted once in `data/crypto.salt` (0600)
+- Key = scrypt(`WSD_ENCRYPTION_KEY` → fallback the **resolved** signing secret), salt persisted once in `data/crypto.salt` (0600)
 - Plaintext keys are sealed automatically on load; masking uses `<last4>` — never decrypts; backup exports strip keys entirely
 
 ### 5.5 Hardening
+- **No default signing secret**: `JWT_SECRET` is resolved once by `services/jwt-secret.ts` — a strong env value wins, otherwise a random `randomBytes(32)` secret is generated once and persisted at `data/jwt.secret` (0600, inside the data volume). A blank, known-weak (the retired in-repo literals) or under-32-character value is **refused, never repaired**, and every sign/verify call site reads that one memoized value, so a signer/verifier split is impossible
 - Rate limiting: global budget (240/min, env-tunable), dedicated brute-force scopes — `auth` 10/min (login/setup/password verification), `unlock` 15/min + progressive cooldown (5 failures → 15-min ban), `totp` 8/min
 - `WSD_TRUST_PROXY=1` opts into one reverse-proxy hop (default OFF)
 - SSRF guard: http(s) only, cloud-metadata ranges refused; local LAN/loopback allowed (local Ollama)
@@ -265,7 +266,7 @@ python backend/tests/e2e/reviews_ui.py
 
 ### Conventions
 - **Serial execution only** (`--test-concurrency=1`) — parallel runs + browser polling trip the rate limiter
-- Suites sign their own JWTs from the repo `JWT_SECRET` (no real password needed)
+- Suites sign their own JWTs with the same resolved secret the server uses (env `JWT_SECRET`, else the container's persisted `data/jwt.secret`) — no real password needed
 - Optional real-login tests activate with `WSD_TEST_USER`/`WSD_TEST_PASS`
 - Every suite self-cleans its projects/agents/providers/channels
 - **Environment**: the full suite needs `WSD_TESTING=1` (suite container, relaxed non-security budgets). The dev container runs `WSD_TESTING=0` with production budgets — only the offline `*-core` suites run reliably against it. The `auth`/`unlock`/`totp` brute-force scopes deliberately keep **real** values under testing.

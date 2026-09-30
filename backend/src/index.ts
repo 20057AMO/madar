@@ -156,6 +156,8 @@ import { otpauthUri } from './services/totp';
 import { buildBackup, restoreFromBackup } from './services/settings-export';
 import { publicProject, publicProjects } from './services/docker-manager';
 import { recordAudit, listAudit, listUserActivity } from './services/audit-store';
+import { getJwtSecret } from './services/jwt-secret';
+import { describeJwtSecretRejection } from './services/jwt-secret-core';
 import { checkUserWrite, sweepUserWriteBuckets } from './services/user-write-limiter';
 import type { UserRole } from './services/user-store';
 import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkProjectAccess } from './middleware/auth';
@@ -168,18 +170,37 @@ import { removeUserChannels, ensureProjectChannel, addChannelMember, removeChann
 
 dotenv.config();
 
-// Loud, unmissable warning when the deployment runs on a publicly-known
-// signing secret — tokens would be forgeable by anyone with the repo.
-const INSECURE_SECRETS = new Set([
-  'wsd-pro-insecure-default',
-  'wsd-pro-default-secret-change-me',
-  'change-me',
-]);
-if (!process.env.JWT_SECRET || INSECURE_SECRETS.has(process.env.JWT_SECRET)) {
+// The signing secret is resolved ONCE by services/jwt-secret.ts — the same
+// memoized value every signer AND verifier uses. There is no in-repo default
+// any more: a missing, known-weak or too-short JWT_SECRET is refused and the
+// app signs with a random secret persisted in the data dir, so a fresh install
+// is safe with zero configuration and a restart keeps sessions valid.
+const jwtSecretState = getJwtSecret();
+if (jwtSecretState.source === 'env') {
+  console.log('[madar] JWT signing secret: taken from the JWT_SECRET environment variable.');
+} else {
+  const line = (text: string) => console.warn(`│  ${text.padEnd(60)}│`);
   console.warn('┌──────────────────────────────────────────────────────────────┐');
-  console.warn('│  ⚠ SECURITY WARNING: JWT_SECRET is missing or uses a known   │');
-  console.warn('│  default. Session tokens are forgeable. Set a long random    │');
-  console.warn('│  JWT_SECRET in your .env and restart immediately.            │');
+  line(`⚠ JWT_SECRET is ${describeJwtSecretRejection(jwtSecretState.envRejection)}.`);
+  line('');
+  if (jwtSecretState.source === 'file') {
+    line('Signing with a secret generated once and kept at:');
+    console.warn(`│  ${jwtSecretState.path}`);
+    line('It is not a public default: sessions are unforgeable and');
+    line('survive restarts. Keep it (it lives in the data volume).');
+  } else {
+    line('The data dir is NOT writable, so the generated secret is');
+    line('in memory only: unforgeable, but every restart signs');
+    line('everyone out. Fix the data volume, or set JWT_SECRET.');
+  }
+  line('');
+  line('To take control (or rotate away from anything ever exposed),');
+  line('set a long random JWT_SECRET in .env and restart:');
+  line('  node -e "console.log(require(\'crypto\').randomBytes(32)');
+  line('    .toString(\'hex\'))"');
+  line('');
+  line('Changing it later signs everyone out (they log in again)');
+  line('and without WSD_ENCRYPTION_KEY re-opens sealed keys.');
   console.warn('└──────────────────────────────────────────────────────────────┘');
 }
 

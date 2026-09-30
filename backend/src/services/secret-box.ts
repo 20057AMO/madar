@@ -10,7 +10,8 @@
  * unreadable (rotated env var, lost salt file).
  *
  * Key material:
- *   master = WSD_ENCRYPTION_KEY  → falls back to JWT_SECRET
+ *   master = WSD_ENCRYPTION_KEY  → falls back to the resolved JWT signing
+ *           secret (env, else the generated secret in DATA_DIR/jwt.secret)
  *   key    = scrypt(master, salt, 32)
  *   salt   = random 32 bytes persisted once in DATA_DIR/crypto.salt (0600)
  *
@@ -21,6 +22,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { jwtSecretValue } from './jwt-secret';
 
 // Compiled CJS (dist) resolves the package-relative fallback; native TS-ESM
 // test runs always set WSD_DATA_DIR explicitly, so cwd fallback is safe.
@@ -32,11 +34,7 @@ const PREFIX = 'enc1';
 let keyCache: Buffer | null = null;
 
 function masterSecret(): string {
-  return (
-    process.env.WSD_ENCRYPTION_KEY ||
-    process.env.JWT_SECRET ||
-    'wsd-pro-default-secret-change-me'
-  );
+  return process.env.WSD_ENCRYPTION_KEY || jwtSecretValue();
 }
 
 function loadSalt(): Buffer {

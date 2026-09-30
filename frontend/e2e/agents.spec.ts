@@ -29,7 +29,12 @@ const repoRoot = path.resolve(path.dirname(__filename), '..', '..');
 const env = parseDotEnv(path.join(repoRoot, '.env'));
 const JWT_SECRET = env.JWT_SECRET;
 
-if (!JWT_SECRET) throw new Error('JWT_SECRET not found');
+if (!JWT_SECRET) {
+  throw new Error(
+    'JWT_SECRET not found in .env — the server no longer has a public default to share, ' +
+    'so set a long random JWT_SECRET in .env (the server then uses that same value) before running e2e',
+  );
+}
 
 function forgeToken(): string {
   return jwt.sign({ id: 'e2e-user', username: 'e2e', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });

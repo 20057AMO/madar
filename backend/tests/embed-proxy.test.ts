@@ -36,7 +36,9 @@ import { EMBED_COOKIE_NAME, resolveEmbedRoute } from '../src/services/embed-core
 const HOOK_URL = new URL('./ts-ext-resolve.mjs', import.meta.url).href;
 register(HOOK_URL);
 
-const JWT = 'embed-proxy-suite-secret';
+// Must clear the resolver's own bar (>= 32 chars, not a known-weak literal) or
+// user-store would refuse it and sign with a generated secret instead.
+const JWT = 'embed-proxy-suite-secret-0123456789abcdef';
 const PASSWORD = 'embed-proxy-pass';
 
 const ADMIN = { id: 'u-admin', username: 'owner', role: 'admin' as const };
