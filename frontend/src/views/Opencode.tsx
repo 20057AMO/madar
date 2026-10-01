@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useMemo, useRef } from 'preact/hooks';
 import { SquareTerminal, FolderOpen, RefreshCw, TriangleAlert } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { canOpenProjectWorkspace, getOpencodeStatus, openOpencodeProject, listProjects } from '../api';
@@ -7,6 +7,7 @@ import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
 import { useEmbedSession } from '../lib/embed-session';
 import { useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
+import { frameFocusRing } from '../lib/frame-focus-ring';
 import { buildOpencodeUrl } from '../lib/opencode-link';
 import { projectOptionLabel } from '../lib/project-label';
 import { startFrameTimer } from '../lib/perf-metrics';
@@ -61,6 +62,8 @@ export function Opencode() {
     url,
   );
   const overlayRef = useFrameFocusReturn(frameState);
+  // Chromium rings no iframe for keyboard focus, so the frame arms its own.
+  const frameRingRef = useMemo(frameFocusRing, []);
 
   // First-paint timing (Settings → Performance): probe → iframe `load`, one
   // sample per mount (Retry / project switch starts a fresh measurement).
@@ -390,6 +393,7 @@ export function Opencode() {
         <>
           <iframe
             key={frameKey}
+            ref={frameRingRef}
             class="opencode-frame"
             src={url}
             title="Madar opencode"

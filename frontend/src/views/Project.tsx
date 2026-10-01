@@ -400,6 +400,7 @@ export function Project({ params }: { params: { slug: string } }) {
   const [nameDraft, setNameDraft] = useState('');
   const renameSaveRef = useRef<HTMLButtonElement | null>(null);
   const renameTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
   const renameReturnArmed = useRef(false);
   const [copied, setCopied] = useState(false);
   const [zipping, setZipping] = useState(false);
@@ -534,6 +535,17 @@ export function Project({ params }: { params: { slug: string } }) {
     }
   }, [renaming]);
 
+  // Opening the editor moves the caret into the new input, for BOTH activation
+  // modes. autoFocus alone is not enough: the trigger is unmounted by the very
+  // activation that mounts the input, and Chromium's post-click focus fixup then
+  // resets the caret to <body> — the attribute's focusing steps had already run,
+  // so Space (whose click fires on keyup) and Enter alike left focus on <body>
+  // and the keyboard user had to hunt for their own text field.
+  useEffect(() => {
+    if (!renaming) return;
+    try { renameInputRef.current?.focus(); } catch { /* noop */ }
+  }, [renaming]);
+
   const cancelRename = () => {
     setNameDraft(project?.name || '');
     setRenaming(false);
@@ -576,6 +588,7 @@ export function Project({ params }: { params: { slug: string } }) {
             {renaming ? (
               <span style="display:inline-flex; align-items:center; gap:6px; margin-bottom:10px;">
                 <input
+                  ref={renameInputRef}
                   type="text"
                   class="detail-title"
                   value={nameDraft}

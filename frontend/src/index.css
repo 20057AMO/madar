@@ -2381,6 +2381,15 @@ a:focus-visible,
 }
 .modern-input:focus-visible { outline: none; /* uses its own box-shadow ring */ }
 
+/* The embedded-surface <iframe> is the one control no selector can ring:
+   Chromium matches neither :focus nor :focus-visible on a focused iframe, so
+   lib/frame-focus-ring.ts sets this attribute off document.activeElement and
+   only for keyboard entry. Inset — the frame is the full-viewport <main>. */
+iframe[data-kbd-focus] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 /* Micro-interactions on buttons */
 .btn-primary { transition: opacity 0.15s, transform 0.12s ease, box-shadow 0.15s ease; }
 .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }

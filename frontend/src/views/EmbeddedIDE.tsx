@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useMemo, useRef } from 'preact/hooks';
 import { FolderOpen, RefreshCw, TriangleAlert } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { getIdeStatus, listProjects } from '../api';
@@ -7,6 +7,7 @@ import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
 import { useEmbedSession } from '../lib/embed-session';
 import { useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
+import { frameFocusRing } from '../lib/frame-focus-ring';
 import { projectOptionLabel } from '../lib/project-label';
 import { startFrameTimer } from '../lib/perf-metrics';
 
@@ -64,6 +65,8 @@ export function EmbeddedIDE() {
     ideUrl,
   );
   const overlayRef = useFrameFocusReturn(frameState);
+  // Chromium rings no iframe for keyboard focus, so the frame arms its own.
+  const frameRingRef = useMemo(frameFocusRing, []);
 
   // First-paint timing (Settings → Performance): the wall-clock wait from the
   // first status-probe start to the frame's `load`. Started lazily per mount
@@ -344,6 +347,7 @@ export function EmbeddedIDE() {
         <>
           <iframe
             key={frameKey}
+            ref={frameRingRef}
             class="opencode-frame"
             src={ideUrl}
             title="Madar VS Code"
