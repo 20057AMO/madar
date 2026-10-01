@@ -193,7 +193,7 @@ The `entrypoint.sh` also:
 ### 5.5 Hardening
 - **No default signing secret**: `JWT_SECRET` is resolved once by `services/jwt-secret.ts` — a strong env value wins, otherwise a random `randomBytes(32)` secret is generated once and persisted at `data/jwt.secret` (0600, inside the data volume). A blank, known-weak (the retired in-repo literals) or under-32-character value is **refused, never repaired**, and every sign/verify call site reads that one memoized value, so a signer/verifier split is impossible
 - Rate limiting: global budget (240/min, env-tunable), dedicated brute-force scopes — `auth` 10/min (login/setup/password verification), `unlock` 15/min + progressive cooldown (5 failures → 15-min ban), `totp` 8/min
-- `WSD_TRUST_PROXY=1` opts into one reverse-proxy hop (default OFF)
+- `WSD_TRUST_PROXY=1` opts into one reverse-proxy hop (default OFF) — it governs both per-IP limiter trust (`req.ip`) and whether the `madar_embed` cookie is minted `Secure` from `X-Forwarded-Proto`
 - SSRF guard: http(s) only, cloud-metadata ranges refused; local LAN/loopback allowed (local Ollama)
 - Path-traversal protection on all file routes; upload sanitization; `../`-rejection in tar parsing and archive paths; **symlinks never followed** on archive restore
 - CORS opt-in via `WSD_CORS_ORIGINS` allowlist (none set = no ACAO headers)
@@ -301,3 +301,5 @@ python backend/tests/e2e/reviews_ui.py
 | Backup naming | `madar-backup-*.json` + importable legacy `wsd-pro-backup` |
 
 The 2026-08 renaming **kept** the `wsd.*` localStorage keys, `WSD_*` env vars, and docker resource names deliberately, for data/infra compatibility.
+
+**Published surfaces and TLS.** Exactly **two** ports leave the host: `3000` (the authenticated dashboard + API) and `4097` (the authenticated embedded-surface proxy — the only route to code-server and opencode, since the raw `8100`/`4096` publishes are gone and both upstreams bind to `127.0.0.1` in-container). Both are published on `0.0.0.0`, so **a production deployment terminates TLS in front of both** — proxying `3000` alone would leave a code-execution surface on cleartext. The two must be distinguished by **port, not path prefix**: the `madar_embed` credential is host-scoped (cookies ignore ports), and opencode serves absolute `/assets/…` URLs so it owns the origin root. On cleartext, one on-path attacker reads the dashboard JWT from `localStorage` and the `madar_embed` cookie alike — the cookie's missing `Secure` is the absent control TLS would have provided, not a separate defect (it is issued `Secure` only on a TLS link, or when `WSD_TRUST_PROXY=1` and a trusted hop sent `X-Forwarded-Proto: https`). Worked Caddy/nginx examples: [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment).
