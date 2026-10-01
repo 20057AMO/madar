@@ -15,14 +15,15 @@
  *   - Deleted-user identity: the stored creator/comment usernames survive the
  *     account removal (stored name wins — never a silent (deleted user)).
  *
- * Skips the cap-seed when the docker CLI is unavailable. Uses the SAME
- * forged-token trick as team-access.test.ts (JWT_SECRET from repo .env).
+ * Skips the cap-seed when the docker CLI is unavailable. Every session is signed
+ * for a REAL account (the server refuses an id absent from users.json), using
+ * the resolved signing secret from helpers.ts.
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
 import { execFileSync } from 'node:child_process';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, API_URL } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 function signUser(id: string, username: string, role: string): string {
   return jwt.sign({ id, username, role, tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
@@ -63,9 +64,15 @@ describe('Project file reviews (real Docker container)', () => {
   let viewerToken = '';
   let created = false;
 
-  const outsideViewerToken = signUser('out-1', 'outside_viewer', 'viewer');
-  const globalEditorToken = signUser('global-1', 'global_editor', 'editor');
-  const adminToken = signUser('admin-1', 'test-admin', 'admin');
+  // Real accounts: verifyToken refuses an id that is not in users.json, so a
+  // ghost id would turn each 403 row below into a bare 401.
+  let outsideViewerToken = '';
+  let globalEditorToken = '';
+
+  before(async () => {
+    outsideViewerToken = (await liveUser('viewer', 'rv-outside-viewer')).token;
+    globalEditorToken = (await liveUser('editor', 'rv-global-editor')).token;
+  });
 
   after(async () => {
     if (created) {
@@ -74,6 +81,7 @@ describe('Project file reviews (real Docker container)', () => {
     await deleteRobust(`/users/${editorId}`);
     await deleteRobust(`/users/${viewerId}`);
     await deleteRobust(`/users/${adminMemberId}`);
+    await cleanupLiveUsers();
   });
 
   test('create the project (owner = admin)', async () => {
@@ -319,9 +327,13 @@ describe('Project file reviews (real Docker container)', () => {
     assert.strictEqual(replied.status, 200, JSON.stringify(repliedBody));
     const replyId = repliedBody.thread.comments[1].id;
 
-    // A second editor member (never granted admin membership) signs their own token.
-    const editorToken2 = signUser(uniqueId('rv-e2'), 'editor-two', 'editor');
-    const del = await req('DELETE', `/projects/${slug}/reviews/${thread.id}/comments/${replyId}`, undefined, runAs(editorToken2).headers);
+    // A second real editor MEMBER (never granted admin membership). It must be a
+    // member, not a system-role editor: checkProjectAccess treats a global editor
+    // as write-level on every project, so a global account would 200 here.
+    const second = await liveUser('editor', 'rv-editor-two');
+    const added = await reqAuth('POST', `/projects/${slug}/members`, { userId: second.id, role: 'editor' });
+    assert.strictEqual(added.status, 200, `add second editor member: ${added.status}`);
+    const del = await req('DELETE', `/projects/${slug}/reviews/${thread.id}/comments/${replyId}`, undefined, runAs(second.token).headers);
     assert.strictEqual(del.status, 403, JSON.stringify(await del.json()));
   });
 

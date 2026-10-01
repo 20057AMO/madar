@@ -4,8 +4,7 @@
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 const createdSlugs: string[] = [];
 
@@ -18,6 +17,7 @@ describe('Project Tags API', () => {
     for (const slug of createdSlugs) {
       try { await reqAuth('DELETE', `/projects/${slug}`); } catch { /* best effort */ }
     }
+    await cleanupLiveUsers();
   });
 
   test('update tags → successful update & sanitation', async () => {
@@ -38,9 +38,10 @@ describe('Project Tags API', () => {
     createdSlugs.push(slug);
     await reqAuth('POST', '/projects', { name: 'Viewer Test', slug });
 
-    // Forge a viewer token (global role 'viewer')
-    const token = jwt.sign({ id: uniqueId('v'), username: 'viewer', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-    const res = await req('PUT', `/projects/${slug}/tags`, { tags: ['test'] }, { Authorization: `Bearer ${token}` });
+    // A REAL viewer account: verifyToken refuses an id that is not in users.json,
+    // so a ghost id would turn this 403 into a bare 401.
+    const viewer = await liveUser('viewer', 'tags-viewer');
+    const res = await req('PUT', `/projects/${slug}/tags`, { tags: ['test'] }, { Authorization: `Bearer ${viewer.token}` });
     assert.strictEqual(res.status, 403, 'viewers must be blocked from updating tags');
   });
 

@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import zlib from 'node:zlib';
 import jwt from 'jsonwebtoken';
 import { execFileSync } from 'node:child_process';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Project resource limits (CPU / memory):
@@ -116,6 +116,7 @@ describe('Project resource limits (CPU/memory)', () => {
     for (const id of createdUserIds) {
       try { await reqAuth('DELETE', `/users/${id}`); } catch { /* best effort */ }
     }
+    await cleanupLiveUsers();
   });
 
   test('edit persists into meta immediately while the live container stays unlimited', async () => {
@@ -265,7 +266,7 @@ describe('Project resource limits (CPU/memory)', () => {
   });
 
   test('access matrix: non-member viewer 403, viewer member 403, editor member 200', async () => {
-    const outsider = memberAuth('lim-outsider-user', 'lim-outsider', 'viewer');
+    const outsider = memberAuth((await liveUser('viewer', 'lim-outsider')).id, 'lim-outsider', 'viewer');
     const out = await req('PUT', `/projects/${p1}/limits`, { cpu: '1' }, outsider.headers);
     assert.strictEqual(out.status, 403, 'non-member viewer must be denied');
 

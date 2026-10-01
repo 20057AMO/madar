@@ -19,8 +19,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
 import { createHmac } from 'node:crypto';
-import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, authHeaders, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /** One captured delivery. */
 interface Capture {
@@ -63,9 +62,11 @@ function verifySignature(cap: Capture, secret: string): boolean {
   return cap.headers['x-madar-signature'] === expected;
 }
 
-function forger(role: string, username: string) {
-  const token = jwt.sign({ id: uniqueId('forged') + role, username, role, tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-  return { headers: { ...authHeaders(), Authorization: `Bearer ${token}` } };
+// A REAL account per role: verifyToken refuses an id that is not in users.json,
+// so a ghost id would turn every 403 row below into a bare 401.
+async function forger(role: 'viewer' | 'editor', key: string) {
+  const user = await liveUser(role, key);
+  return { headers: { ...authHeaders(), Authorization: `Bearer ${user.token}` } };
 }
 
 const createdSlugs: string[] = [];
@@ -111,6 +112,7 @@ describe('Webhooks & notifications', () => {
       }
     }
     receiver?.close();
+    await cleanupLiveUsers();
   });
 
   test('validation: missing name / url / bad scheme / bad length secret → 400', async () => {
@@ -258,8 +260,8 @@ describe('Webhooks & notifications', () => {
   });
 
   test('access matrix: viewer and editor tokens are 403 on every webhook route', async () => {
-    const viewer = forger('viewer', 'wh-viewer');
-    const editor = forger('editor', 'wh-editor');
+    const viewer = await forger('viewer', 'wh-viewer');
+    const editor = await forger('editor', 'wh-editor');
     for (const h of [viewer, editor]) {
       assert.strictEqual(await req('GET', '/webhooks', undefined, h.headers).then(r => r.status), 403);
       assert.strictEqual(await req('POST', '/webhooks', { name: 'x', url: hookUrl() }, h.headers).then(r => r.status), 403);

@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { register } from 'node:module';
 import { classifyJwtSecret, describeJwtSecretRejection, MIN_JWT_SECRET_LENGTH } from '../src/services/jwt-secret-core.ts';
 
@@ -86,12 +87,27 @@ const originalEnv = process.env.JWT_SECRET;
 delete process.env.JWT_SECRET;
 process.env.WSD_DATA_DIR = dataDir;
 
+const ADMIN = { id: 'u-admin', username: 'owner', role: 'admin' };
+// Seed the isolated store BEFORE it loads: verifyToken resolves the subject from
+// users.json and refuses an absent id, so a "sign and verify agree" assertion is
+// only meaningful against an account that actually exists.
+fs.writeFileSync(
+  path.join(dataDir, 'users.json'),
+  JSON.stringify({
+    users: [{
+      ...ADMIN,
+      passwordHash: bcrypt.hashSync('jwt-secret-suite-pw', 10),
+      createdAt: '2026-01-01T00:00:00.000Z',
+      tokenVersion: 0,
+    }],
+  }, null, 2),
+);
+
 const { getJwtSecret, jwtSecretValue, resetJwtSecretCache, JWT_SECRET_FILE } =
   await import('../src/services/jwt-secret.ts');
 const store = await import('../src/services/user-store.ts');
 
 const resolvedSecret = jwtSecretValue();
-const ADMIN = { id: 'u-admin', username: 'owner', role: 'admin' };
 
 function forge(secret: string, claims: Record<string, unknown> = {}): string {
   return jwt.sign({ id: ADMIN.id, username: ADMIN.username, role: 'admin', tv: 0, ...claims }, secret, { expiresIn: '24h' });

@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import zlib from 'node:zlib';
 import jwt from 'jsonwebtoken';
 import { execSync } from 'child_process';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Project published-ports editing: PUT /api/projects/:slug/ports persists a
@@ -129,6 +129,7 @@ describe('Project published-ports editing', () => {
     for (const id of createdUserIds) {
       try { await reqAuth('DELETE', `/users/${id}`); } catch { /* best effort */ }
     }
+    await cleanupLiveUsers();
   });
 
   test('edit persists into meta immediately while the live binding stays stale', async () => {
@@ -282,7 +283,8 @@ describe('Project published-ports editing', () => {
   });
 
   test('access matrix: non-member viewer 403, viewer member 403, editor member 200', async () => {
-    const outsider = memberAuth('ports-outsider-user', 'ports-outsider', 'viewer');
+    const outsiderUser = await liveUser('viewer', 'ports-outsider');
+    const outsider = memberAuth(outsiderUser.id, outsiderUser.username, 'viewer');
     const out = await req('PUT', `/projects/${p1}/ports`, { ports: [EDITOR_EDIT] }, outsider.headers);
     assert.strictEqual(out.status, 403, 'non-member viewer must be denied');
 

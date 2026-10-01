@@ -14,13 +14,18 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import WebSocket from 'ws';
 import jwt from 'jsonwebtoken';
-import { API_URL, JWT_SECRET, reqAuth, initTestAuth, uniqueId, authHeaders } from './helpers.ts';
+import { API_URL, JWT_SECRET, reqAuth, initTestAuth, uniqueId, authHeaders, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 const WS_BASE = API_URL.replace(/\/api$/, '').replace(/^http/, 'ws');
 
-/** Role token for an arbitrary user id (server trusts verified JWT claims). */
-function tokenFor(id: string, role: 'admin' | 'editor' | 'viewer'): string {
-  return jwt.sign({ id, username: `t-${id.slice(0, 8)}`, role, tv: 0, jti: `test-${id.slice(0, 8)}` }, JWT_SECRET, { expiresIn: '1h' });
+/**
+ * Session token for a REAL account. The server resolves id/username/role from
+ * users.json on every request and refuses an id that is absent, so the denial
+ * rows below must use a live account — a forged id would be rejected at the
+ * upgrade with 401 and would never reach the 1008 membership gate under test.
+ */
+function tokenFor(user: { id: string; username: string; role: string }): string {
+  return jwt.sign({ id: user.id, username: user.username, role: user.role, tv: 0, jti: `ws-${user.id.slice(0, 8)}` }, JWT_SECRET, { expiresIn: '1h' });
 }
 
 /** Open a WS and resolve with the close code / first error frame. */
@@ -54,9 +59,12 @@ describe('WebSocket access gates (live server)', () => {
   let created = false;
   // A viewer-role outsider: system editors intentionally hold global write
   // access, so the meaningful denial actor is a plain viewer non-member.
-  const outsiderId = 'outsider-1111-2222-3333-444444444444';
+  // It must be a REAL account — an id absent from users.json is refused at the
+  // upgrade (401) and never reaches the membership gate being asserted here.
+  let outsider = { id: '', username: '', role: 'viewer' };
 
   after(async () => {
+    await cleanupLiveUsers();
     if (!created) return;
     try { await reqAuth('DELETE', `/projects/${slug}`); } catch { /* best effort */ }
   });
@@ -65,6 +73,7 @@ describe('WebSocket access gates (live server)', () => {
     const res = await reqAuth('POST', '/projects', { name: 'Sec Test', slug, description: 'security suite' });
     assert.strictEqual(res.status, 201, `create failed: ${res.status}`);
     created = true;
+    outsider = await liveUser('viewer', 'ws-outsider');
     const envRes = await reqAuth('PUT', `/projects/${slug}/env`, { env: { WSD_SECRET_TOKEN: 'super-secret-value' } });
     assert.strictEqual(envRes.status, 200);
   });
@@ -91,12 +100,12 @@ describe('WebSocket access gates (live server)', () => {
   });
 
   test('terminal socket: outsider (non-member viewer) is denied with close 1008', async () => {
-    const { code, reason } = await wsCloseCode(`/ws/projects/${slug}/terminal`, tokenFor(outsiderId, 'viewer'));
+    const { code, reason } = await wsCloseCode(`/ws/projects/${slug}/terminal`, tokenFor(outsider));
     assert.strictEqual(code, 1008, `expected 1008, got ${code} (${reason})`);
   });
 
   test('logs socket: outsider is denied with close 1008', async () => {
-    const { code, reason } = await wsCloseCode(`/ws/projects/${slug}/logs`, tokenFor(outsiderId, 'viewer'));
+    const { code, reason } = await wsCloseCode(`/ws/projects/${slug}/logs`, tokenFor(outsider));
     assert.strictEqual(code, 1008, `expected 1008, got ${code} (${reason})`);
   });
 
@@ -124,7 +133,7 @@ describe('WebSocket access gates (live server)', () => {
   test('control-mode terminal requires admin (viewer token denied)', async () => {
     // The control gate demands a strict admin decision — a viewer non-member
     // must be refused before any shell is spawned.
-    const { code, reason } = await wsCloseCode(`/ws/projects/${slug}/terminal?mode=control`, tokenFor(outsiderId, 'viewer'));
+    const { code, reason } = await wsCloseCode(`/ws/projects/${slug}/terminal?mode=control`, tokenFor(outsider));
     assert.strictEqual(code, 1008, `non-admin must not open a control shell (got ${code} ${reason})`);
   });
 

@@ -60,8 +60,11 @@ export const JWT_SECRET = resolveServerJwtSecret();
 export const JSON_HEADERS: Record<string, string> = { 'Content-Type': 'application/json' };
 
 // ── Lazy-init real session info ───────────────────────────────
-let _userId = 'test-user';
-let _username = 'test';
+// verifyToken requires the SUBJECT to still exist in users.json (a deleted
+// user's token is refused, deliberately), so these defaults are placeholders
+// only: signTestToken() throws until a real id was resolved below.
+let _userId = '';
+let _username = '';
 let _userRole: string = 'admin';
 let _tv = 0;
 let _initialized = false;
@@ -86,62 +89,105 @@ async function ensureSession(): Promise<void> {
         _userRole = 'admin';
         _tv = 0;
       }
-    } else if (status.user) {
-      // Authenticated status (shouldn't happen without token, but handle it)
-      _userId = status.user.id;
-      _username = status.user.username;
-      _userRole = status.user.role || 'admin';
-      const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
-      const loginRes = await fetch(`${API_URL}/auth/login`, {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ username: _username, password: pw }),
-      });
-      const loginData = await loginRes.json() as any;
-      if (loginData.token) {
-        const decoded = jwt.decode(loginData.token) as any;
-        if (decoded?.tv !== undefined) _tv = decoded.tv;
-      }
     } else {
-      // User exists but no token — try login with known password
-      // Read the user list from /api/users (requires auth — won't work here)
-      // Instead, try to forge a token. verifyToken accepts unknown users with
-      // valid JWT signatures, so we just need the correct id.
-      // We can't get the id without auth, so try login which will tell us.
-      const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
-      const loginRes = await fetch(`${API_URL}/auth/login`, {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ username: 'test-admin', password: pw }),
-      });
-      const loginData = await loginRes.json() as any;
-      if (loginData.token) {
-        // Login succeeded — use the real token
-        const decoded = jwt.decode(loginData.token) as any;
-        _userId = decoded.id;
-        _username = decoded.username;
-        _userRole = decoded.role || 'admin';
-        _tv = decoded.tv || 0;
+      // A user exists. We cannot read its id without a session, so log in for
+      // real: the documented WSD_TEST_USER/WSD_TEST_PASS pair first, then the
+      // suite's own bootstrap account.
+      const candidates: Array<[string, string]> = [];
+      if (process.env.WSD_TEST_USER && process.env.WSD_TEST_PASS) {
+        candidates.push([process.env.WSD_TEST_USER, process.env.WSD_TEST_PASS]);
       }
-      // If login fails, _userId stays as 'test-user' — verifyToken will accept it
-      // as an unknown user with the embedded role.
+      const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
+      candidates.push(['test-admin', pw]);
+
+      for (const [username, password] of candidates) {
+        const loginRes = await fetch(`${API_URL}/auth/login`, {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ username, password }),
+        });
+        const loginData = await loginRes.json() as any;
+        if (loginData.token) {
+          const decoded = jwt.decode(loginData.token) as any;
+          _userId = decoded.id;
+          _username = decoded.username;
+          _userRole = decoded.role || 'admin';
+          _tv = decoded.tv || 0;
+          break;
+        }
+      }
+      if (!_userId) resolveIdentityFromContainer();
     }
   } catch {
-    // Server might not be running yet; keep defaults
+    // Server might not be running yet; keep the unresolved placeholders.
   }
   _initialized = true;
 }
 
 /**
  * Synchronous sign — call ensureSession() in a before() hook first.
- * Returns a token that matches the real user in the store.
+ * Returns a token that matches a user that really exists in users.json, with
+ * its real tokenVersion. Throws when no real id could be resolved: a token for
+ * a non-existent id is refused by the server (401) since that is exactly the
+ * hole this helper used to paper over, so failing loudly here beats a wall of
+ * confusing 401s later.
  */
 export function signTestToken(expiresIn = '24h'): string {
+  if (!_userId) {
+    throw new Error(
+      '[helpers] No real user id was resolved, so no session can be signed. initTestAuth() must run ' +
+      'with the API reachable (http://127.0.0.1:3000/api) and either WSD_TEST_USER/WSD_TEST_PASS or ' +
+      'a working test-admin password. Forging a token for an invented id no longer authenticates.',
+    );
+  }
   return jwt.sign(
     { id: _userId, username: _username, role: _userRole, tv: _tv, jti: 'test-session' },
     JWT_SECRET,
     { expiresIn }
   );
+}
+
+/** The live user id the shared session was signed for (null when unresolved). */
+export function testUserId(): string | null {
+  return _userId || null;
+}
+
+/** The resolved REAL account (id/username/role/tv) behind the shared session. */
+export function testIdentity(): { id: string; username: string; role: string; tv: number } | null {
+  if (!_userId) return null;
+  return { id: _userId, username: _username, role: _userRole, tv: _tv };
+}
+
+/**
+ * Last-resort identity resolution for a dev box with no test credentials: read
+ * the FIRST account (id / username / role only — never the password hash) out
+ * of the running container's users.json through the local docker daemon, the
+ * same way resolveServerJwtSecret() reads data/jwt.secret. A REAL id is what
+ * the server now requires; inventing one no longer authenticates.
+ */
+function resolveIdentityFromContainer(): boolean {
+  const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
+  try {
+    const raw = execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const parsed = JSON.parse(raw) as { users?: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> };
+    const first = parsed.users?.find((u) => u?.id);
+    if (!first?.id) return false;
+    _userId = first.id;
+    _username = String(first.username || '');
+    _userRole = String(first.role || 'admin');
+    _tv = Number(first.tokenVersion || 0);
+    console.warn(
+      `[helpers] No test credentials resolved a session; adopted the first account (${_username}) from ` +
+      `'docker exec ${container} cat /app/data/users.json'. Set WSD_TEST_USER/WSD_TEST_PASS to avoid this.`,
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -160,6 +206,74 @@ let counter = 0;
 export function uniqueId(prefix: string): string {
   counter += 1;
   return `${prefix}-${Date.now().toString(36)}-${counter}`.toLowerCase();
+}
+
+// ── Throwaway users that really exist ──────────────────────────
+//
+// verifyToken refuses a token whose subject is missing from users.json, so a
+// suite can no longer invent an identity: an "outsider" or a "global editor"
+// has to be a real account, or the assertion would be measuring 401s instead
+// of the authorization it claims to test. liveUser() creates one (memoized per
+// role+key) and hands back its REAL id plus a signed session for it.
+
+export type TestRole = 'admin' | 'editor' | 'viewer';
+
+export interface LiveTestUser {
+  id: string;
+  username: string;
+  role: TestRole;
+  token: string;
+}
+
+export const LIVE_USER_PASSWORD = 'LiveProbe-1234';
+const LIVE_PASSWORD = LIVE_USER_PASSWORD;
+const _liveUsers = new Map<string, LiveTestUser>();
+const _liveUserIds: string[] = [];
+
+/** Sign a session for an id that exists in users.json (tokenVersion 0). */
+export function signUserToken(
+  user: { id: string; username: string; role: string },
+  extra: Record<string, unknown> = {},
+  expiresIn = '24h'
+): string {
+  return jwt.sign(
+    { id: user.id, username: user.username, role: user.role, tv: 0, jti: `suite-${user.id}`, ...extra },
+    JWT_SECRET,
+    { expiresIn }
+  );
+}
+
+export async function liveUser(role: TestRole = 'viewer', key = role): Promise<LiveTestUser> {
+  const cacheKey = `${role}:${key}`;
+  const hit = _liveUsers.get(cacheKey);
+  if (hit) return hit;
+  const username = uniqueId(`live-${key}`).replace(/[^a-z0-9-]/g, '').slice(0, 50);
+  const create = () => reqAuth('POST', '/users', { username, password: LIVE_PASSWORD, role });
+  // POST /users sits behind the admin user-provisioning limiter (production
+  // budget: 20/min), so back off on 429 the way team-access.test.ts does. A rate
+  // limit must never be reported as an authorization failure.
+  let res = await create();
+  for (let attempt = 0; res.status === 429 && attempt < 10; attempt += 1) {
+    const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '5'), 10));
+    await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+    res = await create();
+  }
+  if (res.status !== 201) {
+    throw new Error(`liveUser(${cacheKey}) could not create the throwaway user: ${res.status} ${JSON.stringify(await res.json())}`);
+  }
+  const acc = await res.json() as { id: string; username: string };
+  _liveUserIds.push(acc.id);
+  const user: LiveTestUser = { id: acc.id, username: acc.username, role, token: signUserToken({ id: acc.id, username: acc.username, role }) };
+  _liveUsers.set(cacheKey, user);
+  return user;
+}
+
+/** Delete every throwaway user liveUser() created (call from a suite's after). */
+export async function cleanupLiveUsers(): Promise<void> {
+  for (const id of _liveUserIds.splice(0)) {
+    try { await reqAuth('DELETE', `/users/${id}`); } catch { /* best effort */ }
+  }
+  _liveUsers.clear();
 }
 
 export interface Res {

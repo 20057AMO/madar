@@ -74,7 +74,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import jwt from 'jsonwebtoken';
 
-import { API_URL, JWT_SECRET, authHeaders, initTestAuth, req, reqAuth, uniqueId } from './helpers.ts';
+import { API_URL, JWT_SECRET, authHeaders, initTestAuth, liveUser, cleanupLiveUsers, req, reqAuth, uniqueId } from './helpers.ts';
 
 const CONTAINER = 'wsd-pro';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -142,7 +142,11 @@ function dockerCp(src: string, dst: string): Promise<void> {
 }
 
 async function composeUp(overrides: Record<string, string>, forceRecreate: boolean): Promise<void> {
-  const args = ['compose', 'up', '-d'];
+  // --no-deps: this suite only ever drives the `app` service. Letting compose
+  // pull in dependencies also recreates `workspace`, which collides with any
+  // foreign container already holding the wsd-workspace name (the documented
+  // deploy path is `docker compose up -d --no-deps app`).
+  const args = ['compose', 'up', '-d', '--no-deps'];
   if (forceRecreate) args.push('--force-recreate');
   args.push('app');
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -792,8 +796,10 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     const anon = await req('POST', '/updates/apply', { component: 'code-server' });
     assert.equal(anon.status, 401, 'anon 401');
 
-    const viewer = jwt.sign({ id: 'upd-viewer', username: 'upd-viewer', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
-    const editor = jwt.sign({ id: 'upd-editor', username: 'upd-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
+  // A real viewer/editor pair: verifyToken refuses an id that is not in
+  // users.json, so a ghost id would turn each role row into a bare 401.
+  const viewer = (await liveUser('viewer', 'upd-viewer')).token;
+  const editor = (await liveUser('editor', 'upd-editor')).token;
     const asViewer = await req('POST', '/updates/apply', { component: 'code-server' }, { Authorization: `Bearer ${viewer}` });
     assert.equal(asViewer.status, 403, 'viewer 403');
     const asEditor = await req('POST', '/updates/apply', { component: 'code-server' }, { Authorization: `Bearer ${editor}` });
@@ -1228,8 +1234,10 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
     const anon = await req('GET', '/updates/log');
     assert.equal(anon.status, 401, `anon log GET 401, got ${anon.status}`);
 
-    const viewer = jwt.sign({ id: 'upd-viewer', username: 'upd-viewer', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
-    const editor = jwt.sign({ id: 'upd-editor', username: 'upd-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
+  // A real viewer/editor pair: verifyToken refuses an id that is not in
+  // users.json, so a ghost id would turn each role row into a bare 401.
+  const viewer = (await liveUser('viewer', 'upd-viewer')).token;
+  const editor = (await liveUser('editor', 'upd-editor')).token;
     const asViewer = await req('GET', '/updates/log', undefined, { Authorization: `Bearer ${viewer}` });
     assert.equal(asViewer.status, 403, `viewer log GET 403, got ${asViewer.status}`);
     const asEditor = await req('GET', '/updates/log', undefined, { Authorization: `Bearer ${editor}` });
@@ -1299,6 +1307,7 @@ describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
   });
 
   after(async () => {
+    await cleanupLiveUsers();
     const results: string[] = [];
     const tryStep = async (name: string, fn: () => Promise<void>) => {
       try { await fn(); results.push(`${name}: ok`); }

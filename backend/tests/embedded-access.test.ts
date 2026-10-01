@@ -71,6 +71,8 @@ import {
   JWT_SECRET,
   authHeaders,
   API_URL,
+  liveUser,
+  cleanupLiveUsers,
 } from './helpers.ts';
 import { EMBEDDED_PROBE_TIMEOUT_MS } from '../src/services/embedded-status-probe.ts';
 import { HOST_PATH_REDACTED } from '../src/services/workspaces-mount-core.ts';
@@ -405,6 +407,7 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
     // real account — gating on the flag would leak the editor for good.
     if (viewerId) await deleteRobust(`/users/${viewerId}`);
     if (editorId) await deleteRobust(`/users/${editorId}`);
+    await cleanupLiveUsers();
   });
 
   // ── 401 before anything else: a broken auth path must fail loudly ─────────
@@ -484,7 +487,7 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
     test('the host path is admin-only; a non-admin gets the redacted verdict, not the path', async () => {
       const admin = await rawReq('GET', '/ide/status', authHeaders());
       assert.strictEqual(admin.status, 200);
-      const asEditor = await rawReq('GET', '/ide/status', asUser(signUser(uniqueId('ea-redact'), 'ea-redact', 'editor')));
+      const asEditor = await rawReq('GET', '/ide/status', asUser(signUser((await liveUser('editor', 'ea-redact-editor')).id, 'ea-redact', 'editor')));
       assert.strictEqual(asEditor.status, 200);
 
       const adminWs = admin.json.ide.workspace;
@@ -506,7 +509,7 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       assert.ok(!asEditor.text.includes(adminWs.hostPath), 'the raw body leaked the host path to a non-admin');
       assert.ok(!editorWs.hint.includes(adminWs.hostPath), 'the ok hint embeds the path — it must be scrubbed too');
       // The same redaction on the opencode status route.
-      const ocViewer = await rawReq('GET', '/opencode/status', asUser(signUser(uniqueId('ea-redact'), 'ea-redact2', 'viewer')));
+      const ocViewer = await rawReq('GET', '/opencode/status', asUser(signUser((await liveUser('viewer', 'ea-redact-viewer')).id, 'ea-redact2', 'viewer')));
       assert.strictEqual(ocViewer.status, 200);
       assert.deepStrictEqual(
         Object.keys(ocViewer.json.workspace).sort(),
@@ -740,10 +743,11 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
 
       editorToken = signUser(editorId, editorName, 'editor');
       viewerToken = signUser(viewerId, viewerName, 'viewer');
-      // A non-member: a distinct principal (unknown id → the token's own role
-      // 'viewer') never added to the project. No extra user record needed, same
-      // convention as team-access.test.ts.
-      outsiderToken = signUser(`emb-outsider-${slug}`, 'emb-outsider', 'viewer');
+      // A non-member: a distinct REAL principal (never added to the project).
+      // The id must exist in users.json — verifyToken refuses an absent one, so
+      // a ghost id would turn each 403 row below into a bare 401.
+      const outsider = await liveUser('viewer', 'emb-outsider');
+      outsiderToken = signUser(outsider.id, outsider.username, 'viewer');
       usersCreated = true;
     });
 
@@ -979,10 +983,11 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
 
     test('a global editor (system role editor, no membership) is accepted too (200)', async (t) => {
       if (!projectCreated) return t.skip('project was not created');
-      // Cheap row: a forged system-editor token needs no user record (same
-      // convention as team-access.test.ts) — global editors are write-level
-      // everywhere, so the editor gate must open for them.
-      const globalEditor = signUser(`emb-global-editor-${slug}`, 'emb-global-editor', 'editor');
+      // A REAL system editor with no membership: global editors are write-level
+      // everywhere, so the editor gate must open for them. The id must exist in
+      // users.json — a ghost id is refused before the gate and proves nothing.
+      const globalEditorUser = await liveUser('editor', 'emb-global-editor');
+      const globalEditor = signUser(globalEditorUser.id, globalEditorUser.username, 'editor');
       const res = await rawReq('POST', '/opencode/open', asUser(globalEditor), { slug });
       if (res.status === 429) return t.skip('rate limited (429)');
       assert.strictEqual(res.status, 200, `global editor open: ${res.status} -> ${res.text}`);

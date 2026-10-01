@@ -13,8 +13,7 @@
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import jwt from 'jsonwebtoken';
-import { req, reqAuth, uniqueId, initTestAuth, JWT_SECRET } from './helpers.ts';
+import { req, reqAuth, uniqueId, initTestAuth, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 let agentName = '';
 let skillName = '';
@@ -60,6 +59,7 @@ describe('Opencode Studio API', () => {
         await reqAuth('DELETE', `/opencode-studio/${kind}/${name}`);
       } catch {}
     }
+    await cleanupLiveUsers();
   });
 
   test('presets baked into the image are listed', async () => {
@@ -300,10 +300,11 @@ describe('Opencode Studio API', () => {
     // Studio is fully admin-gated — including reads: the roster/config files
     // are read by every project's agent runs, so a non-admin must never even
     // browse them (403, never a partial 200).
-    const forge = (role: string) =>
-      jwt.sign({ id: `studio-${role}`, username: `studio-${role}`, role, tv: 0 }, JWT_SECRET, { expiresIn: '1h' });
-    for (const role of ['viewer', 'editor']) {
-      const h = { Authorization: `Bearer ${forge(role)}` };
+    // A REAL account per role: verifyToken refuses an id that is not in
+    // users.json, so a ghost id would turn every 403 below into a bare 401.
+    for (const role of ['viewer', 'editor'] as const) {
+      const user = await liveUser(role, `studio-${role}`);
+      const h = { Authorization: `Bearer ${user.token}` };
       const probes: [string, string, object?][] = [
         ['GET', '/opencode-studio/agents', undefined],
         ['GET', '/opencode-studio/version', undefined],

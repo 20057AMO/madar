@@ -1,8 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import zlib from 'node:zlib';
-import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Project snapshots: export a project (workspace + notes + meta) as a tar.gz
@@ -17,15 +16,20 @@ const SNAP_PORT = 8774;
 let snapshotGzip: Buffer;
 let threadId = '';
 
-function viewerAuth() {
-  const token = jwt.sign({ id: 'snap-viewer-user', username: 'snap-viewer', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-  return { headers: { ...authHeaders(), Authorization: `Bearer ${token}` } };
+// A real non-member viewer: verifyToken refuses an id that is not in users.json,
+// so a ghost id would turn each 403 row into a bare 401.
+let snapshotViewerToken = '';
+
+async function viewerAuth() {
+  if (!snapshotViewerToken) snapshotViewerToken = (await liveUser('viewer', 'snap-viewer')).token;
+  return { headers: { ...authHeaders(), Authorization: `Bearer ${snapshotViewerToken}` } };
 }
 
 async function cleanupAll(): Promise<void> {
   for (const slug of createdSlugs) {
     try { await reqAuth('DELETE', `/projects/${slug}`); } catch { /* best effort */ }
   }
+  await cleanupLiveUsers();
 }
 
 /** GET a project's exported snapshot; asserts gzip magic + headers. */
@@ -114,14 +118,15 @@ describe('Project snapshots (export / restore)', () => {
   });
 
   test('access control: non-member viewer cannot export (403), viewer cannot import (403)', async () => {
-    const exp = await req('GET', `/projects/${srcSlug}/export`, undefined, viewerAuth().headers);
+    const outsider = await viewerAuth();
+    const exp = await req('GET', `/projects/${srcSlug}/export`, undefined, outsider.headers);
     assert.strictEqual(exp.status, 403, 'non-member viewer must be denied export');
 
     const fd = new FormData();
     fd.append('file', new Blob([Buffer.from('x')]), 'x.tar.gz');
     const imp = await fetch(`${API_URL}/projects/import`, {
       method: 'POST',
-      headers: viewerAuth().headers,
+      headers: outsider.headers,
       body: fd,
     });
     assert.strictEqual(imp.status, 403, 'viewer must be denied import');

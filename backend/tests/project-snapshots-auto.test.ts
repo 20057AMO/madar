@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Snapshot automation: server-side scheduled backups with per-project config
@@ -14,15 +14,20 @@ const createdSlugs: string[] = [];
 const AUTO_PORT = 8775;
 const FILE_RE = /^madar-[a-z0-9][a-z0-9._-]{0,63}-\d{17}\.tar\.gz$/;
 
-function outsiderAuth() {
-  const token = jwt.sign({ id: 'auto-outsider-user', username: 'auto-outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-  return { headers: { ...authHeaders(), Authorization: `Bearer ${token}` } };
+// A real non-member viewer: verifyToken refuses an id that is not in users.json,
+// so a ghost id would turn each 403 row into a bare 401.
+let outsiderToken = '';
+
+async function outsiderAuth() {
+  if (!outsiderToken) outsiderToken = (await liveUser('viewer', 'auto-outsider')).token;
+  return { headers: { ...authHeaders(), Authorization: `Bearer ${outsiderToken}` } };
 }
 
 async function cleanupAll(): Promise<void> {
   for (const slug of createdSlugs) {
     try { await reqAuth('DELETE', `/projects/${slug}`); } catch { /* best effort */ }
   }
+  await cleanupLiveUsers();
 }
 
 async function capture(slug: string, auth: any = authHeaders()) {
@@ -223,7 +228,7 @@ describe('Project snapshot automation (scheduled server-side backups)', () => {
   });
 
   test('access control: member viewer can list/config but not capture/restore; outsider denied', async () => {
-    const out = outsiderAuth(); // viewer that is NOT a member
+    const out = await outsiderAuth(); // viewer that is NOT a member
 
     // Create a real viewer user (required as a project member) and clean up.
     const viewerName = uniqueId('auto-viewer');

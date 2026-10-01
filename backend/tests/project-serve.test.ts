@@ -2,7 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
 import { execSync, execFileSync } from 'node:child_process';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Project static-site serve (`python3 -m http.server <port> -d /workspace`
@@ -154,6 +154,7 @@ describe('Project static-site serve (python3 http.server)', () => {
     for (const id of createdUserIds) {
       try { await reqAuth('DELETE', `/users/${id}`); } catch { /* best effort */ }
     }
+    await cleanupLiveUsers();
   });
 
   test('start serving: live probe active, served marker reachable, list carries config', async () => {
@@ -265,7 +266,8 @@ describe('Project static-site serve (python3 http.server)', () => {
   });
 
   test('access matrix: outsider viewer 403 on all routes, viewer member 403 on writes but 200 on status', async () => {
-    const outsider = memberAuth('srv-outsider-user', 'srv-outsider', 'viewer');
+    const outsiderUser = await liveUser('viewer', 'srv-outsider');
+    const outsider = memberAuth(outsiderUser.id, outsiderUser.username, 'viewer');
     const oStart = await postServe(p1, { port: P1_PORT }, outsider.headers);
     assert.strictEqual(oStart.status, 403, 'outsider viewer POST /serve → 403');
     const oStop = await stopServe(p1, outsider.headers);

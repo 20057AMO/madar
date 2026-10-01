@@ -1,7 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import jwt from 'jsonwebtoken';
-import { uniqueId, reqAuth, signTestToken, API_URL, JWT_SECRET, initTestAuth } from './helpers.ts';
+import { uniqueId, reqAuth, signTestToken, signUserToken, testIdentity, API_URL, initTestAuth } from './helpers.ts';
 
 /**
  * Providers-lock + settings backup tests.
@@ -160,9 +159,13 @@ describe('Providers security lock & backup', () => {
   test('unlock tokens are bound to their issuing session', async (t) => {
     if (!lockWasEnabled) return t.skip();
 
-    // Two distinct sessions with different jti claims (as login tokens carry).
-    const sessionA = jwt.sign({ id: 'sess-a', username: 'locktest', jti: 'jti-a-fixed' }, JWT_SECRET, { expiresIn: '10m' });
-    const sessionB = jwt.sign({ id: 'sess-b', username: 'locktest', jti: 'jti-b-fixed' }, JWT_SECRET, { expiresIn: '10m' });
+    // Two real sessions with different jti claims (as login tokens carry) — the
+    // same account signing in twice, which is exactly the two-devices case. Both
+    // must be REAL sessions: verifyToken refuses an id absent from users.json.
+    const me = testIdentity();
+    assert.ok(me, 'a real test identity must be resolved');
+    const sessionA = signUserToken(me!, { jti: 'jti-a-fixed' }, '10m');
+    const sessionB = signUserToken(me!, { jti: 'jti-b-fixed' }, '10m');
 
     // Unlock from session A...
     const unl = await fetch(`${API_URL}/providers/unlock`, {

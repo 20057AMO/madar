@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
 import WebSocket from 'ws';
 import { execFileSync } from 'node:child_process';
-import { reqAuth, req, uniqueId, initTestAuth, JWT_SECRET, signTestToken, API_URL } from './helpers.ts';
+import { reqAuth, req, uniqueId, initTestAuth, JWT_SECRET, signTestToken, testIdentity, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Team chat (real Docker): channel rail (manual + direct + auto project channel
@@ -68,7 +68,22 @@ before(async () => {
   testAdminId = (jwt.decode(signTestToken()) as any).id;
 });
 
+// Non-member outsider + system-role editor ("global editor"). Both must be REAL
+// accounts: verifyToken refuses an id that is not in users.json, so a forged
+// ghost id would turn each 403 row below into a 401 that proves nothing.
+let outsiderUserPromise: Promise<string> | null = null;
+let globalEditorPromise: Promise<string> | null = null;
+function outsiderToken(): Promise<string> {
+  outsiderUserPromise ??= liveUser('viewer', 'chat-outsider').then((u) => u.token);
+  return outsiderUserPromise;
+}
+function globalEditorToken(): Promise<string> {
+  globalEditorPromise ??= liveUser('editor', 'chat-global-editor').then((u) => u.token);
+  return globalEditorPromise;
+}
+
 after(async () => {
+  await cleanupLiveUsers();
   for (const channelId of createdChannelIds) {
     try {
       await reqAuth('DELETE', `${chatBase}/channels/${channelId}`);
@@ -154,7 +169,7 @@ test('message send + validation + mentions', async () => {
 
   const m1 = await sendChannelMessage(ch.id, 'hello team');
   assert.ok(m1.id.startsWith('m-'));
-  assert.strictEqual(m1.username, 'test');
+  assert.strictEqual(m1.username, testIdentity()!.username);
   assert.strictEqual(m1.text, 'hello team');
 
   const m2 = await sendChannelMessage(ch.id, 'fix the @test bug please');
@@ -254,7 +269,7 @@ test('global search: two channels grouped, newest first, full message shape', as
     assert.strictEqual(typeof m.text, 'string');
     assert.strictEqual(typeof m.createdAt, 'string');
   }
-  assert.ok(all.some((m: any) => m.username === 'test'), 'sender username surfaced');
+  assert.ok(all.some((m: any) => m.username === testIdentity()!.username), 'sender username surfaced');
 });
 
 test('global search: query length validation — 1 char 400, 201 chars 400', async () => {
@@ -322,7 +337,7 @@ test('global search security: unauthorized project channel hidden, viewer member
 
   // A non-member user (viewer role, no membership) searches the SAME query —
   // the project channel must not appear anywhere in their results.
-  const outsiderTok = jwt.sign({ id: 'outsider-gs', username: 'outsidergs', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const outsiderTok = await outsiderToken();
   const outsider = await runAs(outsiderTok)('GET', `${chatBase}/search?q=${needle}`);
   assert.strictEqual(outsider.status, 200, JSON.stringify(outsider.json));
   assert.ok(
@@ -347,7 +362,9 @@ test('global search security: unauthorized project channel hidden, viewer member
   assert.strictEqual(group.channelName, `#${slug}`);
   assert.strictEqual(group.messages.length, 1);
   assert.strictEqual(group.messages[0].id, sent.id);
-  assert.strictEqual(group.messages[0].username, 'test');
+  // The author is the real signed-in account (the session is a REAL admin), so
+  // assert against its actual username rather than a hardcoded fixture name.
+  assert.strictEqual(group.messages[0].username, testIdentity()!.username);
 });
 
 test('pin/unpin roundtrip + broadcast shape', async () => {
@@ -473,7 +490,7 @@ test('access matrix: project channel mirrors project membership; manual is team-
 
   const editorTok = jwt.sign({ id: editor.id, username: editor.username, role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
   const viewerTok = jwt.sign({ id: viewer.id, username: viewer.username, role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-  const outsiderTok = jwt.sign({ id: 'outsider-u', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const outsiderTok = await outsiderToken();
   const runAsEditor = runAs(editorTok);
   const runAsViewer = runAs(viewerTok);
   const runAsOutsider = runAs(outsiderTok);
@@ -504,7 +521,7 @@ test('access matrix: project channel mirrors project membership; manual is team-
 
   // Global editor (system role editor, NON-member): project access passes as
   // write-level, so they can send on the project channel too.
-  const geTok = jwt.sign({ id: 'global-editor', username: 'globaleditor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const geTok = await globalEditorToken();
   const geSend = await runAs(geTok)('POST', `${chatBase}/messages`, { channelId: proj, text: 'ge' });
   assert.strictEqual(geSend.status, 201, JSON.stringify(geSend.json));
 
@@ -680,7 +697,7 @@ test('M4+L8: attachment meta binds to its channel: cross-channel 400, outsider d
   assert.match(String(cross.json.error), /different channel/);
 
   // Outsider (not a DM participant) cannot download (L8).
-  const outsiderTok = jwt.sign({ id: 'outsider-u', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const outsiderTok = await outsiderToken();
   const dl = await runAs(outsiderTok)('GET', `${chatBase}/uploads/${attachment.id}`);
   assert.strictEqual(dl.status, 403, JSON.stringify(dl.json));
 
@@ -812,7 +829,16 @@ test('M2: project member add/remove syncs the project channel membership', async
 // ── canSend (channel send-permissions) ────────────────────────
 /** Create + track a fresh user, mint their own session token. */
 async function makeUser(username: string, role: 'editor' | 'viewer'): Promise<{ id: string; username: string; token: string }> {
-  const res = await reqAuth('POST', '/users', { username: uniqueId(username), password: 'pass-123456', role });
+  const name = uniqueId(username);
+  // POST /users sits behind the admin user-provisioning limiter (production
+  // budget: 20/min). Back off on 429 the way team-access.test.ts does, so a
+  // busy full-suite run never fails an authorization row on a rate limit.
+  let res = await reqAuth('POST', '/users', { username: name, password: 'pass-123456', role });
+  for (let attempt = 0; res.status === 429 && attempt < 10; attempt += 1) {
+    const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '5'), 10));
+    await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+    res = await reqAuth('POST', '/users', { username: name, password: 'pass-123456', role });
+  }
   const body = await res.json();
   assert.strictEqual(res.status, 201, `create ${role} user: ${res.status} ${JSON.stringify(body)}`);
   createdUserIds.push(body.id);
@@ -1400,7 +1426,7 @@ test('delete authz: the channel creator (plain editor) may delete another author
 });
 
 test('F5a: global editor blocked from edit/delete in an admins-locked channel (own pre-lock + colleague message both survive)', async () => {
-  const geTok = jwt.sign({ id: 'global-editor-f5', username: 'globaleditorf5', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const geTok = await globalEditorToken();
   const runAsGe = runAs(geTok);
   const ch = await makeChannel(uniqueId('f5a'));
 
@@ -1578,7 +1604,7 @@ test('delete non-existent message → 404, junk ids → 400', async () => {
   const created = await api('POST', '/projects', { name: 'Del Outsider', slug });
   assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
   createdSlugs.push(slug);
-  const outsiderTok = jwt.sign({ id: 'outsider-u', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const outsiderTok = await outsiderToken();
   const out = await runAs(outsiderTok)('DELETE', `${chatBase}/channels/project:${slug}/messages/m-bogus999`);
   assert.strictEqual(out.status, 403, JSON.stringify(out.json));
 });
@@ -1754,7 +1780,7 @@ test('reactions access matrix: viewer member reacts 200 but cannot send; outside
   assert.strictEqual(send.status, 403, JSON.stringify(send.json));
 
   // Non-member outsider (viewer role, no membership) → 403 on reactions.
-  const outsiderTok = jwt.sign({ id: 'outsider-u', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+  const outsiderTok = await outsiderToken();
   const out = await runAs(outsiderTok)('POST', `${chatBase}/channels/${proj}/messages/${sent.id}/reactions`, { emoji: '👍' });
   assert.strictEqual(out.status, 403, JSON.stringify(out.json));
 });

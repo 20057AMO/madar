@@ -280,15 +280,14 @@ export function verifyToken(token: string | null): { id: string; username: strin
     };
     if (decoded.scope) return null;
     const user = usersMap.get(decoded.id);
-    if (user) {
-      // Known user: tokenVersion must match (revocation check).
-      if ((decoded.tv || 0) !== (user.tokenVersion || 0)) return null;
-      return { id: decoded.id, username: decoded.username, role: user.role, jti: decoded.jti };
-    }
-    // Unknown user id — accept the token with the embedded role (backward compat
-    // and test helpers). The JWT signature was verified above, so nobody can forge
-    // a token without the server secret.
-    return { id: decoded.id, username: decoded.username, role: decoded.role || 'viewer', jti: decoded.jti };
+    // A session lives and dies with the account it names: deleting a compromised
+    // user must kill its unexpired 24h token (and everything it authorizes) on
+    // the very next request. A verified signature alone must not do that, so an
+    // unknown id is refused (→ 401) rather than trusted with its claim role.
+    if (!user) return null;
+    // tokenVersion must match (logout-everywhere / password-change revocation).
+    if ((decoded.tv || 0) !== (user.tokenVersion || 0)) return null;
+    return { id: user.id, username: user.username, role: user.role, jti: decoded.jti };
   } catch {
     return null;
   }
@@ -580,18 +579,18 @@ export function signEmbedToken(userId: string): string | null {
 }
 
 /**
- * Verify an embed credential. Stricter than verifyToken on purpose: the live
- * user MUST exist, must match the live tokenVersion (so logout-everywhere, a
- * password change and account deletion all kill embed cookies), and the
+ * Verify an embed credential. Strict for the same reason verifyToken is: the
+ * live user MUST exist, must match the live tokenVersion (so logout-everywhere,
+ * a password change AND account deletion all kill embed cookies), and the
  * identity is reported with its LIVE role (so a demotion takes effect on the
  * next request, not at expiry).
  *
- * verifyToken keeps an unknown-id fallback for test helpers that sign their own
- * JWT, but this credential gates ROOT code execution beside the docker socket:
- * accepting an id that is no longer in users.json would keep a deleted editor's
- * cookie working for its whole 12h TTL, i.e. deleting the account would not
- * actually revoke the surface. No test forges one — it is only ever minted by
- * /api/embed/session — so there is nothing to trade here.
+ * No unknown-id fallback exists anywhere in this file. That is deliberate: this
+ * credential gates ROOT code execution beside the docker socket, so accepting
+ * an id that is no longer in users.json would keep a deleted editor's cookie
+ * working for its whole 12h TTL, i.e. deleting the account would not actually
+ * revoke the surface. No test forges one — it is only ever minted by
+ * /api/embed/session — so there is nothing to trade.
  */
 export function verifyEmbedToken(token: string | null): EmbedIdentity | null {
   if (!token) return null;
@@ -615,9 +614,11 @@ export function verifyPending2faToken(token: string | null): string | null {
   try {
     const decoded = jwt.verify(String(token || ''), JWT_SECRET) as { scope?: string; id?: string };
     if (decoded.scope !== '2fa-pending' || !decoded.id) return null;
+    // The challenged account must still exist — a challenge minted for a user
+    // deleted mid-flow must not complete into a session for a ghost.
     const user = usersMap.get(decoded.id);
     if (!user) return null;
-    return decoded.id;
+    return user.id;
   } catch {
     return null;
   }

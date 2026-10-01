@@ -57,7 +57,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
 import { execFileSync } from 'node:child_process';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, API_URL, JSON_HEADERS } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, API_URL, JSON_HEADERS, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 const WRITE_AGENT = 'backend-developer'; // baked roster: permission.edit allow
 const READONLY_AGENT = 'code-reviewer'; // baked roster: permission.edit deny
@@ -156,8 +156,11 @@ describe('Opencode agent delegation (real Docker container)', () => {
   let viewerId = '';
   let editorToken: string;
   let viewerToken: string;
-  const globalEditorToken = signUser('zde-global-1', 'zde_global_editor', 'editor');
-  const outsiderToken = signUser('zde-out-1', 'zde_outside_viewer', 'viewer');
+  // Real accounts: verifyToken refuses an id that is not in users.json, so a
+  // ghost id would turn each capability row into a bare 401. Minted in the
+  // before hook because this describe callback is synchronous.
+  let globalEditorToken = '';
+  let outsiderToken = '';
 
   const created: Record<string, boolean> = { A: false, B: false, C: false, D: false };
   let task1Id: string; // editor write-agent launch on A
@@ -172,6 +175,8 @@ describe('Opencode agent delegation (real Docker container)', () => {
 
   before(async () => {
     await initTestAuth();
+    globalEditorToken = (await liveUser('editor', 'zde-global-editor')).token;
+    outsiderToken = (await liveUser('viewer', 'zde-outsider')).token;
     // Capture the audit baseline (best-effort â€” the poll test self-skips
     // when the endpoint is unavailable).
     try {
@@ -197,6 +202,7 @@ describe('Opencode agent delegation (real Docker container)', () => {
     }
     if (editorId) await deleteRobust(`/users/${editorId}`);
     if (viewerId) await deleteRobust(`/users/${viewerId}`);
+    await cleanupLiveUsers();
     // Self-cleanup sweep: any `zde-*` project left by an interrupted run.
     try {
       const res = await reqAuth('GET', '/projects');

@@ -12,12 +12,13 @@
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
-function forger(role: string, username: string) {
-  const token = jwt.sign({ id: uniqueId('forged') + role, username, role, tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-  return { headers: { ...authHeaders(), Authorization: `Bearer ${token}` } };
+// A REAL account per role: verifyToken refuses an id that is not in users.json,
+// so a ghost id would turn each role row into a bare 401.
+async function forger(role: 'viewer' | 'editor', key: string) {
+  const user = await liveUser(role, key);
+  return { headers: { ...authHeaders(), Authorization: `Bearer ${user.token}` } };
 }
 
 const createdSlugs: string[] = [];
@@ -35,6 +36,7 @@ describe('Storage metrics (disk usage)', () => {
     for (const s of createdSlugs) {
       try { await reqAuth('DELETE', `/projects/${s}`); } catch { /* best effort */ }
     }
+    await cleanupLiveUsers();
   });
 
   test('unauthenticated → 401 (global authMiddleware)', async () => {
@@ -43,8 +45,9 @@ describe('Storage metrics (disk usage)', () => {
   });
 
   test('shape contract + access matrix (viewer/editor both read)', async () => {
-    for (const [role, uname] of [['viewer', 'sv'], ['editor', 'se']] as const) {
-      const res = await req('GET', '/storage', undefined, forger(role, uname).headers);
+    for (const [role, key] of [['viewer', 'storage-viewer'], ['editor', 'storage-editor']] as const) {
+      const as = await forger(role, key);
+      const res = await req('GET', '/storage', undefined, as.headers);
       assert.strictEqual(res.status, 200, `${role} should read storage metrics`);
       const data = await res.json();
       assert.strictEqual(typeof data.dataDirBytes, 'number');

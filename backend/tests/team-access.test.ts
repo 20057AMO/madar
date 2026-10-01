@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Project ownership + membership + access control (the "Team" scenario).
@@ -18,6 +18,13 @@ import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL 
 function signUser(id: string, username: string, role: string): string {
   return jwt.sign({ id, username, role, tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
 }
+
+// The two actors that must NOT be project members: a non-member viewer
+// outsider and a system-role editor ("global editor"). Both are REAL accounts —
+// verifyToken refuses an id that is not in users.json, so a ghost id would turn
+// every authorization row below into a 401 that proves nothing.
+let outsiderToken = '';
+let globalEditorToken = '';
 
 function runAs(token: string) {
   return {
@@ -57,6 +64,10 @@ async function deleteRobust(path: string, attempts = 20): Promise<boolean> {
 
 describe('Project team & access control (real Docker container)', () => {
   before(async () => { await initTestAuth(); });
+  before(async () => {
+    outsiderToken = (await liveUser('viewer', 'team-outsider')).token;
+    globalEditorToken = (await liveUser('editor', 'team-global-editor')).token;
+  });
 
   const slug = uniqueId('team');
   const editorName = `te_${Date.now().toString(36)}`;
@@ -77,6 +88,7 @@ describe('Project team & access control (real Docker container)', () => {
     // Remove the temporary users so the environment stays clean.
     await deleteRobust(`/users/${viewerId}`);
     await deleteRobust(`/users/${editorId}`);
+    await cleanupLiveUsers();
   });
 
   test('create the project (owner = admin)', async () => {
@@ -231,68 +243,68 @@ describe('Project team & access control (real Docker container)', () => {
 
   test('non-member is denied read access (403)', async () => {
     // Forge a token for an unknown user who is not a member and not admin.
-    const outsider = jwt.sign({ id: 'outsider-user', username: 'outsider', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const outsider = outsiderToken;
     const res = await req('GET', `/projects/${slug}`, undefined, runAs(outsider).headers);
     assert.strictEqual(res.status, 403);
   });
 
   test('non-member cannot list members of another project (403)', async () => {
-    const outsider = jwt.sign({ id: 'outsider-user-2', username: 'outsider2', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const outsider = outsiderToken;
     const res = await req('GET', `/projects/${slug}/members`, undefined, runAs(outsider).headers);
     assert.strictEqual(res.status, 403, `outsider members GET: ${res.status}`);
   });
 
   test('non-member cannot read scripts of another project (403)', async () => {
-    const outsider = jwt.sign({ id: 'outsider-user-3', username: 'outsider3', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const outsider = outsiderToken;
     const res = await req('GET', `/projects/${slug}/scripts`, undefined, runAs(outsider).headers);
     assert.strictEqual(res.status, 403, `outsider scripts GET: ${res.status}`);
   });
 
   test('non-member cannot read subdir info of another project (403)', async () => {
-    const outsider = jwt.sign({ id: 'outsider-user-4', username: 'outsider4', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const outsider = outsiderToken;
     const res = await req('GET', `/projects/${slug}/subdir`, undefined, runAs(outsider).headers);
     assert.strictEqual(res.status, 403, `outsider subdir GET: ${res.status}`);
   });
 
   test('non-member cannot edit project metadata (403)', async () => {
-    const outsider = jwt.sign({ id: 'outsider-user-5', username: 'outsider5', role: 'viewer', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const outsider = outsiderToken;
     const res = await req('PATCH', `/projects/${slug}`, { name: 'outsider-rename' }, runAs(outsider).headers);
     assert.strictEqual(res.status, 403, `outsider PATCH: ${res.status}`);
   });
 
   // ── Global editor: system editors reach every project ─────────
   test('global editor (no membership) can read any project (200)', async () => {
-    const ge = jwt.sign({ id: 'global-editor-user', username: 'global-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const ge = globalEditorToken;
     const res = await req('GET', `/projects/${slug}`, undefined, runAs(ge).headers);
     assert.strictEqual(res.status, 200, `global editor read: ${res.status}`);
   });
 
   test('global editor can write a file without membership (200)', async () => {
-    const ge = jwt.sign({ id: 'global-editor-user', username: 'global-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const ge = globalEditorToken;
     const res = await req('PUT', `/projects/${slug}/file?path=global-editor.txt`, { content: 'global editor write' }, runAs(ge).headers);
     assert.strictEqual(res.status, 200, `global editor write: ${res.status}`);
   });
 
   test('global editor can edit project metadata (200)', async () => {
-    const ge = jwt.sign({ id: 'global-editor-user', username: 'global-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const ge = globalEditorToken;
     const res = await req('PATCH', `/projects/${slug}`, { name: 'Team Access Test', description: 'Temporary project for team/access testing' }, runAs(ge).headers);
     assert.strictEqual(res.status, 200, `global editor PATCH: ${res.status}`);
   });
 
   test('global editor CANNOT add members (403 — project-admin op)', async () => {
-    const ge = jwt.sign({ id: 'global-editor-user', username: 'global-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const ge = globalEditorToken;
     const res = await req('POST', `/projects/${slug}/members`, { userId: viewerId, role: 'viewer' }, runAs(ge).headers);
     assert.strictEqual(res.status, 403, `global editor add member: ${res.status}`);
   });
 
   test('global editor CANNOT transfer ownership (403 — owner/admin only)', async () => {
-    const ge = jwt.sign({ id: 'global-editor-user', username: 'global-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const ge = globalEditorToken;
     const res = await req('POST', `/projects/${slug}/transfer-owner`, { userId: viewerId }, runAs(ge).headers);
     assert.strictEqual(res.status, 403, `global editor transfer-owner: ${res.status}`);
   });
 
   test('global editor CANNOT delete the project (403 — admin-level op)', async () => {
-    const ge = jwt.sign({ id: 'global-editor-user', username: 'global-editor', role: 'editor', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
+    const ge = globalEditorToken;
     const res = await req('DELETE', `/projects/${slug}`, undefined, runAs(ge).headers);
     assert.strictEqual(res.status, 403, `global editor delete: ${res.status}`);
   });
