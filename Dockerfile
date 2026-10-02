@@ -26,6 +26,13 @@ RUN apt-get update \
         python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
+# IDE hardening — the SINGLE enforcement point for the code-server image layer
+# (closure restore + keep-list slimming + @github stubs + invariant checks).
+# Installed before the code-server layer so `capture` can snapshot the closure
+# while the pristine deb payload is still on disk.
+COPY backend/docker/ide-hardening.sh /usr/local/share/madar/ide-hardening.sh
+RUN sed -i 's/\r$//' /usr/local/share/madar/ide-hardening.sh && chmod +x /usr/local/share/madar/ide-hardening.sh
+
 # code-server — unified Web IDE rooted at /workspaces.
 # Defaults to the newest release resolved at build time via the GitHub API; pin
 # a specific version with --build-arg CODE_SERVER_VERSION=<ver> for
@@ -52,6 +59,9 @@ RUN if [ "${CODE_SERVER_VERSION}" = "latest" ]; then \
          echo "${CS_SHA256#sha256:}  /tmp/code-server.deb" | sha256sum -c -; \
        fi \
     && dpkg -i /tmp/code-server.deb \
+    && /usr/local/share/madar/ide-hardening.sh capture \
+    && test -n "$(ls -A /opt/madar/ide-builtin 2>/dev/null)" \
+    && echo "captured built-in closure: $(ls -1 /opt/madar/ide-builtin | wc -l) dirs" \
     && rm -f /tmp/code-server.deb
 
 # VS Code Extensions
@@ -66,65 +76,40 @@ RUN code-server --install-extension dbaeumer.vscode-eslint \
     && code-server --install-extension usernamehw.errorlens \
     && code-server --install-extension streetsidesoftware.code-spell-checker \
     && code-server --install-extension PKief.material-icon-theme \
-    && code-server --install-extension Gruntfuggly.todo-tree \
     && code-server --install-extension ms-vscode.references-view
 
-# Slim the built-in VS Code extensions (first-frame load time): the stock
-# bundle ships a 170 MB Copilot extension (which also spawns a ~270 MB RAM
-# sidecar process on every boot) plus ~45 unused language/theme packs.
-# Deleting their dirs removes them from the runtime scan — there is no
-# extensions.json for built-ins, so a directory is the source of truth.
-# KEEP LIST: the project stack (web TS/JS/JSON/CSS/HTML + Python + Rust),
-# Markdown/notebook/tooling basics, js-debug, default themes + seti icons.
-RUN cd /usr/lib/code-server/lib/vscode/extensions \
-    && rm -rf \
-      copilot \
-      mermaid-markdown-features \
-      ipynb \
-      vscode-js-profile-table \
-      js-debug-companion \
-      simple-browser \
-      diff \
-      media-preview \
-      extension-editing \
-      configuration-editing \
-      prompt-basics \
-      search-result \
-      tunnel-forwarding \
-      debug-auto-launch \
-      debug-server-ready \
-      git-base \
-      github \
-      github-authentication \
-      microsoft-authentication \
-      groovy grunt gulp jake perl \
-      clojure coffeescript dart fsharp julia lua r objective-c \
-      razor vb powershell swift \
-      shaderlab hlsl \
-      php pug dotenv ini bat \
-      csharp go java ruby rust \
-      latex restructuredtext \
-      theme-abyss theme-kimbie-dark theme-monokai theme-monokai-dimmed \
-      theme-quietlight theme-red theme-solarized-dark theme-solarized-light \
-      theme-tomorrow-night-blue \
-    && code-server --list-extensions > /dev/null \
-    && echo "built-in slimming OK: $(ls | wc -l) dirs left"
+# Todo Tree — PINNED + digest-verified, and deliberately NOT installed here.
+# `--install-extension Gruntfuggly.todo-tree` resolved `latest`, unpinned and
+# unverified, two lines below a digest-verified code-server fetch — inconsistent,
+# and unreproducible across rebuilds. The VSIX is fetched once into
+# /opt/madar/ide-vsix and the entrypoint boot sync installs it from that LOCAL
+# file (no network at boot), letting code-server write its own registry entry.
+# `--compressed` is mandatory: the marketplace answers with `content-encoding:
+# gzip`, so without it curl stores the COMPRESSED bytes and the digest below
+# (taken from the real artifact) can never match.
+ARG TODO_TREE_VERSION=0.0.215
+ARG TODO_TREE_SHA256=58af49e93be63022e8a9e296879155a7598d0173d656646f8bf885b8b58cca53
+RUN mkdir -p /opt/madar/ide-vsix \
+    && curl -fsSL --compressed -o "/opt/madar/ide-vsix/gruntfuggly.todo-tree-${TODO_TREE_VERSION}.vsix" \
+      "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/gruntfuggly/vsextensions/todo-tree/${TODO_TREE_VERSION}/vspackage" \
+    && echo "${TODO_TREE_SHA256}  /opt/madar/ide-vsix/gruntfuggly.todo-tree-${TODO_TREE_VERSION}.vsix" | sha256sum -c - \
+    && echo "pinned todo-tree ${TODO_TREE_VERSION} ($(stat -c%s /opt/madar/ide-vsix/gruntfuggly.todo-tree-${TODO_TREE_VERSION}.vsix) bytes)"
 
-# COPILOT SIDE-CAR REMOVAL — the prebuilt agentHost code in VS Code 1.138
-# statically imports @github/copilot + @github/copilot-sdk (deleting the whole
-# @github tree makes every boot log a fatal ERR_MODULE_NOT_FOUND), so those two
-# 1 MB JS packages become empty stubs and only the 139 MB native binary package
-# (copilot-linux-x64, the ~270 MB RAM sidecar process) is gutted: its stub
-# entry exits 0 immediately, so even a forced spawn dies instantly.
-RUN cd /usr/lib/code-server/lib/vscode/node_modules/@github \
-    && rm -rf copilot-linux-x64 \
-    && mkdir -p copilot-linux-x64 \
-    && printf '{"name":"@github/copilot-linux-x64","version":"0.0.0","bin":{"github-copilot":"index.js"},"main":"index.js"}' > copilot-linux-x64/package.json \
-    && printf '#!/usr/bin/env node\nprocess.exit(0)\n' > copilot-linux-x64/index.js \
-    && printf '{"name":"@github/copilot","version":"0.0.0","main":"index.js"}' > copilot/package.json \
-    && printf 'module.exports={}\n' > copilot/index.js \
-    && printf '{"name":"@github/copilot-sdk","version":"0.0.0","main":"index.js"}' > copilot-sdk/package.json \
-    && printf 'module.exports={}\n' > copilot-sdk/index.js
+# Built-in VS Code extensions layer (first-frame load time AND RAM): the stock
+# bundle ships ~130 MB of unusable Copilot payload — code-server 4.138 ships four
+# `@github` packages, and the ~127 MB `@github/copilot-sdk-linux-x64` is the one a
+# name-based stub list never touched. `ide-hardening.sh apply` replaces every
+# shipped `@github` package structurally (spawned ⇒ `process.exit(0)`, imported ⇒
+# `module.exports={}`) and prunes outside the keep-list after restoring the
+# captured dependency closure (vscode.git declares
+# extensionDependencies:["vscode.git-base"], so a name-based delete-list silently
+# removed the Git extension's only dependency and Source Control hung on
+# "Scanning folder for Git repositories..." forever), pruning everything outside
+# the keep-list, and rewrites the @github tree as stubs. A KEEP-list rather than
+# a delete-list is what makes this version-bump-safe: the previous rm list used
+# unprefixed names that never matched the real dirs (ms-vscode.js-debug-companion,
+# ms-vscode.vscode-js-profile-table), so 5.6 MB survived every build.
+RUN /usr/local/share/madar/ide-hardening.sh apply
 
 # opencode CLI (project building agent, web UI on port 4096) — resolved at
 # build time to the newest version and gated to the supported major: the
@@ -157,8 +142,23 @@ COPY opencode/skills/ /root/.config/opencode/skills/
 COPY opencode/command/ /root/.config/opencode/command/
 RUN find /root/.config/opencode/agents /root/.config/opencode/skills /root/.config/opencode/command -type f \( -name '*.md' -o -name 'SKILL.md' \) -exec sed -i 's/\r$//' {} +
 
-# code-server default settings (dark theme, auto-save, format-on-save, etc.)
-COPY code-server-settings.json /root/.config/code-server/User/settings.json
+# code-server default settings (dark theme, auto-save, format-on-save, etc.).
+#
+# Baked at /opt/madar/ide-config — an UNSHADOWED path. The code-server-config
+# VOLUME mounts /root/.config/code-server, so a copy written into /root/.config
+# at image-build time is simply invisible at runtime: an existing volume keeps
+# the settings.json and config.yaml it was seeded with, which is why the volume
+# silently lacked workbench.startupEditor / update.mode / the rest while the
+# docs claimed they were in effect. entrypoint.sh copies the managed copy into
+# the volume on every boot (stamped, idempotent) and backs the previous file up.
+COPY code-server-settings.json /opt/madar/ide-config/User/settings.json
+RUN mkdir -p /root/.config/code-server/User \
+    && cp /opt/madar/ide-config/User/settings.json /root/.config/code-server/User/settings.json \
+    # No `bind-addr`: code-server defaults to 127.0.0.1:8080, the same loopback
+    # bind the supervisor passes on the CLI. `auth: none` mirrors `--auth none`;
+    # a seeded volume still carries the old `auth: password` + hash, and the
+    # boot sync replaces this file.
+    && printf 'auth: none\ncert: false\n' > /opt/madar/ide-config/config.yaml
 
 # Entrypoint — strip any CR characters so the script works even if the
 # build context was checked out with CRLF line endings (Windows clones
@@ -169,6 +169,11 @@ RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 # opencode SQLite purge helper (boot-time + runtime project deletes)
 COPY backend/docker/opencode-purge.py /app/opencode-purge.py
 RUN sed -i 's/\r$//' /app/opencode-purge.py
+
+# LAST, so a broken image fails the build instead of shipping: every invariant
+# (no Copilot dir, stubbed sidecar, resolvable extensionDependencies closure,
+# built-in dir count in band) is asserted against the FINAL tree.
+RUN /usr/local/share/madar/ide-hardening.sh verify
 
 EXPOSE 3000 8100 4096
 

@@ -35,6 +35,93 @@ IDE_BIND=127.0.0.1
 OPENCODE_BIND=127.0.0.1
 
 echo "Madar: starting supervised code-server IDE on ${IDE_BIND}:8080 (no auth, loopback-only)"
+
+# ── Managed IDE config sync (stamped, idempotent, never fatal) ──
+# The code-server-config VOLUME mounts /root/.config/code-server, so the
+# settings.json + config.yaml written into the image are SHADOWED at runtime:
+# an existing volume keeps whatever it was seeded with. That is how the volume
+# ended up carrying a settings.json without workbench.startupEditor /
+# update.mode / telemetry.telemetryLevel and a config.yaml still holding
+# `auth: password` + its hash. The fix is not "copy at build time" but a boot
+# sync from UNSHADOWED /opt/madar/ide-config, gated on a content stamp so it
+# costs one sha256 on a no-op boot.
+#
+# The previous settings.json is kept as settings.json.madar-backup-<stamp8>
+# (timestamped by stamp, NEVER deleted) so an operator can always diff what the
+# sync replaced. extensions.json is NEVER hand-merged: the pinned VSIX is
+# installed from a local file through code-server's own CLI so code-server
+# writes the registry entry itself.
+#
+# HARD RULE: no step here may block boot. Every command is guarded — a failed
+# migration must degrade to "the IDE still starts", because the alternative is
+# an IDE that cannot be reached at all on a fresh or partially-migrated volume.
+IDE_MANAGED_DIR=/opt/madar/ide-config
+IDE_VSIX_DIR=/opt/madar/ide-vsix
+IDE_HARDENING=/usr/local/share/madar/ide-hardening.sh
+IDE_STAMP_FILE="$DATA_DIR/ide-sync.json"
+IDE_SETTINGS=/root/.config/code-server/User/settings.json
+
+ide_sync_managed_files() {
+  [ -d "$IDE_MANAGED_DIR" ] || {
+    echo "Madar: $IDE_MANAGED_DIR absent — skipping the managed IDE config sync"
+    return 0
+  }
+  # Stamp over every managed input (settings, config.yaml, the pinned VSIX and
+  # the hardening script itself), so a change to ANY of them re-runs the sync
+  # instead of being masked by a stamp that is merely still valid.
+  local stamp current=""
+  stamp="$( { find "$IDE_MANAGED_DIR" "$IDE_VSIX_DIR" -type f 2>/dev/null; [ -f "$IDE_HARDENING" ] && echo "$IDE_HARDENING"; } \
+    | sort | xargs -r sha256sum 2>/dev/null | sha256sum | cut -c1-64 )"
+  if [ -z "$stamp" ]; then
+    echo "Madar: could not compute the managed IDE config stamp — skipping the sync"
+    return 0
+  fi
+  if [ -f "$IDE_STAMP_FILE" ]; then
+    current="$(jq -r '.stamp // empty' "$IDE_STAMP_FILE" 2>/dev/null || echo '')"
+  fi
+  if [ "$current" = "$stamp" ]; then
+    echo "Madar: managed IDE config already at stamp ${stamp:0:8} — nothing to sync"
+    return 0
+  fi
+  echo "Madar: applying managed IDE config (stamp ${current:-none} -> ${stamp:0:8})"
+
+  if [ -f "$IDE_SETTINGS" ]; then
+    cp -a "$IDE_SETTINGS" "${IDE_SETTINGS}.madar-backup-${stamp:0:8}" \
+      || echo "Madar: warning — could not back up the existing settings.json" >&2
+  fi
+  mkdir -p "$(dirname "$IDE_SETTINGS")" || true
+  cp "$IDE_MANAGED_DIR/User/settings.json" "${IDE_SETTINGS}.madar-tmp" 2>/dev/null \
+    && mv -f "${IDE_SETTINGS}.madar-tmp" "$IDE_SETTINGS" \
+    || echo "Madar: warning — could not install the managed settings.json" >&2
+  if [ -f "$IDE_MANAGED_DIR/config.yaml" ]; then
+    cp "$IDE_MANAGED_DIR/config.yaml" /root/.config/code-server/config.yaml 2>/dev/null \
+      || echo "Madar: warning — could not install the managed config.yaml" >&2
+  fi
+
+  local vsix
+  for vsix in "$IDE_VSIX_DIR"/*.vsix; do
+    [ -f "$vsix" ] || continue
+    code-server --install-extension "$vsix" >/dev/null 2>&1 \
+      || echo "Madar: warning — could not install the pinned $(basename "$vsix")" >&2
+  done
+
+  if [ -x "$IDE_HARDENING" ]; then
+    "$IDE_HARDENING" verify >/dev/null 2>&1 \
+      || echo "Madar: warning — ide-hardening verify failed; run '$IDE_HARDENING verify' and read the image build log" >&2
+  fi
+
+  # The stamp is written LAST — only once every step above was attempted, so a
+  # crash mid-migration re-runs instead of claiming success.
+  local tmp="$IDE_STAMP_FILE.madar-tmp"
+  printf '{"stamp":"%s","appliedAt":"%s"}\n' "$stamp" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null \
+    && chmod 600 "$tmp" \
+    && mv -f "$tmp" "$IDE_STAMP_FILE" \
+    || echo "Madar: warning — could not persist the IDE sync stamp" >&2
+  rm -f "$tmp"
+  return 0
+}
+ide_sync_managed_files || echo "Madar: warning — the managed IDE config sync failed (non-fatal)" >&2
+
 # NOTE: code-server reads the PORT env var and it overrides --bind-addr,
 # so unset it (PORT is used by the dashboard node app).
 # Auth disabled (--auth none) — the ONLY access control is this loopback bind

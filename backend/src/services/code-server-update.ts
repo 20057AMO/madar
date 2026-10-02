@@ -82,6 +82,8 @@ const DEFAULT_MAX_BYTES = 400 * 1024 * 1024; // real deb ~233MB
 const DEFAULT_BOOT_TIMEOUT_MS = 90_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const DPKG_TIMEOUT_MS = 180_000;
+const HARDEN_TIMEOUT_MS = 180_000;
+const IDE_HARDENING = '/usr/local/share/madar/ide-hardening.sh';
 const VERSION_CACHE_MS = 30_000;
 const RELEASE_CACHE_MS = 10 * 60_000;
 
@@ -379,6 +381,47 @@ export interface RestartResult {
 }
 
 /**
+ * Re-apply + verify the IDE image hardening immediately after `dpkg -i`.
+ *
+ * `dpkg -i` restores the PRISTINE /usr/lib/code-server, which undoes BOTH the
+ * built-in extension slimming and the @github stubs in one move: the ~127 MB
+ * `@github/copilot-sdk-linux-x64` native payload returns (and with it the RAM
+ * sidecar VS Code spawns by process name), and `vscode.git` loses the dependency
+ * it needs to activate. The image build is not
+ * enough — without this call the RAM fix survives exactly one update.
+ *
+ * Contract:
+ *   - The script missing → `skipped` (an install without this layer, e.g. a dev
+ *     host): treated as OK, never as a failure of the update itself.
+ *   - An absent extensions tree is a graceful no-op INSIDE the script
+ *     (component-updates installs fake debs that ship a single `version` file),
+ *     so it surfaces here as OK.
+ *   - `verify` failing means the tree is present AND a real invariant broke.
+ *     That is fail-closed: the caller must NOT restart the IDE into it.
+ */
+async function hardenIdeInstall(): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  if (!fs.existsSync(IDE_HARDENING)) return { ok: true, skipped: true };
+  try {
+    await execFileAsync(IDE_HARDENING, ['apply'], { timeout: HARDEN_TIMEOUT_MS });
+    await execFileAsync(IDE_HARDENING, ['verify'], { timeout: HARDEN_TIMEOUT_MS });
+    return { ok: true };
+  } catch (err: any) {
+    // The script prints the exact invariant to stderr; surface its last lines
+    // instead of exec's generic message so the log says WHICH check broke.
+    const stderr = String(err?.stderr || '')
+      .split('\n')
+      .map((l: string) => l.trim())
+      .filter(Boolean)
+      .slice(-3)
+      .join(' | ');
+    return {
+      ok: false,
+      error: `IDE hardening verification failed: ${stderr || err?.message || 'unknown error'}`,
+    };
+  }
+}
+
+/**
  * SIGTERM the supervised code-server child so entrypoint revives it.
  * Returns {ok:false, reason:'missing'|'refused'} instead of killing blind —
  * a stale pid must never terminate an unrelated process.
@@ -558,6 +601,18 @@ export async function installCodeServerVersion(
     log(`installing ${version}`);
     const installPath = usedCache ? cachedDebPath(version) : debPath;
     await execFileAsync('dpkg', ['-i', installPath], { timeout: DPKG_TIMEOUT_MS });
+    // Before the restart, never after: a dpkg install restores the pristine
+    // code-server tree, so the hardening must be re-applied while the old
+    // child is still running and the new binary is not yet booted. There is no
+    // rollback baseline on this path (it IS the baseline re-apply), so a
+    // failure is reported, not silently ignored, and nothing is restarted into
+    // an unhardened tree — updates-boot records bootReapply:'failed'.
+    const harden = await hardenIdeInstall();
+    if (!harden.ok) {
+      log(`failed: ${harden.error}`);
+      return done(fail(harden.error as string));
+    }
+    if (harden.skipped) log('ide-hardening script absent — skipping the post-install re-apply');
 
     const restart = await restartCodeServer();
     if (!restart.ok && restart.reason === 'missing') {
@@ -761,6 +816,12 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
       }
       try {
         await execFileAsync('dpkg', ['-i', baselineDeb], { timeout: DPKG_TIMEOUT_MS });
+        // The restored baseline is a pristine tree too, so it needs the same
+        // re-apply — and here a failure means the rollback must NOT be reported
+        // as successful, otherwise the caller would claim a recovered box while
+        // the Copilot payload is back.
+        const harden = await hardenIdeInstall();
+        if (!harden.ok) return { ok: false, error: harden.error as string };
         const rp = await restartCodeServer();
         const rollbackOk = await waitForBoot(rollbackVersion, rp.ok ? rp.oldPid : oldPid);
         return rollbackOk ? { ok: true } : { ok: false, error: 'the rollback binary did not boot or restart was refused' };
@@ -873,6 +934,11 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
           if (fs.existsSync(baselineDeb)) {
             try {
               await execFileAsync('dpkg', ['-i', baselineDeb], { timeout: DPKG_TIMEOUT_MS });
+              // Advisory only: this is already a failure path with no baseline
+              // guarantee, so a hardening failure here is logged rather than
+              // escalating into a second (unresolvable) rollback.
+              const harden = await hardenIdeInstall();
+              if (!harden.ok) log(`defensive rollback: ${harden.error}`);
               await restartCodeServer();
               log('defensive rollback to previous deb completed');
               restored = true;
@@ -891,6 +957,39 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         }
 
         await step('installed'); // → restarting
+
+        // dpkg restored the pristine tree: re-apply the hardening (closure +
+        // keep-list prune + @github stubs) and assert every invariant BEFORE the
+        // restart, so an unhardened IDE never boots. A failure walks the SAME
+        // rollback ladder a boot failure does — the state machine only reaches
+        // `rollback` from `verifying-boot`, so the three steps below are the
+        // documented route there (the `restarted` step records that the deb is
+        // installed, not that a restart happened).
+        const harden = await hardenIdeInstall();
+        if (!harden.ok) {
+          await step('restarted'); // restarting → verifying-boot
+          await step('boot-fail'); // → rollback
+          log(`post-install hardening failed: ${harden.error} — rolling back to ${current}`);
+          const rollback = await attemptRollback(current, undefined);
+          if (rollback.ok) {
+            await step('rollback-ok'); // → failed (update did not succeed)
+            await persist({ rolledBack: true });
+            log(`rolled back to ${current} and re-applied the IDE hardening`);
+            return done({
+              ok: false,
+              error: `Update to ${release.version} could not be hardened — rolled back to ${current}`,
+              rolledBack: true,
+            });
+          }
+          await step('rollback-fail'); // → failed
+          return done({
+            ok: false,
+            error: `Update to ${release.version} could not be hardened and the rollback to ${current} also failed${rollback.error ? ` (${rollback.error})` : ''}`,
+            rolledBack: false,
+          });
+        }
+        if (harden.skipped) log('ide-hardening script absent — skipping the post-install re-apply');
+
         const restart = await restartCodeServer();
         log(`restarting via $DATA_DIR/code-server.pid (pid=${restart.oldPid ?? (restart.reason === 'missing' ? 'no pid file' : 'refused')})`);
 

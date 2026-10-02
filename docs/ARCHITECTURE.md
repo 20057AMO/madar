@@ -151,6 +151,52 @@ The `entrypoint.sh` also:
 - Replaces the baked opencode config, registers live-project dirs into opencode's SQLite store and purges stale rows *before* launching
 - Supervises the opencode web process (while-loop) so `POST /opencode-studio/update` can swap the binary live
 - Launches code-server (`--auth none`)
+- Syncs the **managed** IDE config on every boot *before* the supervisor starts, because the `code-server-config` volume shadows the baked `/root/.config/code-server` (see §4.4)
+
+### 4.4 IDE image hardening (`backend/docker/ide-hardening.sh`)
+
+The stock code-server bundle carries an unusable ~130 MB Copilot payload, and the naive "delete the
+extension directories" fix is broken in four ways. This script is the **single enforcement point** and
+exposes three modes:
+
+| Mode | When | What it does |
+| --- | --- | --- |
+| `capture` | image build only | Walks `extensionDependencies` **transitively** from the keep-list roots and snapshots the computed closure to `/opt/madar/ide-builtin` — while the pristine tree still exists and before the `.deb` is discarded. The Dockerfile asserts the dir is non-empty, since a silent no-op capture would otherwise reach a `verify` that no-ops on the same condition and ship a broken image. |
+| `apply` | build, every `dpkg -i`, boot re-apply | Restores the captured closure, prunes to the keep-list, stubs the `@github` tree. Idempotent. |
+| `verify` | build, every `dpkg -i`, boot | Invariants I1–I5; exits 1 naming the broken one. |
+
+The four defects it exists to close:
+
+1. **Unprefixed names** — the old delete list used `js-debug-companion` / `vscode-js-profile-table`, but the
+   real directories are `ms-vscode.js-debug-companion` / `ms-vscode.vscode-js-profile-table`. Both shipped green.
+2. **`dpkg -i` resurrects everything** — both the interactive component update and the boot re-apply
+   restore the pristine tree. Every `dpkg` call site in `code-server-update.ts` (baseline, interactive and
+   each rollback rung) now runs `apply && verify`, and a failure drives the existing rollback ladder, so
+   hardening can never be silently skipped by an update.
+3. **Deleting a dependency** — `vscode.git` declares `extensionDependencies: ["vscode.git-base"]`. The old
+   list removed Git's only dependency and Source Control hung on `Scanning folder for Git repositories…`
+   forever. The closure is *computed*, never named, so this cannot recur.
+4. **Name-based stubbing misses packages** — the first pass named three `@github` packages while
+   code-server 4.138 ships a fourth (`@github/copilot-sdk-linux-x64`, 127 MB), so the image stayed at
+   442 MB with every named check green. Stubbing is therefore **structural**: every shipped package is
+   replaced, and the flavour comes from its own `package.json` — a package declaring `bin` is *spawned*, so
+   its stub is `process.exit(0)` (real bin name preserved); everything else is *imported*, so its stub is
+   `module.exports = {}`. I2 caps the **whole tree** at <2 MiB and requires it to be ELF-free, which is
+   what catches a package nobody knew about. Writer and checker share one `github_stub_kind` definition.
+
+Result: `@github` 132 MB → **12 KB**, `/usr/lib/code-server` 442 MB → **316 MB**, 38 → 37 built-ins, no
+sidecar process, no boot errors — and the invariants were re-proven live after a runtime bump to
+code-server 4.140 / VS Code 1.140.
+
+**Managed config.** Editing the baked `settings.json` alone is a no-op: the `code-server-config` volume
+shadows it, and a volume survives a container recreate with the stale file. `entrypoint.sh` therefore
+backs the volume's file up (`settings.json.madar-backup-<stamp>`, never deleted), replaces it atomically
+(`cp` to temp + `mv`), overwrites the stale `config.yaml`, installs the pinned digest-verified
+`gruntfuggly.todo-tree` VSIX from `/opt/madar/ide-vsix` via the CLI (local file, no network), runs
+`verify`, and only then writes the `$DATA_DIR/ide-sync.json` stamp (mode 0600) atomically. Every step is
+`|| echo`-guarded so a failed migration can never abort the boot. The digest check requires
+`curl --compressed`, because the marketplace answers with `content-encoding: gzip` and the raw bytes do
+not match.
 
 ### 4.2 Workspace image (`Dockerfile.workspace`)
 - Ubuntu 24.04 base; published as `wsd/workspace`

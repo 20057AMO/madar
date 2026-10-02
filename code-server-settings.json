@@ -50,12 +50,29 @@
     "XXX",
     "NOTE"
   ],
+  "todo-tree.ripgrep": "/usr/lib/code-server/lib/vscode/node_modules/@vscode/ripgrep-universal/bin/linux-x64/rg",
+  "todo-tree.general.filename": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,rs}",
+  "todo-tree.regex": "\\b(BUG|HACK|FIXME|TODO|XXX)\\b(?=[(:\\s]|$)",
   "todo-tree.highlights.defaultHighlight": {
     "icon": "alert",
     "type": "text-and-comment",
     "foreground": "#ffffff",
     "background": "#ff9800",
     "opacity": 50
+  },
+  "todo-tree.highlights.customHighlight": {
+    "BUG": {
+      "icon": "error",
+      "foreground": "#ffffff",
+      "background": "#e53935",
+      "opacity": 60
+    },
+    "FIXME": {
+      "icon": "warning",
+      "foreground": "#ffffff",
+      "background": "#fb8c00",
+      "opacity": 55
+    }
   },
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": "explicit"
