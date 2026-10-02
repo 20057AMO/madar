@@ -184,9 +184,19 @@ The four defects it exists to close:
    `module.exports = {}`. I2 caps the **whole tree** at <2 MiB and requires it to be ELF-free, which is
    what catches a package nobody knew about. Writer and checker share one `github_stub_kind` definition.
 
-Result: `@github` 132 MB → **12 KB**, `/usr/lib/code-server` 442 MB → **316 MB**, 38 → 37 built-ins, no
-sidecar process, no boot errors — and the invariants were re-proven live after a runtime bump to
+Result: `@github` 132 MB → **12 KB**, `/usr/lib/code-server` 442 MB → **316 MB**, no sidecar process, no
+boot errors — and the invariants were re-proven live after a runtime bump to
 code-server 4.140 / VS Code 1.140.
+
+**Keep-list roots.** The closure is computed from the keep-list roots, and a root is kept **even when
+nothing declares it**. `vscode.github-authentication` is exactly that case: its pristine
+`extensionDependencies` is empty, so no other built-in pulls it into the closure — and because it is the
+`github` authentication *provider*, pruning it cost a 404 on every IDE load plus
+`Activating extension 'vscode.github-authentication' failed` and
+`Timed out waiting for authentication provider 'github' to register`. It is safe to keep: it carries no
+Copilot edge (`dependencies {}`, no `@github/*` reference) and the structural `@github` stubs keep the
+sign-in path dead regardless, so restoring it cannot reintroduce the Copilot payload. Adding it moved the
+built-in count 37 → 38 and left `@github` (12 KB, ELF-free) and `/usr/lib/code-server` (316 MB) untouched.
 
 **Managed config.** Editing the baked `settings.json` alone is a no-op: the `code-server-config` volume
 shadows it, and a volume survives a container recreate with the stale file. `entrypoint.sh` therefore

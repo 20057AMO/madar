@@ -54,12 +54,21 @@ SAVED_DIR="${WSD_IDE_BUILTIN_DIR:-/opt/madar/ide-builtin}"
 # so two dirs silently survived every build. Anything not listed here is pruned,
 # which is what makes the layer version-bump-safe: a renamed or new built-in is
 # removed without anyone naming it, and nothing is removed by a stale name.
+#
+# A root listed here is kept even when NOTHING declares it — the closure walk only
+# starts from these ids. `vscode.github-authentication` is such a case (empty
+# extensionDependencies) and registers the `github` auth provider, so pruning it
+# cost a 404 plus an activation failure on every IDE load (see docs/ARCHITECTURE.md).
+#
+# Keep this string free of comment and blank lines: keep_ids() reads EVERY
+# non-empty line as an id, and I4 fails the build on one that is not real.
 KEEP_LIST='vscode.cpp
 vscode.css-language-features
 vscode.css
 vscode.docker
 vscode.emmet
 vscode.git
+vscode.github-authentication
 vscode.handlebars
 vscode.html-language-features
 vscode.html

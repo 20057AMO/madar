@@ -142,6 +142,32 @@ describe('IDE hardening — the shipped install', { skip: READY ? false : `${SCR
     );
   });
 
+  test('vscode.github-authentication is an explicit keep-list root with no Copilot edge', { skip: SHIPPED_TREE ? false : 'no extensions tree' }, () => {
+    // It is NOT a transitive dependency (nothing declares it), so `capture` only
+    // snapshots it because the keep-list names it. Both halves must hold: the
+    // dir is really installed, and restoring it did not drag Copilot back.
+    const probe = sh(`jq -r '"\\(.publisher).\\(.name)@\\(.version)"' ${EXT_DIR}/github-authentication/package.json 2>/dev/null`);
+    assert.notStrictEqual(probe.code, null, `docker never answered: ${probe.stderr}`);
+    assert.match(probe.stdout.trim(), /^vscode\.github-authentication@\d/, `the extension is not installed: ${probe.stdout.trim()}`);
+
+    const saved = sh(`test -d /opt/madar/ide-builtin/github-authentication && echo yes || echo no`);
+    assert.strictEqual(saved.stdout.trim(), 'yes', 'github-authentication must be in the captured closure, or the next dpkg -i drops it again');
+
+    // The Copilot invariants must survive the restore: no extensionDependencies
+    // edge, and no @github/Copilot reference anywhere in its bundle.
+    const edge = sh(`
+      echo "DEPS=$(jq -c '.extensionDependencies // []' ${EXT_DIR}/github-authentication/package.json)"
+      echo "NPM=$(jq -c '.dependencies // {}' ${EXT_DIR}/github-authentication/package.json)"
+      echo "HITS=$(grep -rl -e '@github/copilot' -e 'github-copilot' ${EXT_DIR}/github-authentication 2>/dev/null | wc -l)"`);
+    assert.strictEqual(edge.code, 0, edge.stderr);
+    assert.strictEqual(edge.stdout.match(/DEPS=(.*)/)?.[1], '[]', `it must declare no extensionDependencies: ${edge.stdout}`);
+    assert.strictEqual(edge.stdout.match(/NPM=(.*)/)?.[1], '{}', `it must declare no npm dependencies: ${edge.stdout}`);
+    assert.strictEqual(Number(edge.stdout.match(/HITS=(\d+)/)?.[1] ?? -1), 0, `the restored bundle references Copilot: ${edge.stdout}`);
+
+    assert.strictEqual(inContainer(['test', '-d', `${EXT_DIR}/copilot`]).code, 1, 'restoring github-authentication must not bring the Copilot extension dir back');
+    assert.strictEqual(Number(sh(`ps aux | grep -c '[g]ithub-copilot'`).stdout.trim() || '0'), 0, 'a github-copilot process is running');
+  });
+
   test('every shipped @github package is a stub and the whole tree is tiny', { skip: SHIPPED_TREE ? false : 'no extensions tree' }, () => {
     const out = sh(`
       total=$(du -sb ${GITHUB_DIR} | cut -f1)

@@ -65,13 +65,13 @@
   },
   "todo-tree.highlights.customHighlight": {
     "BUG": {
-      "icon": "error",
+      "icon": "bug",
       "foreground": "#ffffff",
       "background": "#e53935",
       "opacity": 60
     },
     "FIXME": {
-      "icon": "warning",
+      "icon": "flame",
       "foreground": "#ffffff",
       "background": "#fb8c00",
       "opacity": 55
