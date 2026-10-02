@@ -101,12 +101,23 @@ async function ensureSession(): Promise<void> {
       candidates.push(['test-admin', pw]);
 
       for (const [username, password] of candidates) {
-        const loginRes = await fetch(`${API_URL}/auth/login`, {
-          method: 'POST',
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ username, password }),
-        });
-        const loginData = await loginRes.json() as any;
+        // The auth scope is 10 password verifications/min/IP and stays at that
+        // value even under WSD_TESTING=1, so a suite that starts inside a window
+        // another suite just opened gets 429. Honour Retry-After and try again
+        // rather than silently falling through to the container fallback.
+        let loginRes: Response | null = null;
+        let loginData: any = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          loginRes = await fetch(`${API_URL}/auth/login`, {
+            method: 'POST',
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ username, password }),
+          });
+          if (loginRes.status !== 429) break;
+          const secs = Math.max(1, parseInt(String(loginRes.headers.get('Retry-After') || '5'), 10));
+          await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+        }
+        loginData = await loginRes!.json() as any;
         if (loginData.token) {
           const decoded = jwt.decode(loginData.token) as any;
           _userId = decoded.id;
@@ -167,27 +178,40 @@ export function testIdentity(): { id: string; username: string; role: string; tv
  */
 function resolveIdentityFromContainer(): boolean {
   const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
-  try {
-    const raw = execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], {
-      encoding: 'utf8',
-      timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const parsed = JSON.parse(raw) as { users?: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> };
-    const first = parsed.users?.find((u) => u?.id);
-    if (!first?.id) return false;
-    _userId = first.id;
-    _username = String(first.username || '');
-    _userRole = String(first.role || 'admin');
-    _tv = Number(first.tokenVersion || 0);
-    console.warn(
-      `[helpers] No test credentials resolved a session; adopted the first account (${_username}) from ` +
-      `'docker exec ${container} cat /app/data/users.json'. Set WSD_TEST_USER/WSD_TEST_PASS to avoid this.`,
-    );
-    return true;
-  } catch {
-    return false;
+  // Retry with a growing budget: `docker exec` is not free, and in the documented
+  // one-process full run it shares the daemon with suites that are creating and
+  // destroying containers. A single 5s timeout here used to be enough to make the
+  // whole identity unresolved, which then threw from EVERY signTestToken() call in
+  // the next suite — a cascade that looked like dozens of unrelated failures.
+  const attempts = [
+    { timeout: 15_000 },
+    { timeout: 30_000 },
+    { timeout: 30_000 },
+  ];
+  for (const { timeout } of attempts) {
+    try {
+      const raw = execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], {
+        encoding: 'utf8',
+        timeout,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const parsed = JSON.parse(raw) as { users?: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> };
+      const first = parsed.users?.find((u) => u?.id);
+      if (!first?.id) return false;
+      _userId = first.id;
+      _username = String(first.username || '');
+      _userRole = String(first.role || 'admin');
+      _tv = Number(first.tokenVersion || 0);
+      console.warn(
+        `[helpers] No test credentials resolved a session; adopted the first account (${_username}) from ` +
+        `'docker exec ${container} cat /app/data/users.json'. Set WSD_TEST_USER/WSD_TEST_PASS to avoid this.`,
+      );
+      return true;
+    } catch {
+      // Retry: a busy daemon answers slower, it does not refuse.
+    }
   }
+  return false;
 }
 
 /**

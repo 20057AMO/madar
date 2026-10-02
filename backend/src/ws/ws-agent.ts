@@ -13,12 +13,11 @@ import {
 } from '../services/agent-tool-executor';
 import { checkUserWrite } from '../services/user-write-limiter';
 import { checkProjectAccess } from '../middleware/auth';
+import { canonicalProjectSlug } from '../services/project-slug-core';
 import type { UserRole } from '../services/user-store';
 
 const MAX_PROMPT_CHARS = 20000;
 const MAX_HISTORY_TURNS = 20;
-/** Mirrors ws-chat's PROJECT_RE — only plausible project slugs get gated. */
-const PROJECT_SLUG_RE = /^[a-z0-9._-]{1,32}$/i;
 const TOTAL_CONTEXT_BUDGET = 24000;
 const TOUCH_DEBOUNCE_MS = 1000;
 
@@ -200,13 +199,26 @@ export function handleAgentSocket(
         return;
       }
     }
-    const project = typeof msg.project === 'string' ? msg.project : undefined;
+    const rawProject = typeof msg.project === 'string' ? msg.project : undefined;
 
     // Project-scoped agent runs execute tools (read files, run commands) in
     // that project's name — the requesting user must hold editor+ on it.
     // Checked here (not just at upgrade) because `project` arrives per prompt
     // from the client and the room is shared by agentId, not by user.
-    if (project && project !== 'all' && PROJECT_SLUG_RE.test(project)) {
+    //
+    // The scope is folded ONCE here, and that single value is both gated and
+    // acted on. It used to be gated only when it matched a permissive regex, so
+    // anything that failed the regex SKIPPED the gate while still being the
+    // workspace the tools ran in — and a value that "looks invalid" is never a
+    // reason to execute: it is a reason to refuse. 'all' needs no gate (no
+    // tools run against it); a scope that cannot be a slug is refused outright.
+    const project =
+      rawProject && rawProject !== 'all' ? canonicalProjectSlug(rawProject.trim()) : rawProject;
+    if (rawProject && rawProject !== 'all' && (!project || project !== rawProject.trim())) {
+      sendJson(ws, { type: 'error', message: 'Invalid project scope' });
+      return;
+    }
+    if (project && project !== 'all') {
       const allowed = checkProjectAccess(
         authUser?.id ?? '',
         (authUser?.role ?? 'viewer') as UserRole,

@@ -2,7 +2,26 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
 import WebSocket from 'ws';
-import { reqAuth, req, uniqueId, initTestAuth, JWT_SECRET, signTestToken, API_URL } from './helpers.ts';
+import { reqAuth as rawReqAuth, req as rawReq, uniqueId, initTestAuth, JWT_SECRET, signTestToken, API_URL, testIdentity } from './helpers.ts';
+
+/**
+ * Suite-local 429 backoff, the same convention as auth / team-access /
+ * team-page / project-reviews. User creation and project creation share the
+ * admin-provisioning write budget, so when this suite starts inside a window an
+ * earlier live suite opened it answered 429 and the row failed on something it
+ * was not testing. No row here asserts 429.
+ */
+async function withBackoff<T>(call: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = (await call()) as Response;
+    if (res.status !== 429 || attempt >= 20) return res as unknown as T;
+    const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '2'), 10));
+    await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+  }
+}
+
+const reqAuth: typeof rawReqAuth = (m, p, b) => withBackoff(() => rawReqAuth(m, p, b));
+const req: typeof rawReq = (m, p, b, h) => withBackoff(() => rawReq(m, p, b, h));
 
 /**
  * chat-team-bump.test.ts
@@ -59,10 +78,17 @@ async function makeUser(username: string, role: 'editor' | 'viewer'): Promise<{ 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Every socket this suite opens, so after() can release the handles deterministically.
+// Terminating mid-test was enough for the assertions but not for the PROCESS: the
+// runner waits on live sockets, so without this the suite never printed a summary and
+// the documented one-process full run appeared to hang right here.
+const openSockets: WebSocket[] = [];
+
 /** Open a chat-team socket; optionally auto-subscribe to a channel. */
 function openChatSocket(token: string, subscribeTo?: string) {
   const frames: any[] = [];
   const ws = new WebSocket(`${WS_BASE}/ws/chat-team?token=${encodeURIComponent(token)}`);
+  openSockets.push(ws);
   const opened = new Promise<void>((res, rej) => {
     ws.once('open', () => res());
     ws.once('error', rej);
@@ -108,6 +134,21 @@ before(async () => {
 });
 
 after(async () => {
+  for (const ws of openSockets) {
+    if (ws.readyState === WebSocket.CLOSED) continue;
+    const settled = new Promise<void>((res) => ws.once('close', () => res()));
+    try {
+      ws.close(1000);
+    } catch {
+      /* already gone */
+    }
+    await Promise.race([settled, sleep(2000)]);
+    try {
+      ws.terminate();
+    } catch {
+      /* already gone */
+    }
+  }
   for (const userId of createdUserIds) {
     try {
       await reqAuth('DELETE', `/users/${userId}`);
@@ -175,7 +216,7 @@ test('chat_bump fan-out matrix: members get bump after message, outsider and sen
     assert.strictEqual(bump.channelId, channelId);
     assert.strictEqual(bump.message.id, message.id);
     assert.strictEqual(bump.message.userId, testAdminId);
-    assert.strictEqual(bump.message.username, 'test');
+    assert.strictEqual(bump.message.username, testIdentity()!.username);
     assert.strictEqual(bump.message.text, 'hello bump world');
     assert.ok(bump.message.createdAt);
     assert.ok(!('attachments' in bump.message), 'bump is a compact preview, never the rich payload');

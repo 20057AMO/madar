@@ -23,6 +23,7 @@ import { retrieveProject, formatRetrievedChunks } from '../services/project-inde
 import { buildSystemPrompt, getChatConfig } from '../services/chat-config';
 import { checkUserWrite } from '../services/user-write-limiter';
 import { checkProjectAccess } from '../middleware/auth';
+import { canonicalProjectSlug } from '../services/project-slug-core';
 import type { UserRole } from '../services/user-store';
 
 const MAX_PROMPT_CHARS = 20000;
@@ -30,7 +31,6 @@ const MAX_HISTORY_TURNS = 20;
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_FILE_CHARS = 100000;
-const PROJECT_RE = /^[a-z0-9._-]{1,32}$/i;
 const STATIC_CONTEXT_BUDGET = 18000;
 const RETRIEVED_CONTEXT_BUDGET = 6000;
 const TOTAL_CONTEXT_BUDGET = 24000;
@@ -86,7 +86,14 @@ function normalizeAttachments(raw: any): ChatAttachment[] | null {
 
 /**
  * Normalize the optional project scope.
- * Returns undefined (no context), 'all', a validated slug, or null (invalid).
+ * Returns undefined (no context), 'all' (every project brief), or the CANONICAL
+ * slug — or null when the value cannot be a slug at all.
+ *
+ * The scope is folded HERE, once, and the folded value is what the gate below
+ * authorizes AND what feeds the context/retrieval — a raw spelling must never
+ * reach either. A non-canonical spelling is refused rather than folded: the
+ * caller cannot tell a folded `a-b` from a genuine one, so the honest answer is
+ * to reject the value it sent.
  */
 function normalizeProject(raw: any): string | null | undefined {
   if (raw == null || raw === '') return undefined;
@@ -94,8 +101,9 @@ function normalizeProject(raw: any): string | null | undefined {
   const p = raw.trim();
   if (!p) return undefined;
   if (p === 'all') return 'all';
-  if (!PROJECT_RE.test(p)) return null;
-  return p;
+  const canonical = canonicalProjectSlug(p);
+  if (!canonical || canonical !== p) return null;
+  return canonical;
 }
 
 /** Query text used for retrieval: the message + any inlined text attachments. */
@@ -236,6 +244,20 @@ export function handleChatSocket(
     if (project === null) {
       sendJson(ws, { type: 'error', message: 'Invalid project scope' });
       return;
+    }
+
+    // The scope decides whose WSD_PROJECT.md goals, developer notes and FILE
+    // TREE — and whose BM25-retrieved SOURCE CHUNKS — feed the model, so it
+    // needs its own gate. The room gate only covers this socket's OWN project:
+    // the global room is open to every authenticated user, and a message may
+    // name a different project than the room it was sent to. Read is enough
+    // (context is read data); 'all' stays open, mirroring /api/projects.
+    if (project && project !== 'all' && authUser) {
+      const scope = checkProjectAccess(authUser.id, authUser.role, project, 'viewer');
+      if (!scope.allowed) {
+        sendJson(ws, { type: 'error', message: 'Project access denied' });
+        return;
+      }
     }
 
     // Per-user write budget (NAT-shared safe). Reject the message, but keep the

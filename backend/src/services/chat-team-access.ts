@@ -10,6 +10,7 @@
  * System admins always pass.
  */
 import { checkProjectAccess } from '../middleware/auth';
+import { canonicalProjectSlug } from './project-slug-core';
 import type { UserRole } from '../services/user-store';
 import { isChannelAdmin, type CanSendMode, type TeamChannel } from '../services/chat-team-core';
 
@@ -26,9 +27,16 @@ export function canAccessChannel(user: ChatUser, channel: TeamChannel): AccessLe
   if (user.role === 'admin') return 'write';
 
   if (channel.kind === 'project' && channel.projectSlug) {
-    const read = checkProjectAccess(user.id, user.role, channel.projectSlug, 'viewer').allowed;
+    // The stored projectSlug must already be canonical (ensureProjectChannel
+    // stores the canonical slug); fold once here so the gate can never be asked
+    // about a value the channel was not created for — checkProjectAccess refuses
+    // a non-canonical spelling, which fails closed instead of opening the
+    // legacy no-membership fallback.
+    const slug = canonicalProjectSlug(channel.projectSlug);
+    if (!slug) return 'none';
+    const read = checkProjectAccess(user.id, user.role, slug, 'viewer').allowed;
     if (!read) return 'none';
-    const write = checkProjectAccess(user.id, user.role, channel.projectSlug, 'editor').allowed;
+    const write = checkProjectAccess(user.id, user.role, slug, 'editor').allowed;
     return write ? 'write' : 'read';
   }
 

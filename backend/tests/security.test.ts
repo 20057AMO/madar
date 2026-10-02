@@ -62,5 +62,38 @@ describe('Security hardening', () => {
     }
   });
 
+  test('traversal-shaped SLUGS are rejected at the boundary, never resolved to a path', async () => {
+// The regression pair: rel="etc/passwd" is clean and the parameterized
+    // `:slug` would happily capture '..', '../..', 'a/b' - the old sanitizers
+    // only cleaned the RELATIVE part, so `resolveWorkspacePath('..','etc/passwd')`
+    // escaped /workspaces and `deleteMeta('..')` rm -rf'd the whole data dir.
+    // The invariant asserted here is rejection - never 200, never a path
+    // resolved outside the workspace - and the EXACT status per shape, because a
+    // loose 4xx bound is what let the slug filter keep stripping separators
+    // (`a%2Fb` → 'ab', `..%2F..%2Fetc` → '....etc') and looking up a made-up
+    // project instead of refusing the value. Each shape is asserted against what
+    // actually answers, which is deliberately NOT uniform:
+    //   - `%2E%2E` → the HTTP client normalizes the dot segment away before the
+    //     request leaves, so the server never sees a route for it at all (404).
+    //   - a decoded separator (`%2F`) reaching the gate → 400 "Project slug is
+    //     invalid", refused BEFORE any workspace lookup.
+    //   - a bare `%2E` decodes to `/projects/./file`, which Express resolves to
+    //     the PROJECT route with slug "file" — a different resource, so it is
+    //     the honest 404 "Project not found", never a slug rejection.
+    const token = `Bearer ${signTestToken()}`;
+    const paths: Array<[string, number]> = [
+      ['/projects/%2E%2E/file?path=etc/passwd', 404],
+      ['/projects/%2E%2E%2F%2E%2E%2Fetc%2Fpasswd/file?path=x', 400],
+      ['/projects/a%2Fb/file?path=x', 400],
+      ['/projects/%2E/file?path=x', 404],
+    ];
+    for (const [p, expected] of paths) {
+      const res = await fetch(`${API_URL}${p}`, { headers: { Authorization: token } });
+      assert.strictEqual(res.status, expected, `${p} must be ${expected}, got ${res.status}`);
+      const body = await res.text();
+      assert.ok(!body.includes('/etc/') && !body.includes('..\\'), `${p} must not leak a resolved path`);
+    }
+  });
+
 });
 

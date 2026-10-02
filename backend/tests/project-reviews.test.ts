@@ -23,7 +23,27 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
 import { execFileSync } from 'node:child_process';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
+import { uniqueId, req as rawReq, reqAuth as rawReqAuth, initTestAuth, JWT_SECRET, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
+
+/**
+ * Suite-local 429 backoff. This suite alone issues 200+ writes (the cap row
+ * creates 201 threads), so when it runs right behind the other live suites in the
+ * documented one-process full run it can land inside a rate-limit window that a
+ * previous suite consumed — and a 429 then fails an assertion about something
+ * else entirely. Same convention as auth/team-access/team-page: honour
+ * Retry-After and retry instead of reporting the bleed. No row here asserts 429.
+ */
+async function withBackoff<T>(call: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    const res = (await call()) as Response;
+    if (res.status !== 429 || attempt >= 20) return res as unknown as T;
+    const secs = Math.max(1, parseInt(String(res.headers.get('Retry-After') || '2'), 10));
+    await new Promise((r) => setTimeout(r, secs * 1000 + 250));
+  }
+}
+
+const req: typeof rawReq = (m, p, b, h) => withBackoff(() => rawReq(m, p, b, h));
+const reqAuth: typeof rawReqAuth = (m, p, b) => withBackoff(() => rawReqAuth(m, p, b));
 
 function signUser(id: string, username: string, role: string): string {
   return jwt.sign({ id, username, role, tv: 0 }, JWT_SECRET, { expiresIn: '24h' });

@@ -41,7 +41,7 @@ import { type ProjectLimits, getHostInfo } from './services/project-limits';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
-import { loadMeta, saveMeta, listMetaSlugs } from './services/projects-meta';
+import { loadMeta, saveMeta, updateMeta, listMetaSlugs } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
@@ -1434,9 +1434,12 @@ app.delete('/api/archive/:entry', requireRole('editor'), rateLimit('strict', RAT
 // Empty the trash: permanently delete every archive entry (editor+).
 app.post('/api/archive/empty', requireRole('editor'), rateLimit('strict', RATE_WINDOW, RATE_STRICT_MAX), async (req: any, res) => {
   try {
-    const emptied = await emptyTrash();
-    recordAudit('archive-empty', true, req.ip);
-    res.json({ emptied });
+    const { emptied, failed } = await emptyTrash();
+    recordAudit('archive-empty', failed.length === 0, req.ip);
+    // `failed` names the entries that could not be removed (a locked bind-mount
+    // directory). Reporting them is the difference between "the trash is empty"
+    // and "the trash is empty apart from these N".
+    res.json({ emptied, failed });
   } catch (err: any) {
     recordAudit('archive-empty', false, req.ip);
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -1482,10 +1485,10 @@ app.post('/api/projects', async (req: any, res) => {
     // Set owner to the creating user
     const userId = req.user?.id;
     if (userId) {
-      const meta = loadMeta(project.slug) || { activity: [] };
-      meta.ownerId = userId;
-      meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
-      saveMeta(project.slug, meta);
+      updateMeta(project.slug, (meta) => {
+        meta.ownerId = userId;
+        meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
+      });
     }
     invalidateStorageCache();
     invalidateProjectsCache();
@@ -1530,10 +1533,10 @@ app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async 
     // The duplicating user becomes the owner of the copy.
     const userId = req.user?.id;
     if (userId) {
-      const meta = loadMeta(project.slug) || { activity: [] };
-      meta.ownerId = userId;
-      meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
-      saveMeta(project.slug, meta);
+      updateMeta(project.slug, (meta) => {
+        meta.ownerId = userId;
+        meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
+      });
     }
     invalidateStorageCache();
     invalidateProjectsCache();
@@ -1593,10 +1596,10 @@ app.post('/api/projects/import', requireRole('editor'), upload.single('file'), a
     // The restoring user becomes the owner of the recreated copy.
     const userId = req.user?.id;
     if (userId) {
-      const meta = loadMeta(project.slug) || { activity: [] };
-      meta.ownerId = userId;
-      meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
-      saveMeta(project.slug, meta);
+      updateMeta(project.slug, (meta) => {
+        meta.ownerId = userId;
+        meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
+      });
     }
     invalidateStorageCache();
     invalidateProjectsCache();
@@ -1674,9 +1677,9 @@ app.put('/api/projects/:slug/tags', requireProjectAccess('editor'), (req: any, r
       .filter((t) => t.length > 0 && t.length <= 30)
       .filter((t, i, a) => a.indexOf(t) === i);
 
-    const meta = loadMeta(req.params.slug) || {};
-    meta.tags = sanitized;
-    saveMeta(req.params.slug, meta);
+    updateMeta(req.params.slug, (meta) => {
+      meta.tags = sanitized;
+    });
     recordAudit('project-tags', true, req.ip);
     recordActivity(req.params.slug, 'tags_updated', { userId: req.user?.id, details: { tags: sanitized } });
     res.json({ tags: sanitized });
@@ -1899,10 +1902,10 @@ app.post('/api/projects/:slug/snapshots/:file/restore', requireProjectAccess('ed
     const project = await snapAuto.restoreStoredSnapshot(req.params.slug, req.params.file, req.user?.id);
     const userId = req.user?.id;
     if (userId) {
-      const meta = loadMeta(project.slug) || { activity: [] };
-      meta.ownerId = userId;
-      meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
-      saveMeta(project.slug, meta);
+      updateMeta(project.slug, (meta) => {
+        meta.ownerId = userId;
+        meta.members = [{ userId, role: 'admin', addedAt: new Date().toISOString() }];
+      });
     }
     invalidateStorageCache();
     invalidateProjectsCache();
@@ -1934,25 +1937,17 @@ app.get('/api/projects/:slug/members', requireProjectAccess('viewer'), async (re
   }
 });
 
-// Add member
-app.post('/api/projects/:slug/members', async (req: any, res) => {
+// Add member — project admins + system admins only (the middleware also
+// canonicalizes req.params.slug before the handler, so the meta store and the
+// channel sync below name the same project the gate decided on).
+app.post('/api/projects/:slug/members', requireProjectAccess('admin'), async (req: any, res) => {
   try {
-    const meta = loadMeta(req.params.slug);
-    if (!meta) return res.status(404).json({ error: 'Project not found' });
-
+    const slug = req.params.slug;
     const { userId, role } = req.body || {};
     if (!userId || !String(userId).trim()) {
       return res.status(400).json({ error: 'userId is required' });
     }
     const memberRole = ['admin', 'editor', 'viewer'].includes(role) ? role : 'viewer';
-
-    // Only project admins and system admins can add members
-    const callerId = req.user?.id;
-    const callerRole = req.user?.role;
-    const isProjectAdmin = meta.ownerId === callerId || meta.members?.some((m) => m.userId === callerId && m.role === 'admin');
-    if (callerRole !== 'admin' && !isProjectAdmin) {
-      return res.status(403).json({ error: 'Only project or system admins can add members' });
-    }
 
     // Validate user exists
     const targetUser = getUserInfo(userId);
@@ -1960,40 +1955,51 @@ app.post('/api/projects/:slug/members', async (req: any, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (!meta.members) meta.members = [];
-    const existing = meta.members.find((m) => m.userId === userId);
-    let action: 'member-added' | 'member-role-changed' = 'member-added';
-    if (existing) {
-      existing.role = memberRole;
-      action = 'member-role-changed';
-    } else {
-      meta.members.push({ userId, role: memberRole, addedAt: new Date().toISOString() });
-    }
-    saveMeta(req.params.slug, meta);
+    const callerId = req.user?.id;
+    const outcome = { roleChanged: false };
+    // Read-modify-write through the per-slug queue: a whole-document write built
+    // from an earlier loadMeta() would drop anything another writer persisted in
+    // between (ports, limits, tags, snapshot config).
+    updateMeta(slug, (meta) => {
+      if (!meta.ownerId && !meta.members) {
+        throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+      }
+      if (!meta.members) meta.members = [];
+      const existing = meta.members.find((m) => m.userId === userId);
+      if (existing) {
+        existing.role = memberRole;
+        outcome.roleChanged = true;
+      } else {
+        meta.members.push({ userId, role: memberRole, addedAt: new Date().toISOString() });
+      }
+    });
+    const action = outcome.roleChanged ? 'member-role-changed' : 'member-added';
     try {
-      await addChannelMember(`project:${req.params.slug}`, userId, memberRole);
+      await addChannelMember(`project:${slug}`, userId, memberRole);
     } catch { /* channel sync is cosmetic, never blocks */ }
     invalidateProjectsCache();
     recordAudit(action, true, req.ip, userId);
-    recordActivity(req.params.slug, action === 'member-role-changed' ? 'member_role_changed' : 'member_added', {
+    recordActivity(slug, action === 'member-role-changed' ? 'member_role_changed' : 'member_added', {
       userId: callerId,
       details: { targetUserId: userId, username: targetUser.username, role: memberRole },
     });
     res.json({ member: { userId, role: memberRole } });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || err.status || 500).json({ error: err.message });
   }
 });
 
-// Remove member
-app.delete('/api/projects/:slug/members/:userId', async (req: any, res) => {
+// Remove member — viewer+ (a member may always remove THEMSELVES); the handler
+// keeps the self/admin/owner checks.
+app.delete('/api/projects/:slug/members/:userId', requireProjectAccess('viewer'), async (req: any, res) => {
   try {
-    const meta = loadMeta(req.params.slug);
-    if (!meta) return res.status(404).json({ error: 'Project not found' });
-
+    const slug = req.params.slug;
     const targetUserId = req.params.userId;
     const callerId = req.user?.id;
     const callerRole = req.user?.role;
+    const meta = loadMeta(slug);
+    if (!meta) return res.status(404).json({ error: 'Project not found' });
+
     const isProjectAdmin = meta.ownerId === callerId || meta.members?.some((m) => m.userId === callerId && m.role === 'admin');
 
     // Users can remove themselves; otherwise must be admin
@@ -2006,26 +2012,30 @@ app.delete('/api/projects/:slug/members/:userId', async (req: any, res) => {
       return res.status(400).json({ error: 'Cannot remove the project owner' });
     }
 
-    if (!meta.members) meta.members = false as any;
-    const before = meta.members?.length || 0;
-    meta.members = (meta.members || []).filter((m) => m.userId !== targetUserId);
-    if (meta.members.length === before) {
-      return res.status(404).json({ error: 'Member not found' });
-    }
-    saveMeta(req.params.slug, meta);
+    // updateMeta (not saveMeta): the member list is one field of a shared
+    // document, so a concurrent writer's ports/limits/tags must survive.
+    const removed = updateMeta(slug, (m) => {
+      if (!m.members) m.members = [];
+      const before = m.members.length;
+      m.members = m.members.filter((x) => x.userId !== targetUserId);
+      if (m.members.length === before) {
+        throw Object.assign(new Error('Member not found'), { statusCode: 404 });
+      }
+    });
+    if (!removed) return res.status(404).json({ error: 'Project not found' });
     try {
-      await removeChannelMember(`project:${req.params.slug}`, targetUserId);
+      await removeChannelMember(`project:${slug}`, targetUserId);
     } catch { /* channel sync is cosmetic, never blocks */ }
     invalidateProjectsCache();
     recordAudit('member-removed', true, req.ip, targetUserId);
     const targetUser = getUserInfo(targetUserId);
-    recordActivity(req.params.slug, 'member_removed', {
+    recordActivity(slug, 'member_removed', {
       userId: callerId,
       details: { targetUserId, username: targetUser?.username || targetUserId },
     });
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || err.status || 500).json({ error: err.message });
   }
 });
 
@@ -2073,18 +2083,21 @@ app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, as
     // Deterministic ownership: BOTH the old and new owner stay explicit admin
     // members in meta — a legacy project with no members row for the old owner
     // must never lose silent access the moment the ownership moves.
-    if (!meta.members) meta.members = [];
-    const ensureAdmin = (ownerId: string) => {
-      const existing = meta.members!.find((m) => m.userId === ownerId);
-      if (existing) existing.role = 'admin';
-      else meta.members!.push({ userId: ownerId, role: 'admin', addedAt: now });
-    };
-    if (meta.ownerId) ensureAdmin(meta.ownerId);
-    ensureAdmin(userId);
-
     const previousOwner = meta.ownerId;
-    meta.ownerId = userId;
-    saveMeta(req.params.slug, meta);
+    // Re-load + mutate under the per-slug lock: the password verification above
+    // is an await, so writing the pre-await loaded doc back could clobber a
+    // concurrent member change made while the password check was running.
+    updateMeta(req.params.slug, (m) => {
+      if (!m.members) m.members = [];
+      const ensureAdmin = (ownerId: string) => {
+        const existing = m.members!.find((mm) => mm.userId === ownerId);
+        if (existing) existing.role = 'admin';
+        else m.members!.push({ userId: ownerId, role: 'admin', addedAt: now });
+      };
+      if (m.ownerId) ensureAdmin(m.ownerId);
+      ensureAdmin(userId);
+      m.ownerId = userId;
+    });
     invalidateProjectsCache();
     recordAudit('ownership-transferred', true, req.ip, userId);
     recordActivity(req.params.slug, 'ownership_transferred', {
@@ -2258,6 +2271,15 @@ app.post('/api/opencode/open', userWriteLimiter, async (req: any, res) => {
       return res.status(400).json({ error: 'Project slug required' });
     }
     slug = canonicalProjectSlug(rawSlug);
+    // A value that folds to nothing (whitespace, junk) is not a project identity
+    // at all, so it is answered BEFORE the gate: checkProjectAccess refuses an
+    // empty slug (correctly — it cannot authorize nothing), but reporting 403
+    // there would blame authorization for a value that never named a resource and
+    // would mask the documented malformed-vs-missing contract (404, not 400).
+    if (!slug) {
+      recordAudit('opencode-open-failed', false, req.ip, req.user?.id, { slug: rawSlug });
+      return res.status(404).json({ error: 'Project not found' });
+    }
     const { allowed } = checkProjectAccess(req.user.id, req.user.role, slug, 'editor');
     if (!allowed) {
       recordAudit('opencode-open-failed', false, req.ip, req.user?.id, { slug });
@@ -2265,10 +2287,9 @@ app.post('/api/opencode/open', userWriteLimiter, async (req: any, res) => {
     }
     const info = await getProject(slug);
     if (!info) {
-      // Reached by a well-formed-but-unknown slug AND by one that folds to
-      // nothing (whitespace, junk) — neither can name a project, so 404 is the
-      // truthful answer and keeps the "does it exist" contract of every other
-      // project route. getProject() swallows validateProjectSlug's throw.
+// Reached by a well-formed-but-unknown slug - getProject() swallows
+      // validateProjectSlug's throw, so a value that slipped past canonicalization
+      // lands here instead of 500ing.
       recordAudit('opencode-open-failed', false, req.ip, req.user?.id, { slug });
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -2495,7 +2516,12 @@ app.post('/api/updates/apply', requireAdmin, authLimiter, updateApplyLimiter, as
 
 app.post('/api/opencode/delegate/:slug', userWriteLimiter, async (req: any, res) => {
   try {
-    const slug = String(req.params.slug || '').trim();
+    // Canonicalize ONCE, BEFORE the gate, and reuse that one value for the
+    // access check, the store lookup and the service that runs the agent —
+    // otherwise the gate decides about a different slug than the one acted on
+    // (and a non-canonical value would fall through to the legacy open
+    // fallback). No 400 here on purpose: an empty fold is an anti-oracle 403.
+    const slug = canonicalProjectSlug(String(req.params.slug || '').trim());
     // Permission gate FIRST (L1 anti-oracle): resolve the capability from the
     // roster and gate access before loadMeta/probe, so users without access
     // can never distinguish 404/503 from their 403.
@@ -2644,10 +2670,10 @@ app.patch('/api/projects/:slug', requireProjectAccess('editor'), async (req: any
     const project = await getProject(req.params.slug);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const { name, description } = req.body || {};
-    const meta = loadMeta(project.slug) || {};
-    if (typeof name === 'string' && name.trim()) meta.name = name.trim().slice(0, 100);
-    if (typeof description === 'string') meta.description = description.trim().slice(0, 2000);
-    saveMeta(project.slug, meta);
+    updateMeta(project.slug, (meta) => {
+      if (typeof name === 'string' && name.trim()) meta.name = name.trim().slice(0, 100);
+      if (typeof description === 'string') meta.description = description.trim().slice(0, 2000);
+    });
     recordActivity(project.slug, 'updated', { userId: req.user?.id });
     res.json({ project: publicProject(await getProject(project.slug)) });
   } catch (err: any) {
@@ -2693,9 +2719,9 @@ app.put('/api/projects/:slug/env', requireProjectAccess('editor'), async (req: a
         if (typeof v === 'string' && v.length <= 4000) clean[k] = v;
       }
     }
-    const meta = loadMeta(project.slug) || {};
-    meta.env = clean;
-    saveMeta(project.slug, meta);
+    updateMeta(project.slug, (meta) => {
+      meta.env = clean;
+    });
     recordActivity(project.slug, 'env_updated', { userId: req.user?.id, details: { count: Object.keys(clean).length } });
     res.json({ env: clean, needsRecreate: project.status === 'running' });
   } catch (err: any) {

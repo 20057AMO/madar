@@ -223,8 +223,13 @@ describe('Project activity feed', () => {
     const anon = await req('GET', `/projects/${slug}/activity`);
     assert.strictEqual(anon.status, 401, 'anonymous blocked');
 
+    // A REAL user that is not a member. An invented id cannot be used here: the
+    // session verifiers refuse a token whose subject no longer exists (that is
+    // the whole point of the revocation work), so it would answer 401 and the row
+    // would silently stop testing the gate at all.
+    assert.ok(tempUser, 'the temp user must exist');
     const outsider = await req('GET', `/projects/${slug}/activity`, undefined, {
-      Authorization: `Bearer ${tokenFor('some-other-user', 'outsider', 'viewer')}`,
+      Authorization: `Bearer ${tokenFor(tempUser!.id, tempUser!.username, 'viewer')}`,
     });
     assert.strictEqual(outsider.status, 403, 'non-member viewer blocked');
 

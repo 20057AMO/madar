@@ -14,7 +14,7 @@
  * them to dockerode exec + a host.docker.internal HTTP probe.
  */
 import Docker from 'dockerode';
-import { loadMeta, saveMeta } from './projects-meta';
+import { loadMeta, updateMeta } from './projects-meta';
 import { recordActivity } from './project-activity';
 import {
   HttpError,
@@ -203,11 +203,11 @@ export async function startServeProcess(
     throw new HttpError(409, `Port ${port} is already in use inside the container`);
   }
 
-  const meta = loadMeta(slug) || { activity: [] };
-  meta.serve = { enabled: true, port, pid };
-  saveMeta(slug, meta);
+  const saved = updateMeta(slug, (meta) => {
+    meta.serve = { enabled: true, port, pid };
+  });
   recordActivity(slug, 'serve_started', { userId, details: { port } });
-  return deriveServeState(meta.serve, meta.ports, { active: true, httpCode: null, status: 'open' });
+  return deriveServeState(saved.serve, saved.ports, { active: true, httpCode: null, status: 'open' });
 }
 
 /**
@@ -247,11 +247,13 @@ export async function stopServeProcess(slug: string, userId?: string): Promise<S
     ]);
   }
 
-  const next: ServeConfig = { enabled: false, port };
-  meta.serve = next;
-  saveMeta(slug, meta);
+  // Persist enabled:false under the same lock as the read — the loaded doc
+  // could not be written back stale after the await chain above.
+  const saved = updateMeta(slug, (m) => {
+    m.serve = { enabled: false, port };
+  });
   recordActivity(slug, 'serve_stopped', { userId, details: port !== undefined ? { port } : undefined });
-  return deriveServeState(next, meta.ports, null);
+  return deriveServeState(saved.serve, saved.ports, null);
 }
 
 /** Is the served state actually live right now? (enabled + running container). */
@@ -327,10 +329,11 @@ export async function ensureServeRunning(slug: string): Promise<void> {
       console.warn(`[serve] no valid published port to serve for '${slug}':`, err?.message || err);
       try {
         const m = loadMeta(slug);
-        const sv = serveWithError(m?.serve);
-        if (m && sv?.enabled) {
-          sv.error = String(err?.message || err);
-          saveMeta(slug, m);
+        if (m && serveWithError(m?.serve)?.enabled) {
+          updateMeta(slug, (mm) => {
+            const sv = serveWithError(mm?.serve);
+            if (sv?.enabled) sv.error = String(err?.message || err);
+          });
         }
       } catch {
         /* best-effort */
@@ -346,10 +349,11 @@ export async function ensureServeRunning(slug: string): Promise<void> {
       // Already serving — clear any stale error (there's no PID to update; we
       // re-derive state from the config + probe).
       const m = loadMeta(slug);
-      const sv = serveWithError(m?.serve);
-      if (sv?.error) {
-        delete sv.error;
-        saveMeta(slug, m!);
+      if (serveWithError(m?.serve)?.error) {
+        updateMeta(slug, (mm) => {
+          const sv = serveWithError(mm?.serve);
+          if (sv?.error) delete sv.error;
+        });
       }
       return;
     }
@@ -358,10 +362,11 @@ export async function ensureServeRunning(slug: string): Promise<void> {
     const started = await startServeProcess(slug, rederivedPort, hostPort);
     if (started.active && !started.error) {
       const m = loadMeta(slug);
-      const sv = serveWithError(m?.serve);
-      if (sv?.error) {
-        delete sv.error;
-        saveMeta(slug, m!);
+      if (serveWithError(m?.serve)?.error) {
+        updateMeta(slug, (mm) => {
+          const sv = serveWithError(mm?.serve);
+          if (sv?.error) delete sv.error;
+        });
       }
     }
   } catch (err: any) {
@@ -369,10 +374,11 @@ export async function ensureServeRunning(slug: string): Promise<void> {
     console.warn(`[serve] ensureServeRunning failed for '${slug}':`, err?.message || err);
     try {
       const m = loadMeta(slug);
-      const sv = serveWithError(m?.serve);
-      if (m && sv?.enabled) {
-        sv.error = String(err?.message || err);
-        saveMeta(slug, m);
+      if (m && serveWithError(m?.serve)?.enabled) {
+        updateMeta(slug, (mm) => {
+          const sv = serveWithError(mm?.serve);
+          if (sv?.enabled) sv.error = String(err?.message || err);
+        });
       }
     } catch {
       /* best-effort */

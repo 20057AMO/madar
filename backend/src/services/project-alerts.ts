@@ -26,7 +26,7 @@
  */
 import Docker from 'dockerode';
 import type { CrashInfo } from './projects-meta';
-import { loadMeta, listMetaSlugs, saveMeta, setCrashState, setCrashWatch } from './projects-meta';
+import { loadMeta, listMetaSlugs, updateMeta, setCrashState, setCrashWatch } from './projects-meta';
 import { recordAudit } from './audit-store';
 import { dispatchWebhook } from './webhook-sender';
 import { recordActivity } from './project-activity';
@@ -161,14 +161,14 @@ export async function sweepProjectAlerts(): Promise<string[]> {
  * mistaken for the previous one.
  */
 export async function resetCrashState(slug: string): Promise<void> {
-  const meta = loadMeta(slug);
-  if (!meta) return;
-  delete meta.crash;
-  delete meta.requestedStop;
+  if (!loadMeta(slug)) return;
   const state = await getContainerState(slug);
-  if (state) meta.crashWatch = { restartCount: state.restartCount, startedAt: state.startedAt };
-  else delete meta.crashWatch;
-  saveMeta(slug, meta);
+  updateMeta(slug, (meta) => {
+    delete meta.crash;
+    delete meta.requestedStop;
+    if (state) meta.crashWatch = { restartCount: state.restartCount, startedAt: state.startedAt };
+    else delete meta.crashWatch;
+  });
 }
 
 /**
@@ -182,15 +182,15 @@ export async function resetCrashState(slug: string): Promise<void> {
  * resetCrashState.
  */
 export async function manualClearCrash(slug: string, userId?: string): Promise<void> {
-  const meta = loadMeta(slug);
-  if (!meta) return;
+  if (!loadMeta(slug)) return;
   const state = await getContainerState(slug);
   const running = state?.running === true;
-  delete meta.crash;
-  if (!running) meta.requestedStop = true;
-  if (state) meta.crashWatch = { restartCount: state.restartCount, startedAt: state.startedAt };
-  else { delete meta.crashWatch; delete meta.requestedStop; }
-  saveMeta(slug, meta);
+  updateMeta(slug, (meta) => {
+    delete meta.crash;
+    if (!running) meta.requestedStop = true;
+    if (state) meta.crashWatch = { restartCount: state.restartCount, startedAt: state.startedAt };
+    else { delete meta.crashWatch; delete meta.requestedStop; }
+  });
   recordActivity(slug, 'crash_cleared', { userId });
 }
 

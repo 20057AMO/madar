@@ -44,6 +44,7 @@ import {
 } from './opencode-api';
 import { getAgent } from './opencode-studio';
 import { checkProjectAccess } from '../middleware/auth';
+import { canonicalProjectSlug } from './project-slug-core';
 import { loadMeta } from './projects-meta';
 import { recordActivity } from './project-activity';
 import { recordAudit } from './audit-store';
@@ -137,8 +138,13 @@ export async function startDelegation(
   user: DelegationUser,
   opts: StartDelegationOptions,
 ): Promise<StartDelegationResult> {
-  const clean = String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '').slice(0, 64);
-  if (!clean || clean === '.' || clean === '..') {
+  // ONE canonical value for the gate, the meta store, the delegation store and
+  // the workspace the agent runs in. The old sanitizer kept dots, so the gate
+  // decided about `secret.plan` (a real legacy directory) while nothing folded
+  // it — every lookup below then missed the project and, worse, a caller could
+  // name a scope the gate and the execution did not share.
+  const clean = canonicalProjectSlug(slug);
+  if (!clean) {
     throw new HttpError(404, 'Project not found');
   }
   if (!loadMeta(clean)) throw new HttpError(404, 'Project not found');
@@ -371,7 +377,9 @@ async function runDelegation(
 
 /** Live state of the project's active task (or idle). */
 export function getDelegationState(slug: string): DelegationActiveState | DelegationIdleState {
-  const task = activeTasks.get(String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '').slice(0, 64));
+  // Folded exactly like startDelegation stores it — otherwise the state lookup
+  // can miss a run keyed by the canonical slug.
+  const task = canonicalProjectSlug(slug) ? activeTasks.get(canonicalProjectSlug(slug)!) : undefined;
   if (!task) return { state: 'idle' };
   return {
     state: 'running',

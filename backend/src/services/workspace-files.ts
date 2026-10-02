@@ -7,8 +7,9 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { HttpError, WORKSPACES_ROOT } from './docker-manager';
+import { WORKSPACES_ROOT } from './docker-manager';
 import { IGNORED_DIRS, invalidateProjectContext } from './project-context';
+import { HttpError, cleanStoreSlug, isStrictlyInside } from './project-slug-core';
 
 const MAX_PREVIEW_CHARS = 200 * 1024;
 
@@ -16,6 +17,25 @@ const MAX_PREVIEW_CHARS = 200 * 1024;
  *  of shipping a multi-thousand-row array to the Files tab. Totals below
  *  (fileCount/totalBytes) always reflect the FULL directory, never the slice. */
 const MAX_LIST_ENTRIES = 1000;
+
+/**
+ * Resolve a slug to its workspace dir and VERIFY it is strictly inside the
+ * workspace root. The slug sanitizer keeps dots on purpose (legacy slugs
+ * `my.project_2` exist), so `..` survives it and — before this check — made
+ * `resolveWorkspacePath('..', 'etc/passwd')` resolve OUTSIDE /workspaces
+ * (the rel-path guard only sanitized the RELATIVE part, never the base).
+ * `.` / `..` / empty / separator-bearing slugs throw 400.
+ */
+function workspaceBase(slug: unknown): string {
+  const clean = cleanStoreSlug(String(slug ?? ''));
+  if (!clean || clean === '.' || clean === '..' || String(slug).includes('/') || String(slug).includes('\\')) {
+    throw new HttpError(400, 'Project slug is invalid');
+  }
+  const root = path.resolve(WORKSPACES_ROOT);
+  const base = path.resolve(root, clean);
+  if (!isStrictlyInside(root, base)) throw new HttpError(400, 'Project slug is invalid');
+  return base;
+}
 
 export interface FileEntry {
   path: string;
@@ -47,7 +67,15 @@ export interface SubdirInfo {
  * survives restarts and only needs to be computed once.
  */
 export function resolveProjectSubdir(slug: string): SubdirInfo {
-  const base = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
+  // Non-throwing on purpose: ws-terminal calls this without a try/catch. An
+  // unsafe key falls back to the workspace ROOT rather than resolving `..`
+  // outside it (the old behavior scanned the parent directory for git repos).
+  let base: string;
+  try {
+    base = workspaceBase(slug);
+  } catch {
+    return { subdir: '', hostPath: path.resolve(WORKSPACES_ROOT), containerPath: '/workspace' };
+  }
   if (!fs.existsSync(base)) {
     return { subdir: '', hostPath: base, containerPath: '/workspace' };
   }
@@ -96,8 +124,8 @@ export function resolveProjectSubdir(slug: string): SubdirInfo {
 
 /** Resolve a workspace path safely; throws on traversal or missing workspace. */
 export function resolveWorkspacePath(slug: string, rel?: string): string {
-  const cleanSlug = String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '');
-  const base = path.resolve(WORKSPACES_ROOT, cleanSlug);
+  const base = workspaceBase(slug);
+  const cleanSlug = cleanStoreSlug(String(slug ?? ''));
   if (!fs.existsSync(base)) throw new HttpError(404, `Project workspace '${cleanSlug}' not found`);
 
   const relClean = String(rel ?? '')
@@ -255,7 +283,7 @@ export function streamWorkspaceFile(
 }
 
 export function deleteWorkspacePath(slug: string, rel: string): { ok: boolean; type: 'file' | 'dir' } {
-  const base = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
+  const base = workspaceBase(slug);
   const target = resolveWorkspacePath(slug, rel);
   if (target === base) throw new HttpError(400, 'Cannot delete the workspace root');
 
@@ -281,7 +309,7 @@ export function writeWorkspaceFile(
   rel: string,
   content: string
 ): { ok: true; path: string; bytes: number } {
-  const base = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
+  const base = workspaceBase(slug);
   const target = resolveWorkspacePath(slug, rel);
   if (target === base) throw new HttpError(400, 'Invalid file path');
   if (typeof content !== 'string') throw new HttpError(400, 'Content must be a string');
@@ -303,7 +331,7 @@ export function writeWorkspaceFile(
 export function renameWorkspacePath(slug: string, from: string, to: string): { ok: true } {
   const src = resolveWorkspacePath(slug, from);
   const dst = resolveWorkspacePath(slug, to);
-  const base = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
+  const base = workspaceBase(slug);
   if (src === base || dst === base) throw new HttpError(400, 'Invalid rename path');
   if (src === dst) return { ok: true };
   if (!fs.existsSync(src)) throw new HttpError(404, 'Source not found');

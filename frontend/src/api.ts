@@ -1533,7 +1533,7 @@ export const deleteArchive = (entry: string) =>
   api<{ ok: boolean }>(`/api/archive/${encodeURIComponent(entry)}`, { method: 'DELETE' });
 
 export const emptyTrash = () =>
-  api<{ emptied: number }>('/api/archive/empty', {
+  api<{ emptied: number; failed: string[] }>('/api/archive/empty', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',

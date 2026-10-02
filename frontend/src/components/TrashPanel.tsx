@@ -63,9 +63,15 @@ export function TrashPanel({ onRestored, onTrashCountChange }: TrashPanelProps) 
     if (emptyBusy) return;
     setEmptyBusy(true);
     try {
-      await emptyTrash();
+      const res = await emptyTrash();
       setEmptyOpen(false);
       await load();
+      // The server reports what it could not remove (a directory locked through the
+      // bind mount). Saying "done" over a still-full trash is exactly the kind of
+      // quiet failure this panel must not show.
+      if (res.failed?.length) {
+        setError(`Emptied ${res.emptied} entr${res.emptied === 1 ? 'y' : 'ies'}, but ${res.failed.length} could not be removed (${res.failed.join(', ')}). Try again in a moment.`);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to empty trash');
     } finally {

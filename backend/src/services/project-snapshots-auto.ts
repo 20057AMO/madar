@@ -16,7 +16,8 @@ import fs from 'fs';
 import path from 'path';
 import { pipeline } from 'stream/promises';
 import { HttpError } from './docker-manager';
-import { loadMeta, saveMeta, listMetaSlugs, type SnapshotSchedule } from './projects-meta';
+import { loadMeta, updateMeta, listMetaSlugs, type SnapshotSchedule } from './projects-meta';
+import { assertSafeStoreSlug } from './project-slug-core';
 import { exportProjectSnapshot, importProjectSnapshot } from './project-snapshots';
 import { dispatchWebhook } from './webhook-sender';
 import { recordActivity } from './project-activity';
@@ -45,7 +46,9 @@ export interface SnapshotEntry {
 }
 
 function snapshotsDir(slug: string): string {
-  const clean = String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '');
+  // Containment-checked: the raw storage filter keeps dots (legacy slugs), so
+  // a `..` key would otherwise resolve snapshots OUTSIDE the projects dir.
+  const clean = assertSafeStoreSlug(slug, PROJECTS_DIR);
   return path.join(PROJECTS_DIR, clean, 'snapshots');
 }
 
@@ -62,10 +65,10 @@ export function snapshotConfig(slug: string): SnapshotSchedule & { lastSnapshotA
 
 /** Update a project's schedule (partial merge, re-validated). */
 export function setSnapshotConfig(slug: string, input: Record<string, unknown>): ReturnType<typeof snapshotConfig> {
-  const meta = loadMeta(slug);
-  if (!meta) throw new HttpError(404, `Project '${slug}' not found`);
-  meta.snapshot = sanitizeSchedule(input || {}, meta.snapshot);
-  saveMeta(slug, meta);
+  if (!loadMeta(slug)) throw new HttpError(404, `Project '${slug}' not found`);
+  updateMeta(slug, (meta) => {
+    meta.snapshot = sanitizeSchedule(input || {}, meta.snapshot);
+  });
   return snapshotConfig(slug);
 }
 
@@ -168,8 +171,13 @@ export async function captureSnapshot(slug: string, userId?: string): Promise<Sn
   }
 
   const size = fs.statSync(abs).size;
-  meta.lastSnapshotAt = new Date().toISOString();
-  saveMeta(slug, meta);
+  // Write under the per-slug lock AFTER the awaited pipeline: saving the
+  // pre-await loaded doc back would clobber any concurrent meta change
+  // (name edit, ports, schedule, crash state) that landed mid-capture.
+  const saved = updateMeta(slug, (m) => {
+    m.lastSnapshotAt = new Date().toISOString();
+  });
+  const at = saved.lastSnapshotAt!;
 
   // Retention: keep at most `keep` newest archive files.
   if (schedule.keep >= 1) {
@@ -186,15 +194,15 @@ export async function captureSnapshot(slug: string, userId?: string): Promise<Sn
   dispatchWebhook('snapshot-saved', {
     event: 'snapshot-saved',
     slug,
-    name: meta.name || slug,
+    name: saved.name || slug,
     file,
     size,
-    at: meta.lastSnapshotAt,
+    at,
   });
 
   recordActivity(slug, 'snapshot_captured', { userId, details: { file, size } });
 
-  return { file, size, at: meta.lastSnapshotAt };
+  return { file, size, at };
 }
 
 // ── Scheduling ───────────────────────────────────────────────────────────

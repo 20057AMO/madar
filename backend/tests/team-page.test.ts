@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
-import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, JSON_HEADERS } from './helpers.ts';
+import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, JSON_HEADERS, testIdentity } from './helpers.ts';
 
 /**
  * Team page & permissions round:
@@ -134,10 +134,14 @@ describe('Team page & permissions (real Docker container)', () => {
 
   test('admin cannot demote their own role (400 — lockout guard)', async () => {
     await new Promise(r => setTimeout(r, 2000));
-    // The shared forged admin token pads id 'test-user'; PATCH own role away
-    // from admin must be refused before any store write (and before any
-    // password check — a self-demote is a lockout, not a mutation).
-    const res = await requestWithBackoff('PATCH', `/users/test-user/role`, { role: 'viewer', accountPassword: 'irrelevant' }, authHeaders());
+    // The path MUST carry the CALLER's own id — the guard compares it against the
+    // authenticated subject. It used to hardcode the literal 'test-user' (the id
+    // of a forged helper token), so with a real adopted session the guard never
+    // matched and the request fell through to the password check, answering 401
+    // for a wrong password instead of the 400 lockout refusal under test.
+    const me = testIdentity();
+    assert.ok(me, 'the adopted test identity must be known');
+    const res = await requestWithBackoff('PATCH', `/users/${me!.id}/role`, { role: 'viewer', accountPassword: 'irrelevant' }, authHeaders());
     assert.strictEqual(res.status, 400, `self-demote: ${res.status}`);
     const body = await res.json();
     assert.match(String(body.error || ''), /own role/i);

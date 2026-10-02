@@ -263,14 +263,30 @@ describe('Trash Bin API (archive) — real Docker', () => {
     const { status: listStatus, json: listJson } = await getArchive(authHeaders(), true);
     assert.strictEqual(listStatus, 200);
     assert.ok(listJson.archives.length >= 2, `expected >= 2 entries before empty, got ${listJson.archives.length}`);
+    const before = listJson;
 
     const e = await emptyArchive();
     assert.strictEqual(e.status, 200, `empty: ${e.status} ${e.json.error || ''}`);
     assert.strictEqual(typeof e.json.emptied, 'number', 'emptied must be a number');
     assert.ok(e.json.emptied >= 2, `emptied must be >= 2, got ${e.json.emptied}`);
+    assert.ok(Array.isArray(e.json.failed), 'failed must be an array (entries that could not be removed)');
 
     const { json: after } = await getArchive(authHeaders(), true);
-    assert.strictEqual(after.archives.length, 0, `expected 0 entries after empty, got ${after.archives.length}`);
+    // "Everything that existed when the call ran is gone, or it was named as a
+    // failure" — NOT "the archive is globally empty". The workspace janitor keeps
+    // archiving orphaned project dirs on its own interval, so in a long stacked run
+    // a directory can be archived between the empty call and this read; that entry
+    // was not part of the request. And a directory locked through the Windows bind
+    // mount can survive the rm inside the container (Docker Desktop refuses an rm the
+    // host allows seconds later), which is exactly what `failed` reports instead of
+    // silently dropping from the count.
+    const survivors = after.archives.filter((a: any) => before.archives.some((b: any) => b.entry === a.entry));
+    const unreported = survivors.filter((a: any) => !e.json.failed.includes(a.entry));
+    assert.deepStrictEqual(
+      unreported.map((a: any) => a.entry),
+      [],
+      `entries left behind must be reported in failed: ${JSON.stringify(unreported.map((a: any) => a.entry))}`,
+    );
   });
 
   // ── 4. Seed → restore → working project ───────────────────────
@@ -457,8 +473,20 @@ describe('Trash Bin API (archive) — real Docker', () => {
       createdUserIds.push(editorUser.id);
       editorAuth = forgeAuth(editorUser.id, editorUser.username, 'editor').headers;
 
-      // Outsider: a forged token with no project membership.
-      outsiderAuth = forgeAuth('outsider-fake-id', 'outsider', 'viewer').headers;
+      // Outsider: a REAL viewer that is not a member anywhere. It used to be a
+      // fabricated id ('outsider-fake-id'), which no longer reaches the gate at
+      // all: the session verifiers refuse a token whose subject does not exist,
+      // so the row answered 401 from the auth layer and silently stopped testing
+      // the role gate this route actually has.
+      const ou = await reqAuth('POST', '/users', {
+        username: uniqueId('arc-out'),
+        password: 'Pw-123456!',
+        role: 'viewer',
+      });
+      assert.strictEqual(ou.status, 201, 'outsider user create');
+      const outsiderUser = await ou.json();
+      createdUserIds.push(outsiderUser.id);
+      outsiderAuth = forgeAuth(outsiderUser.id, outsiderUser.username, 'viewer').headers;
 
       // Ensure at least one entry exists for the access tests.
       seedArchiveEntry(`${TS}-access-check`);
@@ -501,7 +529,7 @@ describe('Trash Bin API (archive) — real Docker', () => {
     });
 
     test('outsider viewer DELETE /api/archive/:entry → 403', async () => {
-      // Outsider has viewer role (forged token) → 403 on editor+ route.
+      // A real non-admin account → refused by the ROLE gate, not by auth.
       const { status } = await deleteArchive(`${TS}-access-check`, outsiderAuth);
       assert.strictEqual(status, 403, `outsider viewer DELETE → 403, got ${status}`);
     });

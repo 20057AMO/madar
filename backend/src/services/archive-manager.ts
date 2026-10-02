@@ -39,7 +39,7 @@ import {
   HttpError,
   type ProjectInfo,
 } from './docker-manager';
-import { loadMeta, saveMeta } from './projects-meta';
+import { updateMeta } from './projects-meta';
 import { recordActivity } from './project-activity';
 import { invalidateProjectsCache } from './projects-cache';
 import { invalidateStorageCache } from './storage-metrics';
@@ -124,22 +124,46 @@ export async function deleteArchive(entry: string): Promise<void> {
   invalidateStorageCache();
 }
 
-/** Permanently delete EVERY archive entry. Returns the count removed. */
-export async function emptyTrash(): Promise<number> {
+/**
+ * Permanently delete EVERY archive entry.
+ *
+ * Returns what actually happened instead of a single number: an entry that cannot
+ * be removed (a Windows bind-mount handle is the usual reason — Docker Desktop can
+ * refuse an rm that the host allows moments later) used to be swallowed silently,
+ * so the API answered `emptied: 2` while a third entry was still sitting there.
+ * Reporting the failures keeps the response honest and gives the UI something to
+ * say other than "done".
+ */
+export async function emptyTrash(): Promise<{ emptied: number; failed: string[] }> {
   let count = 0;
+  const failed: string[] = [];
   for (const entry of listArchiveEntries(archiveRoot())) {
     const full = archiveEntryPath(archiveRoot(), entry);
     if (!full || !fs.existsSync(full)) continue;
-    try {
-      fs.rmSync(full, { recursive: true, force: true });
+    let removed = false;
+    let lastError: unknown = null;
+    // Two attempts: a bind-mount lock is usually a transient handle, not a
+    // permanent refusal.
+    for (let attempt = 0; attempt < 2 && !removed; attempt += 1) {
+      try {
+        fs.rmSync(full, { recursive: true, force: true });
+        removed = true;
+      } catch (err) {
+        lastError = err;
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+    if (removed) {
       count += 1;
-    } catch {
-      /* skip unremovable entries — never fail the whole empty over one */
+    } else {
+      failed.push(entry);
+      console.warn(`[archive] empty skipped ${entry}: ${(lastError as any)?.code || lastError}`);
     }
   }
   invalidateArchiveCache();
   invalidateStorageCache();
-  return count;
+  // Cap the report so a pathological directory cannot answer with a huge body.
+  return { emptied: count, failed: failed.slice(0, 20) };
 }
 
 export interface RestoreOptions {
@@ -250,10 +274,10 @@ async function workspaceDirBusy(slug: string): Promise<boolean> {
 
 /** Re-expose a role/owner write after restore (mirrors import/duplicate routes). */
 export async function setOwner(slug: string, userId: string): Promise<void> {
-  const meta = loadMeta(slug) || { activity: [] };
-  meta.ownerId = userId;
-  meta.members = [{ userId, role: 'admin' as const, addedAt: new Date().toISOString() }];
-  saveMeta(slug, meta);
+  updateMeta(slug, (meta) => {
+    meta.ownerId = userId;
+    meta.members = [{ userId, role: 'admin' as const, addedAt: new Date().toISOString() }];
+  });
 }
 
 // Re-exported for the route layer convenience.

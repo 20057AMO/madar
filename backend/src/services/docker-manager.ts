@@ -13,7 +13,9 @@ import crypto from 'crypto';
 import { execSync, spawn, execFileSync } from 'child_process';
 import {
   loadMeta,
-  saveMeta,
+  loadMetaStrict,
+  updateMeta,
+  updateMetaAsync,
   deleteMeta,
   listMetaSlugs,
   markRequestedStop,
@@ -108,37 +110,12 @@ export interface ProjectInfo {
   serve?: ServeState;
 }
 
-/**
- * Fold any input to the canonical project-slug form, WITHOUT throwing.
- *
- * `validateProjectSlug` is the enforcing wrapper (it rejects empty + reserved
- * values); routes that must authorise on the SAME string the rest of the
- * pipeline acts on need the fold itself: evaluating the access gate against a
- * raw, unfurled value lets a near-miss ("my-project!") miss the meta store,
- * trip the legacy no-meta fallback, and still resolve to the real project
- * downstream. Returns '' when nothing usable remains — the caller decides
- * whether that is a 400 (malformed) or a 404 (no such project).
- */
-export function canonicalProjectSlug(slug: unknown): string {
-  return String(slug ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32);
-}
-
-function validateProjectSlug(slug: string): string {
-  const clean = canonicalProjectSlug(slug);
-  if (!clean) throw new HttpError(400, 'Project slug is invalid');
-
-  const RESERVED_SLUGS = ['wsd', 'ide', 'admin', 'api', 'system', 'root', 'workspace'];
-  if (RESERVED_SLUGS.includes(clean)) {
-    throw new HttpError(400, `Project slug '${clean}' is reserved and cannot be used.`);
-  }
-
-  return clean;
-}
+// Slug folding/validation lives in the import-free project-slug-core module so
+// the auth middleware can reuse it without dragging dockerode + the whole
+// service graph into the request hot path (and risking an import cycle).
+// Re-exported here for backward compatibility with the existing barrel import.
+import { HttpError, canonicalProjectSlug, validateProjectSlug } from './project-slug-core';
+export { HttpError, canonicalProjectSlug };
 
 function sanitizeSlug(name: string): string {
   return name
@@ -284,15 +261,6 @@ export function resolvePorts(requested: number[] | undefined, used: Set<number>)
     }
   }
   return out;
-}
-
-/** Error with an HTTP status code — routes map this to the response. */
-export class HttpError extends Error {
-  statusCode: number;
-  constructor(statusCode: number, message: string) {
-    super(message);
-    this.statusCode = statusCode;
-  }
 }
 
 /** Throw a 404 if no container exists for this slug. */
@@ -561,36 +529,41 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
     liveLimits: effectiveLimits,
   };
 
-  const prev = loadMeta(slug);
-  // Merge with any existing meta instead of overwriting: a recreate (or any
-  // later call with the same slug) must preserve membership, owner and the
-  // snapshot schedule rather than silently demoting a team project to the
-  // "legacy, allow all" state. A fresh slug sees prev = null → current behavior.
-  // Crash state (crash / requestedStop / crashWatch) is NEVER carried over —
-  // a brand-new container starts clean; the detector re-seeds its watch on
-  // the next inspect pass.
-  const savedMeta: ProjectMeta = {
-    ...prev,
-    name: clean.name,
-    description: clean.description,
-    image,
-    ports: clean.ports,
-    limits: effectiveLimits,
-    createdAt: info.createdAt,
-    env: clean.env,
-  };
-  // Activity history is owned by project-activity (activity.json) — never
-  // carried through meta, even on a recreate where prev may hold legacy rows.
-  // Force the store's lazy backfill HERE, while meta.json on disk still holds
-  // the legacy `activity` array: deleteActivity below then wipes meta.activity,
-  // and a deferred migration would read the already-cleaned meta → [] (the
-  // pre-migration history would be lost on the first recreate).
-  loadActivity(slug);
-  delete savedMeta.activity;
-  delete savedMeta.crash;
-  delete savedMeta.requestedStop;
-  delete savedMeta.crashWatch;
-  saveMeta(slug, savedMeta);
+// The read-modify-write below runs INSIDE the per-slug meta queue
+  // (updateMetaAsync), which is the whole point: the previous loadMeta/saveMeta
+  // pair was unlocked, so a writer that held a document across an await (the
+  // shape updateProjectLimits uses) could interleave here and persist its STALE
+  // copy — silently reverting this fresh container's createdAt / ports / image.
+  // Queued, each writer loads the other's result and only its own fields change.
+  await updateMetaAsync(slug, (meta) => {
+    // Merge with any existing meta instead of overwriting: a recreate (or any
+    // later call with the same slug) must preserve membership, owner and the
+    // snapshot schedule rather than silently demoting a team project to the
+    // "legacy, allow all" state. A fresh slug sees an empty meta → current behavior.
+    // Crash state (crash / requestedStop / crashWatch) is NEVER carried over —
+    // a brand-new container starts clean; the detector re-seeds its watch on
+    // the next inspect pass.
+    Object.assign(meta, {
+      name: clean.name,
+      description: clean.description,
+      image,
+      ports: clean.ports,
+      limits: effectiveLimits,
+      createdAt: info.createdAt,
+      env: clean.env,
+    });
+    // Activity history is owned by project-activity (activity.json) — never
+    // carried through meta, even on a recreate where the document may hold
+    // legacy rows. Force the store's lazy backfill HERE, while meta.json on disk
+    // still holds the legacy `activity` array: the deletes below then wipe
+    // meta.activity, and a deferred migration would read the already-cleaned
+    // meta → [] (the pre-migration history would be lost on the first recreate).
+    loadActivity(slug);
+    delete meta.activity;
+    delete meta.crash;
+    delete meta.requestedStop;
+    delete meta.crashWatch;
+  });
   // The `created` event lands in the activity store (append oldest→newest).
   recordActivity(slug, 'created', { userId });
 
@@ -986,7 +959,10 @@ export async function checkProjectPorts(slug: string): Promise<PortHealth[]> {
 export async function recreateProject(slug: string, userId?: string): Promise<ProjectInfo> {
   const projectSlug = validateProjectSlug(slug);
   const proj = await requireContainer(projectSlug);
-  const meta: ProjectMeta = loadMeta(projectSlug) || { activity: [] };
+  // Strict load: a CORRUPT meta store must never be silently rebuilt from
+  // defaults here — recreate writes a fresh document over meta.json, and doing
+  // so would destroy the only copy of name/description/ports/env/limits.
+  const meta: ProjectMeta = loadMetaStrict(projectSlug) ?? { activity: [] };
 
   if (proj.containerId) {
     const c = docker.getContainer(proj.containerId);
@@ -1047,9 +1023,9 @@ export async function updateProjectPorts(slug: string, requested: number[], user
     throw err;
   }
 
-  const meta: ProjectMeta = loadMeta(projectSlug) || { activity: [] };
-  meta.ports = requested;
-  saveMeta(projectSlug, meta);
+  updateMeta(projectSlug, (meta) => {
+    meta.ports = requested;
+  });
   recordActivity(projectSlug, 'ports_updated', { userId, details: { ports: requested.map(String) } });
 
   const live = Object.values(proj.hostPorts ?? {})
@@ -1078,17 +1054,19 @@ export async function updateProjectLimits(slug: string, patch: Partial<ProjectLi
   const projectSlug = validateProjectSlug(slug);
   const proj = await requireContainer(projectSlug);
 
-  const meta: ProjectMeta = loadMeta(projectSlug) || { activity: [] };
-  let merged: ProjectLimits;
-  try {
-    merged = sanitizeLimitsPatch(patch, meta.limits ?? {});
-    await checkCeilings(merged, await getHostInfo());
-  } catch (e: any) {
-    throw new HttpError(400, e?.message || 'Invalid resource limits');
-  }
-
-  meta.limits = isEmptyLimits(merged) ? undefined : merged;
-  saveMeta(projectSlug, meta);
+  // Read-modify-write serialized per slug: sanitize + host-ceiling check run
+  // INSIDE the lock so `meta.limits` cannot go stale across the await, and a
+  // corrupt store raises (loadMetaStrict) instead of being rebuilt empty.
+  const meta = await updateMetaAsync(projectSlug, async (m) => {
+    let merged: ProjectLimits;
+    try {
+      merged = sanitizeLimitsPatch(patch, m.limits ?? {});
+      await checkCeilings(merged, await getHostInfo());
+    } catch (e: any) {
+      throw new HttpError(400, e?.message || 'Invalid resource limits');
+    }
+    m.limits = isEmptyLimits(merged) ? undefined : merged;
+  });
   recordActivity(projectSlug, 'limits_updated', { userId, details: meta.limits ?? undefined });
 
   // requireContainer already inspected the container — reuse its liveLimits

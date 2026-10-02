@@ -18,8 +18,9 @@ import { handlePresenceSocket } from './ws-presence';
 import { handleCanvasSocket } from './ws-canvas';
 import { handleChatTeamSocket } from './ws-chat-team';
 import { verifyToken } from '../services/user-store';
-import { decideProjectAccess, decideControlAccess, type AccessSnapshot } from '../services/access-core';
-import { loadMeta } from '../services/projects-meta';
+import { decideProjectAccess, decideControlAccess } from '../services/access-core';
+import { readMeta } from '../services/projects-meta';
+import { canonicalProjectSlug } from '../services/project-slug-core';
 
 /**
  * Project-level authorization gate for WebSocket routes.
@@ -39,8 +40,20 @@ function gateProject(
   minRole: 'admin' | 'editor' | 'viewer'
 ): boolean {
   if (!user) return false;
-  const meta: AccessSnapshot = loadMeta(slug) || {};
-  return decideProjectAccess(user.id, user.role as 'admin' | 'editor' | 'viewer', meta, minRole).allowed;
+  // Fold before the gate — isSafeChatId permits `.`/`..`/uppercase, and a
+  // non-canonical value must never evaluate against a DIFFERENT project's
+  // membership than the one the handler will resolve (see the documented
+  // canonicalize-once-before-the-gate rule). `..` folds to '' → denied.
+  const canonical = canonicalProjectSlug(slug);
+  if (!canonical) return false;
+  const read = readMeta(canonical);
+  return decideProjectAccess(
+    user.id,
+    user.role as 'admin' | 'editor' | 'viewer',
+    read.meta,
+    minRole,
+    read.state
+  ).allowed;
 }
 
 /** Interactive rooms (chat/terminal/logs/agent/presence) stay at 8. */
@@ -84,9 +97,9 @@ export function attachWebSockets(server: http.Server): void {
 
     const chatMatch = url.pathname.match(/^\/ws\/chat\/([^/]+)\/([^/]+)$/);
     if (chatMatch) {
-      const slug = decodeURIComponent(chatMatch[1]);
+      const slug = canonicalProjectSlug(decodeURIComponent(chatMatch[1]));
       const chatId = decodeURIComponent(chatMatch[2]);
-      if (!isSafeChatId(slug) || !isSafeChatId(chatId)) {
+      if (!slug || !isSafeChatId(chatId)) {
         ws.close(1008, 'invalid chat id');
         return;
       }
@@ -101,8 +114,8 @@ export function attachWebSockets(server: http.Server): void {
 
     const termMatch = url.pathname.match(/^\/ws\/projects\/([^/]+)\/terminal$/);
     if (termMatch) {
-      const slug = decodeURIComponent(termMatch[1]);
-      if (!isSafeChatId(slug)) {
+      const slug = canonicalProjectSlug(decodeURIComponent(termMatch[1]));
+      if (!slug) {
         ws.close(1008, 'invalid slug');
         return;
       }
@@ -112,7 +125,7 @@ export function attachWebSockets(server: http.Server): void {
       // container itself (git + docker CLI + socket) → strict admin decision
       // (the legacy open-projects bypass must not hand out host shells).
       const termAllowed = mode === 'control'
-        ? decideControlAccess(authUser?.id ?? '', (authUser?.role ?? 'viewer') as 'admin' | 'editor' | 'viewer', loadMeta(slug) || {}).allowed
+        ? decideControlAccess(authUser?.id ?? '', (authUser?.role ?? 'viewer') as 'admin' | 'editor' | 'viewer', readMeta(slug).meta).allowed
         : gateProject(slug, authUser, 'editor');
       if (!termAllowed) {
         ws.close(1008, 'project access denied');
@@ -129,8 +142,8 @@ export function attachWebSockets(server: http.Server): void {
 
     const logsMatch = url.pathname.match(/^\/ws\/projects\/([^/]+)\/logs$/);
     if (logsMatch) {
-      const slug = decodeURIComponent(logsMatch[1]);
-      if (!isSafeChatId(slug)) {
+      const slug = canonicalProjectSlug(decodeURIComponent(logsMatch[1]));
+      if (!slug) {
         ws.close(1008, 'invalid slug');
         return;
       }
@@ -160,8 +173,8 @@ export function attachWebSockets(server: http.Server): void {
 
     const statusMatch = url.pathname.match(/^\/ws\/projects\/([^/]+)\/status$/);
     if (statusMatch) {
-      const slug = decodeURIComponent(statusMatch[1]);
-      if (!isSafeChatId(slug)) {
+      const slug = canonicalProjectSlug(decodeURIComponent(statusMatch[1]));
+      if (!slug) {
         ws.close(1008, 'invalid slug');
         return;
       }
@@ -213,8 +226,8 @@ export function attachWebSockets(server: http.Server): void {
 
     const presenceMatch = url.pathname.match(/^\/ws\/presence\/([^/]+)$/);
     if (presenceMatch) {
-      const slug = decodeURIComponent(presenceMatch[1]);
-      if (!isSafeChatId(slug)) {
+      const slug = canonicalProjectSlug(decodeURIComponent(presenceMatch[1]));
+      if (!slug) {
         ws.close(1008, 'invalid slug');
         return;
       }
@@ -236,8 +249,8 @@ export function attachWebSockets(server: http.Server): void {
     // so viewers stay read-only by construction.
     const canvasMatch = url.pathname.match(/^\/ws\/projects\/([^/]+)\/canvas$/);
     if (canvasMatch) {
-      const slug = decodeURIComponent(canvasMatch[1]);
-      if (!isSafeChatId(slug)) {
+      const slug = canonicalProjectSlug(decodeURIComponent(canvasMatch[1]));
+      if (!slug) {
         ws.close(1008, 'invalid slug');
         return;
       }
