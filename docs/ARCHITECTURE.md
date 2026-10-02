@@ -151,7 +151,7 @@ The `entrypoint.sh` also:
 - Replaces the baked opencode config, registers live-project dirs into opencode's SQLite store and purges stale rows *before* launching
 - Supervises the opencode web process (while-loop) so `POST /opencode-studio/update` can swap the binary live
 - Launches code-server (`--auth none`)
-- Syncs the **managed** IDE config on every boot *before* the supervisor starts, because the `code-server-config` volume shadows the baked `/root/.config/code-server` (see §4.4)
+- Syncs the **managed** IDE config on every boot *before* the supervisor starts, because the `code-server-data` volume shadows the baked user-data-dir `/root/.local/share/code-server` — where VS Code reads USER settings from (see §4.4)
 
 ### 4.4 IDE image hardening (`backend/docker/ide-hardening.sh`)
 

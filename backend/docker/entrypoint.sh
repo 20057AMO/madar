@@ -37,14 +37,30 @@ OPENCODE_BIND=127.0.0.1
 echo "Madar: starting supervised code-server IDE on ${IDE_BIND}:8080 (no auth, loopback-only)"
 
 # ── Managed IDE config sync (stamped, idempotent, never fatal) ──
-# The code-server-config VOLUME mounts /root/.config/code-server, so the
-# settings.json + config.yaml written into the image are SHADOWED at runtime:
-# an existing volume keeps whatever it was seeded with. That is how the volume
-# ended up carrying a settings.json without workbench.startupEditor /
-# update.mode / telemetry.telemetryLevel and a config.yaml still holding
-# `auth: password` + its hash. The fix is not "copy at build time" but a boot
-# sync from UNSHADOWED /opt/madar/ide-config, gated on a content stamp so it
-# costs one sha256 on a no-op boot.
+# TWO separate stores are in play, and confusing them silently invalidates
+# every managed key:
+#
+#   * config.yaml  → /root/.config/code-server/config.yaml
+#     (~/.config is code-server's XDG_CONFIG_HOME — its OWN config lives there)
+#   * settings.json → <user-data-dir>/User/settings.json
+#     code-server is started with no --user-data-dir, so its user-data-dir is
+#     $XDG_DATA_HOME/code-server = /root/.local/share/code-server, and VS Code
+#     reads USER settings from <user-data-dir>/User/settings.json.
+#
+# The sync used to write settings.json into /root/.config/code-server/User/ —
+# a directory the workbench never opens — so every managed key was inert while
+# the boot log cheerfully reported a successful sync. Proof it is the data dir
+# that counts: /root/.local/share/code-server/User/ carries the user-data-dir
+# furniture (workspaceStorage, History, globalStorage, Backups) and holds the
+# hand-set values that are visibly in effect in a live window, and the workbench
+# itself logs that path when it reads user settings.
+#
+# Both stores are VOLUME-mounted, so the shadowing is real in the other
+# direction too: a recreated container keeps whatever its volume was seeded
+# with. That is how the data dir ended up without workbench.startupEditor /
+# update.mode / telemetry.telemetryLevel. The fix is not "copy at build time"
+# but a boot sync from UNSHADOWED /opt/madar/ide-config, gated on a content
+# stamp so it costs one sha256 on a no-op boot.
 #
 # The previous settings.json is kept as settings.json.madar-backup-<stamp8>
 # (timestamped by stamp, NEVER deleted) so an operator can always diff what the
@@ -59,7 +75,7 @@ IDE_MANAGED_DIR=/opt/madar/ide-config
 IDE_VSIX_DIR=/opt/madar/ide-vsix
 IDE_HARDENING=/usr/local/share/madar/ide-hardening.sh
 IDE_STAMP_FILE="$DATA_DIR/ide-sync.json"
-IDE_SETTINGS=/root/.config/code-server/User/settings.json
+IDE_SETTINGS=/root/.local/share/code-server/User/settings.json
 
 ide_sync_managed_files() {
   [ -d "$IDE_MANAGED_DIR" ] || {
@@ -69,9 +85,16 @@ ide_sync_managed_files() {
   # Stamp over every managed input (settings, config.yaml, the pinned VSIX and
   # the hardening script itself), so a change to ANY of them re-runs the sync
   # instead of being masked by a stamp that is merely still valid.
+  #
+  # The DESTINATION is part of the stamp too, for the same reason: fixing the
+  # settings path changed nothing about the managed inputs, so a stamp computed
+  # only over them short-circuited and the sync kept writing to the dead file.
+  # Moving the target is exactly the kind of change this gate must notice.
   local stamp current=""
   stamp="$( { find "$IDE_MANAGED_DIR" "$IDE_VSIX_DIR" -type f 2>/dev/null; [ -f "$IDE_HARDENING" ] && echo "$IDE_HARDENING"; } \
-    | sort | xargs -r sha256sum 2>/dev/null | sha256sum | cut -c1-64 )"
+    | sort | xargs -r sha256sum 2>/dev/null \
+    | { cat; printf '%s\n' "settings-target=$IDE_SETTINGS"; } \
+    | sha256sum | cut -c1-64 )"
   if [ -z "$stamp" ]; then
     echo "Madar: could not compute the managed IDE config stamp — skipping the sync"
     return 0

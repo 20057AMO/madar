@@ -50,9 +50,12 @@
     "XXX",
     "NOTE"
   ],
-  "todo-tree.ripgrep": "/usr/lib/code-server/lib/vscode/node_modules/@vscode/ripgrep-universal/bin/linux-x64/rg",
-  "todo-tree.general.filename": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,rs}",
-  "todo-tree.regex": "\\b(BUG|HACK|FIXME|TODO|XXX)\\b(?=[(:\\s]|$)",
+  "todo-tree.ripgrep.ripgrep": "/usr/lib/code-server/lib/vscode/node_modules/@vscode/ripgrep-universal/bin/linux-x64/rg",
+  "todo-tree.ripgrep.ripgrepArgs": "--max-columns=1000 --no-config --pcre2",
+  "todo-tree.filtering.includeGlobs": [
+    "**/*.{ts,tsx,js,jsx,mjs,cjs,py,rs}"
+  ],
+  "todo-tree.regex.regex": "\\b(BUG|HACK|FIXME|TODO|XXX)\\b(?=[(:\\s]|$)",
   "todo-tree.highlights.defaultHighlight": {
     "icon": "alert",
     "type": "text-and-comment",

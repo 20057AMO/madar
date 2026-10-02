@@ -36,7 +36,38 @@ const CS_ROOT = '/usr/lib/code-server';
 const EXT_DIR = `${CS_ROOT}/lib/vscode/extensions`;
 const GITHUB_DIR = `${CS_ROOT}/lib/vscode/node_modules/@github`;
 const TMP = '/tmp/madar-ide-hardening-test';
-const SETTINGS = '/root/.config/code-server/User/settings.json';
+// The USER settings store. code-server runs with no --user-data-dir, so this is
+// $XDG_DATA_HOME/code-server/User/settings.json — NOT ~/.config/code-server/User,
+// which only holds code-server's own config.yaml. Asserting against the latter
+// is how the whole managed-key sync stayed green while every key was inert.
+const SETTINGS = '/root/.local/share/code-server/User/settings.json';
+const DEAD_SETTINGS = '/root/.config/code-server/User/settings.json';
+
+/**
+ * The installed Todo Tree manifest, resolved by GLOB rather than a pinned
+ * version: the VSIX is digest-pinned upstream but its version moves, and a
+ * hardcoded `...todo-tree-0.0.215/` would turn every bump into a false failure
+ * (or, worse, a stale skip). Empty when the extension is absent.
+ */
+const TODO_TREE_PKG = sh(
+  `ls -d /root/.local/share/code-server/extensions/gruntfuggly.todo-tree-* 2>/dev/null | head -1`,
+).stdout.trim();
+
+/**
+ * stdout as an exact line Set. Substring matching is unusable here and is the
+ * bug this suite would otherwise ship: `todo-tree.ripgrep.ripgrepArgs`
+ * CONTAINS `todo-tree.ripgrep`, so an `includes()` test for the dead key passes
+ * on the corrected one — and an `includes()` test for the corrected key passes
+ * when only the Args variant is present. Both directions lie.
+ */
+function exactLines(out: string): Set<string> {
+  return new Set(
+    out
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean),
+  );
+}
 
 type Outcome = { code: number | null; stdout: string; stderr: string };
 
@@ -184,18 +215,199 @@ describe('IDE hardening — the shipped install', { skip: READY ? false : `${SCR
   });
 
   test('the volume settings carry the managed keys and a usable ripgrep', () => {
-    const out = sh(`jq -r '[to_entries[] | select(.key | test("^(todo-tree.ripgrep|workbench.startupEditor|telemetry.telemetryLevel|update.mode|extensions.autoUpdate|extensions.autoCheckUpdates|security.workspace.trust.enabled)$")) | .key] | join(",")' ${SETTINGS}`);
-    assert.strictEqual(out.code, 0, out.stderr);
-    for (const key of ['todo-tree.ripgrep', 'workbench.startupEditor', 'telemetry.telemetryLevel', 'update.mode', 'security.workspace.trust.enabled']) {
-      assert.ok(out.stdout.includes(key), `${key} is missing from the synced volume settings: ${out.stdout.trim()}`);
+    // `jq -e` exits non-zero when the value is false/null, so `has(k)` is an
+    // EXACT existence check — no substring ambiguity between
+    // `todo-tree.ripgrep` / `.ripgrep` / `.ripgrepArgs`.
+    const managed = [
+      'todo-tree.ripgrep.ripgrep',
+      'todo-tree.ripgrep.ripgrepArgs',
+      'todo-tree.filtering.includeGlobs',
+      'todo-tree.regex.regex',
+      'workbench.startupEditor',
+      'telemetry.telemetryLevel',
+      'update.mode',
+      'extensions.autoUpdate',
+      'extensions.autoCheckUpdates',
+      'security.workspace.trust.enabled',
+    ];
+    for (const key of managed) {
+      const has = sh(`jq -e 'has(${JSON.stringify(key)})' ${SETTINGS}`);
+      assert.strictEqual(has.code, 0, `${key} is missing from the synced volume settings`);
     }
-    const rg = sh(`jq -r '.["todo-tree.ripgrep"]' ${SETTINGS}`);
-    assert.ok(rg.stdout.trim().length > 0, 'todo-tree.ripgrep is empty');
+    const rg = sh(`jq -r '.["todo-tree.ripgrep.ripgrep"]' ${SETTINGS}`);
+    assert.ok(rg.stdout.trim().length > 0, 'todo-tree.ripgrep.ripgrep is empty');
+    const rgPath = rg.stdout.trim();
     assert.strictEqual(
-      inContainer(['test', '-x', rg.stdout.trim()]).code,
+      inContainer(['test', '-x', rgPath]).code,
       0,
-      `todo-tree.ripgrep points at a non-executable path: ${rg.stdout.trim()}`,
+      `todo-tree.ripgrep.ripgrep points at a non-executable path: ${rgPath}`,
     );
+    // includeGlobs is a JSON ARRAY and regex.regex a STRING: written as bare
+    // strings the workbench coerces or drops them, and the curated glob/regex
+    // silently fall back to the extension defaults.
+    for (const [key, type] of [
+      ['todo-tree.filtering.includeGlobs', 'array'],
+      ['todo-tree.regex.regex', 'string'],
+      ['todo-tree.ripgrep.ripgrepArgs', 'string'],
+    ] as const) {
+      assert.strictEqual(
+        sh(`jq -r '.["${key}"] | type' ${SETTINGS}`).stdout.trim(),
+        type,
+        `${key} must be a JSON ${type} — a bare string is coerced away and the curated value is silently dropped`,
+      );
+    }
+  });
+
+  test('the curated todo regex actually runs under the managed ripgrep args', () => {
+    // The defect this pins, end to end and without a browser: the curated regex
+    // uses look-AHEAD, which ripgrep's default engine rejects, so the workspace
+    // scan died with "regex parse error: look-around ... is not supported" and
+    // Todo Tree found NOTHING. `--pcre2` in ripgrepArgs is what makes it work,
+    // and it is only correct while the binary can actually honour the flag.
+    const rgPath = sh(`jq -r '.["todo-tree.ripgrep.ripgrep"]' ${SETTINGS}`).stdout.trim();
+    const rgArgs = sh(`jq -r '.["todo-tree.ripgrep.ripgrepArgs"]' ${SETTINGS}`).stdout.trim();
+    const regex = sh(`jq -r '.["todo-tree.regex.regex"]' ${SETTINGS}`).stdout.trim();
+    assert.ok(regex.length > 0, 'todo-tree.regex.regex is empty');
+
+    // A look-around in the regex makes --pcre2 load-bearing; without it the pin
+    // is inert and should be revisited along with the regex.
+    if (/\(\?=|\(\?<[=!]/.test(regex)) {
+      assert.ok(
+        rgArgs.includes('--pcre2'),
+        `the curated regex needs PCRE2 look-around but ripgrepArgs omits --pcre2: ${rgArgs}`,
+      );
+      assert.match(
+        sh(`${rgPath} --version`).stdout,
+        /features:\+pcre2/,
+        `${rgPath} cannot honour --pcre2, so the curated regex cannot be honoured`,
+      );
+    }
+
+    // The decisive assertion: run the real binary with the real managed args over
+    // a file that obviously contains a TODO. It must exit 0 AND match — this is
+    // exactly the path that failed while the boot log and the settings sync both
+    // reported green.
+    const scratch = '/tmp/madar-todotree-regex-probe.ts';
+    sh(`printf '// TODO: probe\\nexport const x = 1;\\n' > ${scratch}`);
+    const run = sh(
+      `${rgPath} ${rgArgs} --no-messages --vimgrep -H --column --line-number --color never -e ${JSON.stringify(regex)} ${scratch}`,
+    );
+    assert.strictEqual(
+      run.code,
+      0,
+      `the curated regex does not run under the managed ripgrep args:\n${run.stderr}`,
+    );
+    assert.match(
+      run.stdout,
+      /TODO: probe/,
+      `the curated regex ran but found no TODO in a file that contains one: ${run.stdout}`,
+    );
+    sh(`rm -f ${scratch}`);
+  });
+
+  test('the synced settings land in the store the workbench actually reads', () => {
+    // The regression this pins: the sync used to write ~/.config/code-server/User,
+    // which code-server never opens, so a green boot log meant nothing.
+    assert.strictEqual(
+      inContainer(['test', '-f', SETTINGS]).code,
+      0,
+      `${SETTINGS} is missing — the boot sync did not reach the user-data-dir`,
+    );
+    // Structural proof this IS the workbench store, independent of its content:
+    // only a VS Code user-data-dir carries these three, and code-server builds it
+    // at $XDG_DATA_HOME/code-server because it is started without --user-data-dir.
+    for (const dir of ['workspaceStorage', 'globalStorage', 'History']) {
+      assert.strictEqual(
+        inContainer(['test', '-d', `/root/.local/share/code-server/User/${dir}`]).code,
+        0,
+        `/root/.local/share/code-server/User/${dir} is missing — that path is not the VS Code user-data-dir`,
+      );
+    }
+    assert.match(
+      sh(`jq -r 'has("workbench.startupEditor") and has("todo-tree.ripgrep.ripgrep")' ${SETTINGS}`).stdout.trim(),
+      /true/,
+      `${SETTINGS} is not the workbench user settings file carrying the managed keys`,
+    );
+    // The dead path may still exist (the baked seed, or a pre-fix volume), but it
+    // must not be the only place the managed keys live — edits there do nothing.
+    if (inContainer(['test', '-f', DEAD_SETTINGS]).code === 0) {
+      assert.notStrictEqual(
+        sh(`jq -r '.["todo-tree.ripgrep.ripgrep"] // "none"' ${DEAD_SETTINGS}`).stdout.trim(),
+        'none',
+        `${DEAD_SETTINGS} still carries the managed keys — the workbench reads ${SETTINGS}, so edits there are dead letters`,
+      );
+    }
+  });
+
+  test('the managed todo-tree keys are real contributed settings of the installed extension', () => {
+    // A wrong key NAME is inert: the workbench stores it, the extension never
+    // reads it, and Todo Tree falls back to its defaults without a word. Assert
+    // the ids against the extension's OWN package.json rather than trusting a
+    // hand-written list, and pin the type the value must have.
+    assert.notStrictEqual(
+      TODO_TREE_PKG,
+      '',
+      `Todo Tree is not installed under /root/.local/share/code-server/extensions — nothing here can be asserted`,
+    );
+    const probe = sh(
+      `jq -r '[.contributes.configuration[]?.properties // {} | keys[]] | .[]' ${TODO_TREE_PKG}/package.json`,
+    );
+    assert.strictEqual(probe.code, 0, probe.stderr);
+    const contributed = exactLines(probe.stdout);
+
+    const required = [
+      'todo-tree.ripgrep.ripgrep',
+      'todo-tree.ripgrep.ripgrepArgs',
+      'todo-tree.filtering.includeGlobs',
+      'todo-tree.regex.regex',
+      'todo-tree.general.tags',
+      'todo-tree.highlights.defaultHighlight',
+      'todo-tree.highlights.customHighlight',
+    ];
+    for (const key of required) {
+      assert.ok(
+        contributed.has(key),
+        `${key} is NOT contributed by ${TODO_TREE_PKG} — it would be stored but never read`,
+      );
+    }
+    // The three ids that shipped wrong. Exact Set membership: substring matching
+    // cannot tell `todo-tree.ripgrep` from `todo-tree.ripgrep.ripgrep`, which is
+    // the entire mistake.
+    for (const stale of ['todo-tree.ripgrep', 'todo-tree.general.filename', 'todo-tree.regex']) {
+      assert.ok(
+        !contributed.has(stale),
+        `${stale} unexpectedly exists as a contributed id in ${TODO_TREE_PKG}`,
+      );
+    }
+
+    const types = sh(
+      `jq -r '.contributes.configuration[]?.properties | to_entries[] | select(.key | test("^todo-tree\\\\.(ripgrep\\\\.ripgrep|ripgrep\\\\.ripgrepArgs|filtering\\\\.includeGlobs|regex\\\\.regex)$")) | "\\(.key)=\\(.value.type)"' ${TODO_TREE_PKG}/package.json`,
+    );
+    assert.match(types.stdout, /todo-tree\.ripgrep\.ripgrep=string/);
+    assert.match(types.stdout, /todo-tree\.ripgrep\.ripgrepArgs=string/);
+    assert.match(types.stdout, /todo-tree\.filtering\.includeGlobs=array/);
+    assert.match(types.stdout, /todo-tree\.regex\.regex=string/);
+
+    // And the value types we write must match what the extension declares, read
+    // straight from the SAME manifest — the pair (synced value type, contributed
+    // type) is what has to agree, and either half alone proves nothing.
+    for (const [key, contributedType] of [
+      ['todo-tree.ripgrep.ripgrep', 'string'],
+      ['todo-tree.ripgrep.ripgrepArgs', 'string'],
+      ['todo-tree.filtering.includeGlobs', 'array'],
+      ['todo-tree.regex.regex', 'string'],
+    ] as const) {
+      const declared = sh(
+        `jq -r '.contributes.configuration[]?.properties | to_entries[] | select(.key == "${key}") | .value.type' ${TODO_TREE_PKG}/package.json`,
+      ).stdout.trim();
+      const synced = sh(`jq -r '.["${key}"] | type' ${SETTINGS}`).stdout.trim();
+      assert.strictEqual(declared, contributedType, `${key} is declared as ${declared}, not ${contributedType}`);
+      assert.strictEqual(
+        synced,
+        declared,
+        `${key} is synced as a JSON ${synced} but the extension declares it ${declared}`,
+      );
+    }
   });
 });
 

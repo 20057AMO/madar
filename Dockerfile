@@ -144,16 +144,22 @@ RUN find /root/.config/opencode/agents /root/.config/opencode/skills /root/.conf
 
 # code-server default settings (dark theme, auto-save, format-on-save, etc.).
 #
-# Baked at /opt/madar/ide-config — an UNSHADOWED path. The code-server-config
-# VOLUME mounts /root/.config/code-server, so a copy written into /root/.config
-# at image-build time is simply invisible at runtime: an existing volume keeps
-# the settings.json and config.yaml it was seeded with, which is why the volume
+# Baked at /opt/madar/ide-config — an UNSHADOWED path. The code-server-data
+# VOLUME mounts the user-data-dir /root/.local/share/code-server, so a copy
+# written there at image-build time is simply invisible at runtime: an existing
+# volume keeps the settings.json it was seeded with, which is why the volume
 # silently lacked workbench.startupEditor / update.mode / the rest while the
 # docs claimed they were in effect. entrypoint.sh copies the managed copy into
 # the volume on every boot (stamped, idempotent) and backs the previous file up.
+#
+# The seed below lands in the user-data-dir on purpose: code-server runs with no
+# --user-data-dir, so USER settings resolve to <user-data-dir>/User/settings.json
+# and NOT to ~/.config/code-server/User/settings.json (that tree only holds
+# code-server's own config.yaml). Getting this backwards made every managed key
+# inert at runtime while the boot log reported a successful sync.
 COPY code-server-settings.json /opt/madar/ide-config/User/settings.json
-RUN mkdir -p /root/.config/code-server/User \
-    && cp /opt/madar/ide-config/User/settings.json /root/.config/code-server/User/settings.json \
+RUN mkdir -p /root/.local/share/code-server/User /root/.config/code-server/User \
+    && cp /opt/madar/ide-config/User/settings.json /root/.local/share/code-server/User/settings.json \
     # No `bind-addr`: code-server defaults to 127.0.0.1:8080, the same loopback
     # bind the supervisor passes on the CLI. `auth: none` mirrors `--auth none`;
     # a seeded volume still carries the old `auth: password` + hash, and the
