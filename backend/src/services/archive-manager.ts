@@ -134,7 +134,7 @@ export async function deleteArchive(entry: string): Promise<void> {
  * Reporting the failures keeps the response honest and gives the UI something to
  * say other than "done".
  */
-export async function emptyTrash(): Promise<{ emptied: number; failed: string[] }> {
+export async function emptyTrash(): Promise<{ emptied: number; failed: string[]; totalFailed?: number }> {
   let count = 0;
   const failed: string[] = [];
   for (const entry of listArchiveEntries(archiveRoot())) {
@@ -162,8 +162,8 @@ export async function emptyTrash(): Promise<{ emptied: number; failed: string[] 
   }
   invalidateArchiveCache();
   invalidateStorageCache();
-  // Cap the report so a pathological directory cannot answer with a huge body.
-  return { emptied: count, failed: failed.slice(0, 20) };
+  // Return an honest total count alongside the capped sample of failures.
+  return { emptied: count, failed: failed.slice(0, 20), totalFailed: failed.length };
 }
 
 export interface RestoreOptions {

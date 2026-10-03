@@ -19,15 +19,29 @@
  *   Never call withFileLockAsync from inside an active lock on the
  *   same key (would deadlock on the promise chain). The internal
  *   helpers use the raw/unlocked write functions to avoid this.
+ *
+ * Sync/async share one key namespace, so the two variants must agree on one
+ * invariant: **an async holder must never keep the lock across an `await`.**
+ * A synchronous `fn` cannot wait for a pending promise (there is no blocking
+ * `await` in JS), so if withFileLockAsync suspended mid-mutator, an interleaved
+ * withFileLock call would run immediately and the resumed async mutator would
+ * then persist its pre-await document — the lost-update class. The fix is
+ * structural, not a queue trick: async mutators resolve everything they need
+ * BEFORE the lock and validate synchronously inside it (see updateProjectLimits
+ * → checkCeilingsSync), so no async path holds a key across a tick.
  */
 
 const chains = new Map<string, Promise<unknown>>();
 
 /**
  * Synchronous variant — for purely synchronous fn. In single-threaded
- * Node.js, truly sync code between two calls cannot interleave, so
- * this runs fn directly. Provided for API consistency; the real
- * protection against interleaved async handlers is in withFileLockAsync.
+ * Node.js, truly sync code between two calls cannot interleave, so this runs
+ * fn directly; the "async-holder never awaits" invariant above is what makes
+ * the fast path safe. Deliberately NOT a deferred enqueue: running fn inside
+ * `prev.then(...)` would always resolve on a later microtask, so a caller
+ * could not get fn's return value synchronously (and a naive fallback would
+ * execute fn twice). The real protection against interleaved async handlers
+ * is withFileLockAsync plus that invariant.
  */
 export function withFileLock<T>(key: string, fn: () => T): T {
   return fn();

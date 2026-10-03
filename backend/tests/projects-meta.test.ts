@@ -189,6 +189,68 @@ describe('workspace-files — slug containment', () => {
     assert.throws(() => wf.resolveWorkspacePath('ghost-project', 'x'), (e: any) => e.statusCode === 404);
   });
 
+  // Finding 1 — a lexically-inside path can still ESCAPE through a symlink.
+  // The rel-path guard + `target.startsWith(base)` check cannot see a symlink,
+  // so resolveWorkspacePath must walk each component (lstat, reject links) and
+  // confirm the realpath is still inside the real base. Without this a project
+  // workspace could read /app/data/jwt.secret through a planted link.
+  test('a symlinked FILE inside a workspace cannot be read through', () => {
+    const base = path.join(workspacesDir, 'symproj');
+    fs.mkdirSync(base, { recursive: true });
+    const outside = path.join(dataDir, 'outside-secret.txt');
+    fs.writeFileSync(outside, 'top-secret');
+    try {
+      fs.symlinkSync(outside, path.join(base, 'escape.txt'), 'file');
+    } catch {
+      return; // symlinks unsupported on this filesystem (Windows w/o privileges) — skip
+    }
+    assert.throws(() => wf.resolveWorkspacePath('symproj', 'escape.txt'), HttpError);
+    assert.throws(() => wf.readWorkspaceFile('symproj', 'escape.txt'), HttpError);
+  });
+
+  test('a symlinked DIRECTORY component is refused before any child resolves', () => {
+    const base = path.join(workspacesDir, 'symdir');
+    fs.mkdirSync(base, { recursive: true });
+    const outside = path.join(dataDir, 'outside-dir');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'top-secret');
+    try {
+      fs.symlinkSync(outside, path.join(base, 'link'), 'dir');
+    } catch {
+      return; // no symlink support — skip
+    }
+    assert.throws(() => wf.resolveWorkspacePath('symdir', 'link/secret.txt'), HttpError);
+    assert.throws(() => wf.readWorkspaceFile('symdir', 'link/secret.txt'), HttpError);
+  });
+
+  test('a symlinked workspace ROOT (the slug dir itself) is refused', () => {
+    const outside = path.join(dataDir, 'outside-root');
+    fs.mkdirSync(outside, { recursive: true });
+    try {
+      fs.symlinkSync(outside, path.join(workspacesDir, 'symroot'), 'dir');
+    } catch {
+      return; // no symlink support — skip
+    }
+    assert.throws(() => wf.resolveWorkspacePath('symroot', ''), HttpError);
+    assert.throws(() => wf.resolveWorkspacePath('symroot', 'x.txt'), HttpError);
+  });
+
+  // Finding 2 — the READ itself must be bounded, not just the response, so a
+  // huge workspace file can never be slurped into memory only to be sliced.
+  test('readWorkspaceFile reads at most the preview budget from a huge file', () => {
+    const base = path.join(workspacesDir, 'bigproj');
+    fs.mkdirSync(base, { recursive: true });
+    const budget = 200 * 1024;
+    fs.writeFileSync(path.join(base, 'big.txt'), 'a'.repeat(budget + 500));
+    const preview = wf.readWorkspaceFile('bigproj', 'big.txt');
+    assert.strictEqual(preview.truncated, true);
+    assert.strictEqual(preview.size, budget + 500, 'reports the TRUE file size');
+    assert.ok(
+      preview.content.length <= budget + 64,
+      `content bounded to the budget (got ${preview.content.length})`,
+    );
+  });
+
   test('resolveProjectSubdir stays non-throwing on a junk slug (ws-terminal contract)', () => {
     const info = wf.resolveProjectSubdir('..');
     assert.strictEqual(info.hostPath, path.resolve(workspacesDir), 'falls back to the workspace ROOT, never outside');
@@ -209,6 +271,22 @@ describe('decideProjectAccess — metaState-aware', () => {
     const meta = { ownerId: 'u-owner', members: [{ userId: viewer, role: 'viewer' as const, addedAt: '' }] };
     assert.deepStrictEqual(access.decideProjectAccess(viewer, 'viewer', meta, 'editor'), { allowed: false, memberRole: 'viewer' });
     assert.deepStrictEqual(access.decideProjectAccess(viewer, 'viewer', meta, 'viewer'), { allowed: true, memberRole: 'viewer' });
+  });
+});
+
+// Finding 3 — a corrupt `members` value (not an array) must fail CLOSED with a
+// clean denial, never throw through the middleware/WS gate as a 500.
+describe('access-core — a non-array members value denies instead of throwing', () => {
+  test('project-level', () => {
+    const meta = { ownerId: 'someone', members: 'not-an-array' } as any;
+    assert.doesNotThrow(() => access.decideProjectAccess('u', 'viewer', meta, 'admin'));
+    assert.strictEqual(access.decideProjectAccess('u', 'viewer', meta, 'admin').allowed, false);
+    assert.strictEqual(access.decideProjectAccess('u', 'viewer', meta, 'viewer').allowed, false);
+  });
+  test('control-level', () => {
+    const meta = { ownerId: 'someone', members: {} } as any;
+    assert.doesNotThrow(() => access.decideControlAccess('u', 'editor', meta));
+    assert.strictEqual(access.decideControlAccess('u', 'editor', meta).allowed, false);
   });
 });
 

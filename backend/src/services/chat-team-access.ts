@@ -28,12 +28,11 @@ export function canAccessChannel(user: ChatUser, channel: TeamChannel): AccessLe
 
   if (channel.kind === 'project' && channel.projectSlug) {
     // The stored projectSlug must already be canonical (ensureProjectChannel
-    // stores the canonical slug); fold once here so the gate can never be asked
-    // about a value the channel was not created for — checkProjectAccess refuses
-    // a non-canonical spelling, which fails closed instead of opening the
-    // legacy no-membership fallback.
+    // stores the canonical slug); fold once here and refuse if it does not
+    // match the stored value — checkProjectAccess refuses a non-canonical
+    // spelling and would also reject mismatch; we fail closed explicitly.
     const slug = canonicalProjectSlug(channel.projectSlug);
-    if (!slug) return 'none';
+    if (!slug || slug !== channel.projectSlug) return 'none';
     const read = checkProjectAccess(user.id, user.role, slug, 'viewer').allowed;
     if (!read) return 'none';
     const write = checkProjectAccess(user.id, user.role, slug, 'editor').allowed;

@@ -29,7 +29,7 @@ import { loadCanvas, saveCanvas } from './project-canvas';
 import { purgeOpencodeProjectRows } from './opencode-store';
 import { getWorkspaceMount, mountRefusalCode } from './workspaces-mount';
 import { dispatchWebhook } from './webhook-sender';
-import { parseCpu, parseMemory, sanitizeLimitsPatch, limitsEqual, isEmptyLimits, checkCeilings, resolveDefaultLimits, getHostInfo, formatMemory, formatCpu, type ProjectLimits } from './project-limits';
+import { parseCpu, parseMemory, sanitizeLimitsPatch, limitsEqual, isEmptyLimits, checkCeilings, checkCeilingsSync, resolveDefaultLimits, getHostInfo, formatMemory, formatCpu, type ProjectLimits } from './project-limits';
 import { runSweep } from './workspace-janitor';
 import {
   createOpencodeSession,
@@ -1054,14 +1054,19 @@ export async function updateProjectLimits(slug: string, patch: Partial<ProjectLi
   const projectSlug = validateProjectSlug(slug);
   const proj = await requireContainer(projectSlug);
 
-  // Read-modify-write serialized per slug: sanitize + host-ceiling check run
-  // INSIDE the lock so `meta.limits` cannot go stale across the await, and a
-  // corrupt store raises (loadMetaStrict) instead of being rebuilt empty.
-  const meta = await updateMetaAsync(projectSlug, async (m) => {
+  // Resolve host capabilities BEFORE taking the lock, then validate SYNCHRONOUSLY
+  // inside it. Holding the meta lock across an await was the lost-update class:
+  // a sync writer (ports/tags/notes/crash-state) runs during the await, and the
+  // mutator then persisted its pre-await document, silently reverting it. A sync
+  // mutator closes that window structurally — a sync caller can never interleave
+  // with it (single-threaded), and no other writer can slip in because there is
+  // no await between the load and the save. See write-queue.ts.
+  const host = await getHostInfo();
+  const meta = updateMeta(projectSlug, (m) => {
     let merged: ProjectLimits;
     try {
       merged = sanitizeLimitsPatch(patch, m.limits ?? {});
-      await checkCeilings(merged, await getHostInfo());
+      checkCeilingsSync(merged, host);
     } catch (e: any) {
       throw new HttpError(400, e?.message || 'Invalid resource limits');
     }

@@ -41,7 +41,7 @@ import { type ProjectLimits, getHostInfo } from './services/project-limits';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
-import { loadMeta, saveMeta, updateMeta, listMetaSlugs } from './services/projects-meta';
+import { loadMeta, updateMeta, listMetaSlugs } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
@@ -2044,7 +2044,14 @@ app.delete('/api/projects/:slug/members/:userId', requireProjectAccess('viewer')
 // so a stolen/forgotten session can't silently hand a project away.
 app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, async (req: any, res) => {
   try {
-    const meta = loadMeta(req.params.slug);
+    // Canonicalize ONCE, before the gate, and reuse that one value for the
+    // authorization check, the meta load/write and the channel sync — the gate
+    // must decide about the exact value it acts on (a near-miss used to miss
+    // the meta store, fall through to the legacy no-membership path and still
+    // resolve the real project later). Non-canonical folds to '' → 404.
+    const slug = canonicalProjectSlug(String(req.params.slug || '').trim());
+    if (!slug) return res.status(404).json({ error: 'Project not found' });
+    const meta = loadMeta(slug);
     if (!meta) return res.status(404).json({ error: 'Project not found' });
 
     const { userId, accountPassword } = req.body || {};
@@ -2087,7 +2094,7 @@ app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, as
     // Re-load + mutate under the per-slug lock: the password verification above
     // is an await, so writing the pre-await loaded doc back could clobber a
     // concurrent member change made while the password check was running.
-    updateMeta(req.params.slug, (m) => {
+    updateMeta(slug, (m) => {
       if (!m.members) m.members = [];
       const ensureAdmin = (ownerId: string) => {
         const existing = m.members!.find((mm) => mm.userId === ownerId);
@@ -2100,7 +2107,7 @@ app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, as
     });
     invalidateProjectsCache();
     recordAudit('ownership-transferred', true, req.ip, userId);
-    recordActivity(req.params.slug, 'ownership_transferred', {
+    recordActivity(slug, 'ownership_transferred', {
       userId: callerId,
       details: { targetUserId: userId, username: targetUser.username, previousOwnerId: previousOwner },
     });
@@ -2110,8 +2117,8 @@ app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, as
     // admin. Channel access derives live from checkProjectAccess, so a sync
     // failure can never break the transfer — just leave stale listing data.
     try {
-      await ensureProjectChannel(req.params.slug, meta.name, userId);
-      if (previousOwner) await setChannelMemberRole(`project:${req.params.slug}`, previousOwner, 'admin');
+      await ensureProjectChannel(slug, meta.name, userId);
+      if (previousOwner) await setChannelMemberRole(`project:${slug}`, previousOwner, 'admin');
     } catch { /* fire-and-forget */ }
 
     res.json({ ok: true, ownerId: userId });

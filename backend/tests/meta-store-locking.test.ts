@@ -49,6 +49,7 @@ const dm = await import('../src/services/docker-manager.ts');
 const metaFile = (slug: string) => path.join(dataDir, 'projects', slug, 'meta.json');
 const SLUG_STOP = 'meta-race-stop';
 const SLUG_LOCK = 'meta-race-lock';
+const SLUG_LIMITS = 'meta-race-limits';
 
 let dockerUp = false;
 try {
@@ -83,7 +84,7 @@ async function waitFor(ok: () => Promise<boolean>, timeoutMs: number): Promise<b
 }
 
 after(async () => {
-  for (const slug of [SLUG_STOP, SLUG_LOCK]) {
+  for (const slug of [SLUG_STOP, SLUG_LOCK, SLUG_LIMITS]) {
     try { await dm.removeProject(slug); } catch { /* best-effort */ }
   }
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* best-effort */ }
@@ -170,5 +171,39 @@ describe('createProject — the create window must not lose a concurrent meta wr
       'the recreate write must not be clobbered by the concurrent writer’s stale document',
     );
     assert.deepStrictEqual(final.ports, created.ports, 'the recreated container’s published ports must survive');
+  });
+});
+
+describe('updateProjectLimits — the limits write must validate inside a SYNC lock', { skip }, () => {
+  test('it never queues behind a held async meta lock (host check resolved before the lock)', async () => {
+    await dm.createProject({ name: 'Meta Race Limits', slug: SLUG_LIMITS, ports: [await freePort()] });
+
+    // Deliberately occupy the per-slug queue with an async holder. This violates
+    // the "async holder never awaits" invariant ON PURPOSE — it is the exact
+    // shape the old updateProjectLimits had (mutator suspended mid-lock), and it
+    // is the only deterministic way to tell the fixed code from the old one.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const holder = store.updateMetaAsync(SLUG_LIMITS, async (meta) => {
+      meta.description = 'held async writer';
+      await gate;
+    });
+    await sleep(50); // let the holder acquire the lock and load the document
+
+    const limits = dm.updateProjectLimits(SLUG_LIMITS, { cpu: '1' });
+    const outcome = await Promise.race([
+      limits.then(() => 'ok' as const),
+      sleep(1500).then(() => 'timeout' as const),
+    ]);
+    // Read BEFORE releasing the holder: an async-queued write could not have
+    // persisted yet, so a visible '1' proves the write ran synchronously.
+    const cpuWhileHeld = store.readMeta(SLUG_LIMITS).meta?.limits?.cpu;
+
+    release();
+    await holder.catch(() => { /* the stale holder write is irrelevant here */ });
+    await limits.catch(() => { /* asserted above via `outcome` */ });
+
+    assert.strictEqual(outcome, 'ok', 'updateProjectLimits blocked on an async-held meta lock — it must validate synchronously');
+    assert.strictEqual(cpuWhileHeld, '1', 'the limits write must be visible immediately, not queued behind the held async lock');
   });
 });

@@ -131,7 +131,18 @@ export function resolveWorkspacePath(slug: string, rel?: string): string {
   const relClean = String(rel ?? '')
     .replace(/\\/g, '/')
     .replace(/^\/+/, '');
-  if (!relClean || relClean === '.') return base;
+  if (!relClean || relClean === '.') {
+    try {
+      const realBase = fs.realpathSync(base);
+      const root = path.resolve(WORKSPACES_ROOT);
+      if (!isStrictlyInside(root, realBase)) throw new HttpError(400, 'Invalid path');
+    } catch (err: any) {
+      if (err instanceof HttpError) throw err;
+      if (err.code === 'ENOENT') throw new HttpError(404, 'Project workspace ' + cleanSlug + ' not found');
+      throw new HttpError(400, 'Invalid path');
+    }
+    return base;
+  }
 
   const normalized = path.posix.normalize(relClean);
   if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
@@ -139,6 +150,46 @@ export function resolveWorkspacePath(slug: string, rel?: string): string {
   }
   const target = path.resolve(base, normalized);
   if (target !== base && !target.startsWith(base + path.sep)) {
+    throw new HttpError(400, 'Invalid path');
+  }
+
+  const root = path.resolve(WORKSPACES_ROOT);
+  let current = base;
+  const relParts = normalized.split('/').filter((p) => p !== '.' && p !== '');
+  for (let i = 0; i < relParts.length; i++) {
+    current = path.join(current, relParts[i]);
+    try {
+      const st = fs.lstatSync(current);
+      if (st.isSymbolicLink()) {
+        throw new HttpError(400, 'Invalid path');
+      }
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        break;
+      }
+      throw new HttpError(400, 'Invalid path');
+    }
+  }
+
+  try {
+    let checkPath = target;
+    try {
+      checkPath = fs.realpathSync(target);
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') throw err;
+      const parent = path.dirname(target);
+      const realParent = fs.realpathSync(parent);
+      checkPath = path.resolve(realParent, path.basename(target));
+    }
+    const realBase = fs.realpathSync(base);
+    if (!isStrictlyInside(root, realBase) || !isStrictlyInside(realBase, checkPath)) {
+      throw new HttpError(400, 'Invalid path');
+    }
+  } catch (err: any) {
+    if (err instanceof HttpError) throw err;
+    if (err.code === 'ENOENT') {
+      throw new HttpError(404, 'Path not found');
+    }
     throw new HttpError(400, 'Invalid path');
   }
   return target;
@@ -217,13 +268,33 @@ export function readWorkspaceFile(slug: string, rel: string): FilePreview {
   }
   if (stat.isDirectory()) throw new HttpError(400, 'Is a directory');
 
-  const buf = fs.readFileSync(target);
-  const binary = buf.length > 0 && buf.subarray(0, 8192).includes(0);
-  const size = buf.length;
-  if (binary) return { content: '', truncated: false, size, binary: true };
+  const size = stat.size;
+  // Bound the READ, not just the response: a huge workspace file must never be
+  // slurped into memory only to be sliced. Read at most the preview budget.
+  const readSize = Math.min(size, MAX_PREVIEW_CHARS);
+  let buf: Buffer;
+  if (readSize <= 0) {
+    buf = Buffer.alloc(0);
+  } else {
+    const fd = fs.openSync(target, 'r');
+    try {
+      buf = Buffer.alloc(readSize);
+      let off = 0;
+      while (off < readSize) {
+        const n = fs.readSync(fd, buf, off, readSize - off, off);
+        if (n <= 0) break;
+        off += n;
+      }
+      if (off < readSize) buf = buf.subarray(0, off);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  const binary = buf.length > 0 && buf.subarray(0, Math.min(8192, buf.length)).includes(0);
+  if (binary) return { content: '', truncated: size > buf.length, size, binary: true };
 
   let text = buf.toString('utf8');
-  const truncated = text.length > MAX_PREVIEW_CHARS;
+  const truncated = size > buf.length;
   if (truncated) text = text.slice(0, MAX_PREVIEW_CHARS) + '\n… (preview truncated)';
   return { content: text, truncated, size, binary: false };
 }

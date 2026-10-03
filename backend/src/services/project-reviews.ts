@@ -293,10 +293,9 @@ export function deleteThread(slug: string, threadId: string, user: { id: string;
 /**
  * Deletion rule shared by the thread + comment delete routes. Mirrors the
  * ownership-transfer gate (owner / system admin / explicit admin member may
- * delete anything) rather than checkProjectAccess('admin'), whose global-editor
- * short-circuit returns false for system-editor users WITHOUT consulting their
- * project membership. A global editor without a project-admin membership is
- * therefore NOT a project admin and may only delete their own rows.
+ * delete anything) rather than checkProjectAccess('admin'). A global editor
+ * without explicit project-admin membership is not a project admin and may
+ * only delete their own rows.
  *
  * The meta store is read directly via fs (project-activity pattern) so this
  * service stays import-free of projects-meta (which pulls docker-manager in).

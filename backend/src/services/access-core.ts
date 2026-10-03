@@ -25,7 +25,7 @@ const ROLE_LEVEL: Record<AccessRole, number> = { admin: 3, editor: 2, viewer: 1 
  * Decide whether `userId` with system role `userRole` reaches a project whose
  * membership snapshot is `meta`, when `minRole` is required.
  *
- * Rules (mirrors the historical middleware behavior exactly):
+ * Rules:
  *   - system admins always pass;
  *   - system editors get write-level (editor) access to every project — but not
  *     admin-level powers, which are earned through an explicit owner/admin
@@ -39,7 +39,7 @@ const ROLE_LEVEL: Record<AccessRole, number> = { admin: 3, editor: 2, viewer: 1 
  * `metaState` distinguishes ABSENT meta from CORRUPT meta. Only ABSENT may
  * enter the legacy open fallback: a corrupt store (unreadable JSON) must
  * never be opened to everyone while the route still resolves the project for
- * writes — before this it was, because both collapsed to `null`.
+ * writes.
  */
 export function decideProjectAccess(
   userId: string,
@@ -65,7 +65,7 @@ export function decideProjectAccess(
   // (add member, manage the team) reached through the same call used to be open
   // to any viewer on a legacy project. Mirrors the system-editor rule above.
   // Corrupt meta is NOT legacy — see metaState contract above.
-  if (metaState !== 'corrupt' && (!meta || (!meta.ownerId && (!meta.members || meta.members.length === 0)))) {
+  if (metaState !== 'corrupt' && (!meta || (!meta.ownerId && (!Array.isArray(meta.members) || meta.members.length === 0)))) {
     return { allowed: minRole !== 'admin', memberRole: 'editor' };
   }
 
@@ -74,7 +74,8 @@ export function decideProjectAccess(
 
   if (meta.ownerId === userId) return { allowed: true, memberRole: 'admin' };
 
-  const member = (meta.members || []).find((m) => m.userId === userId);
+  const members = Array.isArray(meta.members) ? meta.members : [];
+  const member = members.find((m) => m.userId === userId);
   if (!member) return { allowed: false };
 
   const hasLevel = ROLE_LEVEL[member.role] || 0;
@@ -96,7 +97,8 @@ export function decideControlAccess(
   userRole: AccessRole,
   meta: AccessSnapshot | null | undefined
 ): { allowed: boolean } {
-  const hasMembership = !!meta?.ownerId || (meta?.members?.length ?? 0) > 0;
+  const membersArr = Array.isArray(meta?.members) ? meta.members : [];
+  const hasMembership = !!meta?.ownerId || membersArr.length > 0;
   if (!hasMembership) return { allowed: userRole === 'admin' };
   return { allowed: decideProjectAccess(userId, userRole, meta, 'admin').allowed };
 }

@@ -143,9 +143,14 @@ export async function getHostInfo(): Promise<HostInfo> {
   return cachedHostInfo;
 }
 
-/** Validate that limits do not exceed host caps (and respect minimums). */
-export async function checkCeilings(limits: ProjectLimits, host?: HostInfo): Promise<void> {
-  const hi = host ?? (await getHostInfo());
+/**
+ * Pure, synchronous ceiling validation — the read-modify-write safe form.
+ * A caller that must validate INSIDE a store lock (a synchronous mutator)
+ * precomputes the host info and calls this, so the lock is never held across
+ * an await (which would let a concurrent sync writer be clobbered).
+ */
+export function checkCeilingsSync(limits: ProjectLimits, host: HostInfo): void {
+  const hi = host;
 // CPU caps – default max 4 × host CPUs, min 0.1 CPU (100 m). Exact numbers
   // are logged server-side only — they would leak host capacity to any client.
   if (limits.cpu) {
@@ -171,6 +176,15 @@ export async function checkCeilings(limits: ProjectLimits, host?: HostInfo): Pro
       throw new Error('Memory limit too low (minimum 32 MiB)');
     }
   }
+}
+
+/**
+ * Async convenience wrapper — resolves the (cached) host info when the caller
+ * does not already hold it. Prefer `checkCeilingsSync` when validating inside a
+ * store lock: awaiting here would extend the lock across a tick.
+ */
+export async function checkCeilings(limits: ProjectLimits, host?: HostInfo): Promise<void> {
+  checkCeilingsSync(limits, host ?? (await getHostInfo()));
 }
 
 /** Resolve default limits from environment variables, if any. */

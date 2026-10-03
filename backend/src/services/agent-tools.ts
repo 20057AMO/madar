@@ -68,10 +68,38 @@ function safePath(slug: string, rel: string): string | null {
 export function readFile(slug: string, rel: string): string {
   const target = safePath(slug, rel);
   if (!target || !fs.existsSync(target)) return `[File not found: ${rel}]`;
-  const buf = fs.readFileSync(target);
-  if (buf.length > 0 && buf.subarray(0, 8192).includes(0)) return `[Binary file: ${rel}]`;
+  // Bound the READ, not just the response: a huge file must never be slurped
+  // into memory only to be sliced. Read at most the output budget.
+  let size = 0;
+  try {
+    const st = fs.statSync(target);
+    if (st.isDirectory()) return `[File not found: ${rel}]`;
+    size = st.size;
+  } catch {
+    return `[File not found: ${rel}]`;
+  }
+  const readSize = Math.min(size, MAX_FILE_READ);
+  let buf: Buffer;
+  if (readSize <= 0) {
+    buf = Buffer.alloc(0);
+  } else {
+    const fd = fs.openSync(target, 'r');
+    try {
+      buf = Buffer.alloc(readSize);
+      let off = 0;
+      while (off < readSize) {
+        const n = fs.readSync(fd, buf, off, readSize - off, off);
+        if (n <= 0) break;
+        off += n;
+      }
+      if (off < readSize) buf = buf.subarray(0, off);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  if (buf.length > 0 && buf.subarray(0, Math.min(8192, buf.length)).includes(0)) return `[Binary file: ${rel}]`;
   let text = buf.toString('utf8');
-  if (text.length > MAX_FILE_READ) text = text.slice(0, MAX_FILE_READ) + '\n…(truncated)';
+  if (size > buf.length) text = text.slice(0, MAX_FILE_READ) + '\n…(truncated)';
   return text;
 }
 
