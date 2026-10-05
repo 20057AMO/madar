@@ -14,13 +14,16 @@ import path from 'path';
 
 import { withFileLock } from './write-queue';
 import { invalidateProjectContext } from './project-context';
+import { assertSafeStoreSlug } from './project-slug-core';
+import { resolveContainedPath, writeContainedFile } from './workspace-paths-core';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || path.join(__dirname, '..', '..', 'data');
 const META_DIR = path.join(DATA_DIR, 'projects');
 const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 
 /** Derived flat-text board kept in the project workspace so IDE + opencode
- *  agents can read the planning canvas (like WSD_PROJECT.md). */
+ *  agents can read the planning canvas (like WSD_PROJECT.md). A FIXED basename:
+ *  no client-supplied name reaches the filesystem through it. */
 const CANVAS_MIRROR_FILE = 'WSD_CANVAS.md';
 
 export type CanvasNodeType = 'note' | 'card';
@@ -96,13 +99,23 @@ export type CanvasOp =
 const COLORS: CanvasColor[] = ['yellow', 'blue', 'red', 'green'];
 
 function canvasFile(slug: unknown): string {
-  return path.join(META_DIR, cleanSlug(slug), 'canvas.json');
+  return path.join(META_DIR, storeKey(slug), 'canvas.json');
 }
 
-function cleanSlug(slug: unknown): string {
-  const clean = String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '').slice(0, 64);
-  if (!clean) throw new Error('Invalid project slug');
-  return clean;
+/**
+ * The store key for `<META_DIR>/<key>/canvas.json`.
+ *
+ * This used to be a bare `replace(/[^a-z0-9._-]+/gi, '')` filter, which KEEPS
+ * dots — so `..` survived it untouched and `path.join` then walked one level
+ * straight out of `data/projects`. Routes make that unreachable today, because
+ * `requireProjectAccess` folds `req.params.slug` before the handler runs, but
+ * that is an accident of ROUTING, not containment: one route that forgets the
+ * middleware, or any internal caller, turns it into an arbitrary write inside
+ * the data dir. `assertSafeStoreSlug` refuses `.`/`..`/separators AND re-proves
+ * that the resolved key is strictly inside the store root.
+ */
+function storeKey(slug: unknown): string {
+  return assertSafeStoreSlug(slug, META_DIR);
 }
 
 function clampNum(v: unknown, floor: number, ceil: number, dflt: number): number {
@@ -210,7 +223,7 @@ export function loadCanvas(slug: unknown): ProjectCanvas {
 }
 
 export function saveCanvas(slug: unknown, input: unknown): ProjectCanvas {
-  const clean = cleanSlug(slug);
+  const clean = storeKey(slug);
   return withFileLock(`canvas:${clean}`, () => {
     if (!input || typeof input !== 'object') {
       throw new Error('Body must be { nodes: [...], edges: [...] }');
@@ -277,7 +290,7 @@ export function saveCanvas(slug: unknown, input: unknown): ProjectCanvas {
  *   - unknown op kinds throw (fail loud, never guess).
  */
 export function applyCanvasOps(slug: unknown, rawOps: unknown): ProjectCanvas {
-  const clean = cleanSlug(slug);
+  const clean = storeKey(slug);
   if (!Array.isArray(rawOps) || rawOps.length === 0) {
     throw new Error('Body must be { ops: [...] } with at least one op');
   }
@@ -398,23 +411,50 @@ export function applyCanvasOps(slug: unknown, rawOps: unknown): ProjectCanvas {
  * (WSD_CANVAS.md, next to WSD_PROJECT.md) so the IDE and opencode agents
  * see the canvas. Best-effort: an empty board removes the stale mirror, a
  * missing workspace leaves nothing behind, and failures never break a save.
+ *
+ * SECURITY — this is a WRITE into the project workspace, and the earlier
+ * `path.join(WORKSPACES_ROOT, clean, CANVAS_MIRROR_FILE)` + `writeFileSync`
+ * was a deterministic arbitrary write for any editor. The name is a FIXED
+ * basename (no client input reaches it, and that part is still true), but a
+ * fixed name is a name an attacker can OCCUPY: an editor has root inside their
+ * own project container with the workspace bind-mounted, so `ln -s
+ * /app/data/jwt.secret WSD_CANVAS.md` makes every board save overwrite that
+ * file THROUGH the link. Chain to host RCE: overwrite the signing secret,
+ * restart, forge any admin JWT, `POST /api/embed/session`, and get root code
+ * execution beside `/var/run/docker.sock`.
+ *
+ * So the mirror is written through the shared primitive's LINK-FREE open
+ * (kernel `O_NOFOLLOW` + a descriptor), not through a path-following write.
+ * The empty-board `unlink` needs no such guard: it removes the link ITSELF and
+ * never traverses it, which is the same rule delete follows everywhere else.
  */
 export function refreshCanvasMirror(slug: unknown): void {
   try {
-    const clean = cleanSlug(slug);
-    const target = path.join(WORKSPACES_ROOT, clean, CANVAS_MIRROR_FILE);
-    const dir = path.dirname(target);
-    if (!fs.existsSync(dir)) return;
+    const clean = storeKey(slug);
+    // Prove the workspace dir itself is real and inside the root before any
+    // mirror work; a missing workspace simply means there is nothing to mirror.
+    resolveContainedPath(WORKSPACES_ROOT, clean, '', { mustExist: true });
     const text = formatCanvasForContext(clean, 500_000); // no practical limit for the mirror file
     if (!text) {
-      if (fs.existsSync(target)) fs.unlinkSync(target);
+      try {
+        const stale = resolveContainedPath(WORKSPACES_ROOT, clean, CANVAS_MIRROR_FILE, {
+          mustExist: false,
+          allowLinkLeaf: true,
+        });
+        fs.unlinkSync(stale);
+      } catch {
+        /* nothing mirrored yet */
+      }
       return;
     }
     const header =
       `# WSD Project Canvas\n\n` +
       `> Planning-board snapshot (canvas.json). Auto-overwritten by Madar on every board save.\n\n` +
       text;
-    fs.writeFileSync(target, header, 'utf8');
+    writeContainedFile(WORKSPACES_ROOT, clean, CANVAS_MIRROR_FILE, header, {
+      mode: 'upsert',
+      invalidMessage: 'Invalid canvas mirror path',
+    });
   } catch {
     /* mirror is best-effort — never fail a board save over it */
   }
@@ -422,9 +462,8 @@ export function refreshCanvasMirror(slug: unknown): void {
 
 /** Cheap change-detector for the context cache: mtime+size of canvas.json. */
 export function canvasSignature(slug: unknown): string {
-  const file = canvasFile(String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '').slice(0, 64));
   try {
-    const st = fs.statSync(file);
+    const st = fs.statSync(canvasFile(slug));
     return `${Math.round(st.mtimeMs)}:${st.size}`;
   } catch {
     return '';

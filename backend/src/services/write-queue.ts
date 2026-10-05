@@ -38,6 +38,15 @@
 const chains = new Map<string, Promise<unknown>>();
 
 /**
+ * Number of keys currently held in the chain map. Exported for the test suite
+ * that pins the settled-key cleanup: without it, "unbounded per-slug growth"
+ * is invisible, because the symptom is a slow leak with no other symptom.
+ */
+export function chainKeyCount(): number {
+  return chains.size;
+}
+
+/**
  * Synchronous variant — for purely synchronous fn. In single-threaded
  * Node.js, truly sync code between two calls cannot interleave, so this runs
  * fn directly; the "async-holder never awaits" invariant above is what makes
@@ -88,7 +97,19 @@ export async function withFileLockAsync<T>(
   });
 
   // Swallow rejections to keep the chain alive for subsequent callers.
-  chains.set(key, next.catch(() => {}));
+  const guard = next.catch(() => {});
+  chains.set(key, guard);
+
+  // Drop the key once THIS caller is the tail again, so a long-lived server
+  // does not accumulate one settled promise per key forever (the chain map is
+  // keyed by project slug, canvas/notes/activity key, … — unbounded over the
+  // life of the process). `chains.get(key) === guard` is the only condition
+  // that is safe to delete on: if a later caller already chained onto us, the
+  // entry now points at THEIR promise and removing it would strand the queue —
+  // two writers would then run concurrently on the same key.
+  void guard.then(() => {
+    if (chains.get(key) === guard) chains.delete(key);
+  });
 
   await next;
   if (threw) throw thrownError;

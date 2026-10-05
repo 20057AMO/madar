@@ -13,6 +13,7 @@ import path from 'path';
 
 import { withFileLock } from './write-queue';
 import { invalidateProjectContext } from './project-context';
+import { assertSafeStoreSlug } from './project-slug-core';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || path.join(__dirname, '..', '..', 'data');
 const META_DIR = path.join(DATA_DIR, 'projects');
@@ -36,13 +37,19 @@ export const MAX_ITEMS = 300;
 export const MAX_TEXT = 2000;
 
 function notesFile(slug: string): string {
-  return path.join(META_DIR, slug, 'notes.json');
+  return path.join(META_DIR, storeKey(slug), 'notes.json');
 }
 
-function cleanSlug(slug: unknown): string {
-  const clean = String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '').slice(0, 64);
-  if (!clean) throw new Error('Invalid project slug');
-  return clean;
+/**
+ * The store key for `<META_DIR>/<key>/notes.json`. Same reasoning as the canvas
+ * store: the old `[a-z0-9._-]` filter KEEPS dots, so `..` survived it and
+ * `path.join` walked out of `data/projects`. Only the route middleware's slug
+ * canonicalization stands between that and a write outside the store, and that
+ * is routing, not containment. `assertSafeStoreSlug` refuses `.`/`..`/
+ * separators and re-proves the key is strictly inside the store root.
+ */
+function storeKey(slug: unknown): string {
+  return assertSafeStoreSlug(slug, META_DIR);
 }
 
 function normalizeItem(raw: unknown): NoteItem | null {
@@ -63,7 +70,7 @@ function normalizeItem(raw: unknown): NoteItem | null {
 }
 
 export function loadNotes(slug: string): ProjectNotes {
-  const file = notesFile(cleanSlug(slug));
+  const file = notesFile(storeKey(slug));
   if (!fs.existsSync(file)) return { items: [] };
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -76,7 +83,7 @@ export function loadNotes(slug: string): ProjectNotes {
 }
 
 export function saveNotes(slug: string, input: unknown): ProjectNotes {
-  const clean = cleanSlug(slug);
+  const clean = storeKey(slug);
   return withFileLock(`notes:${clean}`, () => {
     if (!input || typeof input !== 'object' || !Array.isArray((input as Record<string, unknown>).items)) {
       throw new Error('Body must be { items: [...] }');

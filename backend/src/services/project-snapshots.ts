@@ -36,6 +36,7 @@ import { loadMeta } from './projects-meta';
 import { loadNotes, saveNotes } from './project-notes';
 import { loadCanvas, saveCanvas } from './project-canvas';
 import { loadReviews, saveReviews } from './project-reviews';
+import { resolveContainedPath } from './workspace-paths-core';
 
 const BLOCK = 512;
 const MAX_ENTRIES = 200_000;
@@ -192,7 +193,13 @@ export interface ProjectSnapshot {
 export function exportProjectSnapshot(slug: string): ProjectSnapshot {
   const meta = loadMeta(slug);
   if (!meta) throw new HttpError(404, `Project '${slug}' not found`);
-  const workspaceDir = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
+  // The workspace root is resolved through the containment primitive. The old
+  // `String(slug).replace(/[^a-z0-9._-]+/gi,'')` is a dot-PRESERVING filter, so
+  // `..` survived it and `path.resolve` walked out of /workspaces — the same
+  // defect class the notes/canvas store keys had. mustExist:false because a
+  // snapshot of a project whose workspace is not provisioned yet is an empty
+  // archive, not a 404.
+  const workspaceDir = resolveContainedPath(WORKSPACES_ROOT, slug, '', { mustExist: false });
   const now = Math.floor(Date.now() / 1000);
   const manifest: SnapshotManifest = {
     madar: MAGIC_MADAR,
@@ -472,7 +479,9 @@ function readIfPresent(p: string): Buffer | undefined {
 
 /** Copy the extracted workspace tree into the new project's working dir. */
 function copyTreeInto(slug: string, srcDir: string): void {
-  const dst = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
+  // Same primitive (see exportProjectSnapshot). This one is a WRITE destination,
+  // so the dot-preserving inline filter was the more expensive of the two bugs.
+  const dst = resolveContainedPath(WORKSPACES_ROOT, slug, '', { mustExist: false });
   fs.mkdirSync(dst, { recursive: true });
   const copy = (from: string, to: string): void => {
     for (const entry of fs.readdirSync(from)) {

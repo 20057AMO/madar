@@ -19,6 +19,7 @@ import { Readable } from 'stream';
 import { HttpError, WORKSPACES_ROOT } from './docker-manager';
 import { loadMeta } from './projects-meta';
 import { EXCLUDE_DIRS } from './project-snapshots';
+import { resolveContainedPath } from './workspace-paths-core';
 
 const MAX_ENTRIES = 200_000;
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB uncompressed ceiling
@@ -164,7 +165,9 @@ export interface ProjectZip {
 export function exportProjectZip(slug: string): ProjectZip {
   const meta = loadMeta(slug);
   if (!meta) throw new HttpError(404, `Project '${slug}' not found`);
-  const workspaceDir = path.resolve(WORKSPACES_ROOT, String(slug ?? '').replace(/[^a-z0-9._-]+/gi, ''));
+  // Resolved through the containment primitive, not through an inline
+  // dot-preserving filter (which let `..` through and walked out of /workspaces).
+  const workspaceDir = resolveContainedPath(WORKSPACES_ROOT, slug, '', { mustExist: false });
   if (!fs.existsSync(workspaceDir)) throw new HttpError(404, `Project workspace '${slug}' not found`);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);

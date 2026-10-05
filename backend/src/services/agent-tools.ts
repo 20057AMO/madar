@@ -5,7 +5,7 @@ import { execSync, type ExecSyncOptions } from 'child_process';
 /** Same convention as project-context/canvas/reviews: resolve locally. */
 const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 
-import { tryResolveContainedPath } from './workspace-paths-core';
+import { tryResolveContainedPath, writeContainedFile } from './workspace-paths-core';
 
 const MAX_OUTPUT = 50000;
 const EXEC_TIMEOUT = 30000;
@@ -57,9 +57,19 @@ const BLOCKED_CMD_PREFIXES = new Set([
  * containment primitive: slug is canonical, the root is realpath-ed, and a
  * symlink / junction at any level is refused. Null keeps the agent-tool
  * contract ("no such file" instead of a 500).
+ *
+ * `mustExist` is the difference between a read and a write, and getting it
+ * wrong is silent: `writeFile` is the primary tool of every `edit: allow`
+ * subagent (frontend-developer, backend-developer, …), so leaving the default
+ * in place made EVERY create fail — measured 0 successful writes in 5000 calls
+ * against a path that did not exist yet, because the primitive answers 404 for
+ * a missing target and the tool turned that into "Invalid path". Reads keep the
+ * strict default.
  */
-function safePath(slug: string, rel: string): string | null {
-  return tryResolveContainedPath(WORKSPACES_ROOT, slug, rel);
+function safePath(slug: string, rel: string, opts: { mustExist?: boolean } = {}): string | null {
+  return tryResolveContainedPath(WORKSPACES_ROOT, slug, rel, {
+    mustExist: opts.mustExist !== false,
+  });
 }
 
 /** The verified workspace dir for a slug, or null — for cwd / tree roots. */
@@ -106,12 +116,30 @@ export function readFile(slug: string, rel: string): string {
 }
 
 export function writeFile(slug: string, rel: string, content: string): string {
-  const target = safePath(slug, rel);
-  if (!target) return 'Invalid path';
+  // mustExist:false — this tool's whole job is creating files that are not there
+  // yet (including in folders that do not exist yet), which is what an
+  // `edit: allow` subagent does on every new source file.
+  if (!safePath(slug, rel, { mustExist: false })) return 'Invalid path';
   if (content.length > MAX_FILE_WRITE) return `[Blocked] Content too large (${content.length} bytes, max ${MAX_FILE_WRITE})`;
-  const dir = path.dirname(target);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(target, content, 'utf8');
+  // The LINK-FREE open, for the same reason the Files tab uses it: `mkdirSync`
+  // + `writeFileSync` both follow a symlink and expose no O_NOFOLLOW, so a
+  // containment proof taken a moment earlier is a claim about the past. The
+  // kernel refuses a symlink leaf at open() time and the bytes go into the
+  // returned descriptor.
+  //
+  // Failures answer with the SAME kind of marker readFile uses. writeFile
+  // promises a string ("[File not found: …]" for a read); a raw ENOENT thrown
+  // out of here escaped to the tool dispatcher instead — measured 748 of 5000
+  // calls — so an ordinary "the folder vanished" surfaced as a tool crash
+  // rather than a sentence the model can act on.
+  try {
+    writeContainedFile(WORKSPACES_ROOT, slug, rel, content, {
+      mode: 'upsert',
+      invalidMessage: 'Invalid path',
+    });
+  } catch (err: any) {
+    return `[Cannot write: ${rel}] ${err?.message || 'write failed'}`;
+  }
   return `Wrote ${content.length} bytes to ${rel}`;
 }
 

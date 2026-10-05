@@ -41,6 +41,8 @@ const dm = await import('../src/services/docker-manager.ts');
 const agents = await import('../src/services/agent-tools.ts');
 const ctx = await import('../src/services/project-context.ts');
 const store = await import('../src/services/projects-meta.ts');
+const notesSvc = await import('../src/services/project-notes.ts');
+const canvasSvc = await import('../src/services/project-canvas.ts');
 
 const { HttpError } = await import('../src/services/project-slug-core.ts');
 
@@ -229,6 +231,68 @@ describe('agent-tools · file + tree + cwd', () => {
     assert.ok(agents.readFile(slug, 'ok.txt').includes('ok'), 'legitimate reads still work');
   });
 
+  test('writeFile CREATES a new file and a new nested folder again (the 0-of-5000 regression)', () => {
+    // `writeFile` is the primary tool of every `edit: allow` subagent, and
+    // resolving its path with the READ default (mustExist) made every create
+    // answer "Invalid path" — measured 0 successful writes in 5000 calls. A
+    // file and a folder that do not exist yet are the normal case for this
+    // tool, so this row is the regression guard, not a nicety.
+    const slug = 'agent-create';
+    const dir = makeProject(slug);
+    assert.match(agents.writeFile(slug, 'src/index.ts', 'export const a = 1;\n'), /^Wrote /);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'src', 'index.ts'), 'utf8'), 'export const a = 1;\n');
+
+    // A NESTED path whose folders do not exist yet — the Files-tab regression
+    // that had to be restored once already.
+    assert.match(agents.writeFile(slug, 'deep/a/b/c/new.txt', 'nested'), /^Wrote /);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'deep', 'a', 'b', 'c', 'new.txt'), 'utf8'), 'nested');
+
+    // Overwriting an existing file keeps working.
+    assert.match(agents.writeFile(slug, 'src/index.ts', 'v2'), /^Wrote /);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'src', 'index.ts'), 'utf8'), 'v2');
+    assert.match(agents.readFile(slug, 'src/index.ts'), /v2/);
+  });
+
+  test('writeFile refuses a planted link, and reports it as a MARKER rather than throwing', (t) => {
+    const slug = 'agent-write-link';
+    const dir = makeProject(slug);
+    fs.writeFileSync(path.join(outside, 'agent-canary.txt'), 'CANARY', 'utf8');
+    if (!plantLink(t, path.join(dir, 'agent-canary.txt'), path.join(outside, 'agent-canary.txt'), 'file')) {
+      // Windows cannot create an unelevated FILE link; the directory form
+      // below covers the same primitive, so only fall through when neither
+      // shape can be made.
+      if (!plantLink(t, path.join(dir, 'agentdir'), outside, 'dir')) return;
+      const viaDir = agents.writeFile(slug, 'agentdir/agent-canary.txt', 'PWNED');
+      assert.strictEqual(fs.readFileSync(path.join(outside, 'agent-canary.txt'), 'utf8'), 'CANARY');
+      assert.ok(!viaDir.includes('PWNED'), 'a refusal must not report a successful write');
+      assert.match(viaDir, /Invalid path|Cannot write|refus/i);
+      return;
+    }
+
+    const result = agents.writeFile(slug, 'agent-canary.txt', 'PWNED');
+    // The tool contract is a STRING, like readFile's `[File not found: …]`.
+    assert.strictEqual(typeof result, 'string');
+    assert.match(result, /Invalid path|Cannot write|refus/i, 'a refusal is reported, not thrown');
+    assert.strictEqual(
+      fs.readFileSync(path.join(outside, 'agent-canary.txt'), 'utf8'),
+      'CANARY',
+      'the link target must be untouched'
+    );
+  });
+
+  test('writeFile reports a MISSING project as a marker, never a raw ENOENT', () => {
+    // 748 of 5000 calls threw a raw ENOENT straight out of writeFile: the tool
+    // promises a string (readFile answers "[File not found: …]"), so an
+    // unhandled throw escaped to the dispatcher and surfaced as a tool crash
+    // rather than a sentence the model can act on.
+    let result: string | null = null;
+    assert.doesNotThrow(() => {
+      result = agents.writeFile('no-such-project-at-all', 'a.txt', 'x');
+    });
+    assert.strictEqual(typeof result, 'string');
+    assert.ok(!/^Wrote/.test(result!), `a missing project must not report a write: ${result}`);
+  });
+
   test('the tree omits links and their targets', (t) => {
     const slug = 'agent-tree';
     const dir = makeProject(slug);
@@ -239,6 +303,77 @@ describe('agent-tools · file + tree + cwd', () => {
     assert.ok(tree.includes('ok.txt'), 'real entries are listed');
     assert.ok(!tree.includes(SECRET), 'a link must never surface the target content');
     assert.ok(!tree.includes('escape/secret.txt'), 'a link must not be walked');
+  });
+});
+
+describe('project-notes · project-canvas · the STORE key', () => {
+  // Both stores wrote `path.join(<data>/projects, slug, 'notes.json' | 'canvas.json')`
+  // behind a dot-preserving filter. Dots are deliberately KEPT so legacy project
+  // dirs (`my.project_2`) stay addressable on disk — which means `..` survived the
+  // very filter meant to sanitize the slug, and the join walked out of the store
+  // root. Only the ROUTE's slug canonicalization stood in the way, and routing
+  // is not containment: any future caller that reaches a store service without
+  // that middleware inherits the escape.
+  const STORE_DIR = path.join(dataDir, 'projects');
+
+  test('notes refuses a `..` store slug instead of writing beside the store', () => {
+    makeProject('store-safe');
+    assert.throws(
+      () => notesSvc.saveNotes('..', { items: [{ text: 'escaped', kind: 'idea' }] }),
+      HttpError,
+      'a `..` slug must never resolve to <data>/notes.json'
+    );
+    assert.ok(!fs.existsSync(path.join(dataDir, 'notes.json')), 'nothing may be written beside the store root');
+    // The ordinary case still round-trips.
+    const saved = notesSvc.saveNotes('store-safe', { items: [{ text: 'in the store', kind: 'goal' }] });
+    assert.strictEqual(saved.items.length, 1);
+    assert.ok(fs.existsSync(path.join(STORE_DIR, 'store-safe', 'notes.json')));
+  });
+
+  test('canvas refuses a `..` store slug for both the document and the workspace mirror', () => {
+    makeProject('canvas-safe');
+    assert.throws(() => canvasSvc.saveCanvas('..', { nodes: [{ id: 'n1', x: 1, y: 2, text: 'escaped' }], edges: [] }), HttpError);
+    assert.ok(!fs.existsSync(path.join(dataDir, 'canvas.json')), 'nothing may be written beside the store root');
+    assert.ok(!fs.existsSync(path.join(workspacesDir, '..', 'WSD_CANVAS.md')) || !fs.existsSync(path.join(dataDir, 'WSD_CANVAS.md')), 'no mirror may escape either');
+    // And the ordinary case still writes BOTH the document and the fixed mirror.
+    canvasSvc.saveCanvas('canvas-safe', { nodes: [{ id: 'n1', x: 1, y: 2, text: 'plan' }], edges: [] });
+    assert.ok(fs.existsSync(path.join(STORE_DIR, 'canvas-safe', 'canvas.json')));
+    assert.ok(
+      fs.existsSync(path.join(workspacesDir, 'canvas-safe', 'WSD_CANVAS.md')),
+      'the mirror keeps its FIXED basename, derived from the workspace slug'
+    );
+  });
+
+  test('a LEGACY dotted slug still resolves on disk (dots are not a security control)', () => {
+    // The complement of the row above: hardening the store key must NOT stop
+    // addressing an existing `my.project_2` directory, or every legacy
+    // project's notes and canvas would appear to vanish.
+    const slug = 'my.project_2';
+    fs.mkdirSync(path.join(workspacesDir, slug), { recursive: true });
+    notesSvc.saveNotes(slug, { items: [{ text: 'legacy', kind: 'idea' }] });
+    assert.ok(fs.existsSync(path.join(STORE_DIR, slug, 'notes.json')), 'a dotted legacy slug stays addressable');
+    canvasSvc.saveCanvas(slug, { nodes: [{ id: 'n1', x: 0, y: 0, text: 'legacy board' }], edges: [] });
+    assert.ok(fs.existsSync(path.join(STORE_DIR, slug, 'canvas.json')));
+    assert.strictEqual(canvasSvc.canvasNodeCount(slug), 1);
+  });
+
+  test('the canvas mirror cannot be written through a planted link (link-free, fixed name)', (t) => {
+    const slug = 'canvas-mirror-link';
+    const dir = makeProject(slug);
+    fs.writeFileSync(path.join(outside, 'mirror-canary.txt'), 'CANARY', 'utf8');
+    if (!plantLink(t, path.join(dir, 'WSD_CANVAS.md'), path.join(outside, 'mirror-canary.txt'), 'file')) return;
+
+    // The name is FIXED (never client-supplied), so this is exactly the shape a
+    // workspace can reach: a user drops a link called WSD_CANVAS.md, then any
+    // later save would write through it with the plan text.
+    canvasSvc.saveCanvas(slug, { nodes: [{ id: 'n1', x: 0, y: 0, text: 'the plan' }], edges: [] });
+    canvasSvc.applyCanvasOps(slug, [{ op: 'node-patch', id: 'n1', patch: { text: 'revised' } }]);
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(outside, 'mirror-canary.txt'), 'utf8'),
+      'CANARY',
+      'the mirror write must not land on the link target'
+    );
   });
 });
 

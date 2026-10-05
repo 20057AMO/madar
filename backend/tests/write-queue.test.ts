@@ -15,7 +15,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { withFileLock, withFileLockAsync } from '../src/services/write-queue.ts';
+import { withFileLock, withFileLockAsync, chainKeyCount } from '../src/services/write-queue.ts';
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -176,5 +176,62 @@ describe('withFileLockAsync', () => {
     });
     await Promise.all([first, second]);
     assert.strictEqual(ran, true, 'next caller must still run after an undefined-reason rejection');
+  });
+});
+
+/* ── settled-key cleanup (the unbounded-chain-map nit) ─────────────────── */
+
+// The chain map is keyed by project slug / document key / …, so on a
+// long-lived server it accumulated ONE settled promise per key forever and
+// never shrank. The symptom is invisible on its own (a slow leak), which is
+// why these rows assert on the map size rather than on timing.
+describe('write-queue · chain map does not grow without bound', () => {
+  test('a settled key is released instead of pinning a promise forever', async () => {
+    const before = chainKeyCount();
+    await withFileLockAsync('cleanup-settled', async () => {});
+    // The delete runs in a `then` AFTER our await resolves, so let the
+    // microtask queue drain before counting.
+    await delay(5);
+    assert.strictEqual(chainKeyCount(), before, 'a fully settled key must be removed from the chain map');
+  });
+
+  test('a REJECTED key is released too (a throw must not pin it forever)', async () => {
+    const before = chainKeyCount();
+    await withFileLockAsync('cleanup-rejected', async () => { throw new Error('boom'); }).catch(() => {});
+    await delay(5);
+    assert.strictEqual(chainKeyCount(), before, 'a rejected key must be removed once it is the tail again');
+  });
+
+  test('many distinct keys leave nothing behind', async () => {
+    const before = chainKeyCount();
+    for (let i = 0; i < 200; i++) {
+      await withFileLockAsync(`cleanup-many-${i}`, async () => {});
+    }
+    await delay(5);
+    assert.strictEqual(chainKeyCount(), before, '200 one-shot keys must not leave 200 entries');
+  });
+
+  test('a key with a LATER waiter is NOT deleted — removing it would strand the queue', async () => {
+    // This is the row that pins the dangerous half of the fix. The cleanup is
+    // guarded by `chains.get(key) === guard`, so when a second caller has
+    // already chained onto the first, the entry must survive. Deleting it would
+    // let a third caller start concurrently with the second — the lost update
+    // the whole module exists to prevent.
+    let order: string[] = [];
+    const first = withFileLockAsync('cleanup-strand', async () => {
+      order.push('first-start');
+      await delay(20);
+      order.push('first-end');
+    });
+    const second = withFileLockAsync('cleanup-strand', async () => {
+      order.push('second');
+    });
+    await delay(1);
+    // While the second caller is queued the key MUST be present.
+    assert.ok(chainKeyCount() > 0, 'a queued key must stay in the map');
+    await Promise.all([first, second]);
+    await delay(5);
+    assert.deepStrictEqual(order, ['first-start', 'first-end', 'second'], 'the two writers stayed serialized');
+    assert.strictEqual(chainKeyCount(), 0, 'and the key is released once nobody is waiting');
   });
 });

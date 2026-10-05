@@ -29,6 +29,11 @@ const {
   workspaceLinkAt,
   parseUploadPaths,
   uploadRelativePath,
+  openContainedForWrite,
+  writeAndClose,
+  writeContainedFile,
+  copyContainedFile,
+  linkFreeControls,
 } = await import('../src/services/workspace-paths-core.ts');
 
 let root = '';
@@ -260,5 +265,252 @@ describe('workspace-paths-core · upload paths', () => {
       'the primitive must still refuse it'
     );
     assert.strictEqual(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'SECRET', 'the target is untouched');
+  });
+});
+
+// ── Link-free writes ────────────────────────────────────────────────────────
+//
+// A check is a proof only until the thing it proved is USED. These rows are
+// about the use, not the check: what must hold is that no planted link — at the
+// LEAF or at an intermediate directory — can be written through, and that the
+// refusal is a clean 400/403 rather than a raw errno escaping as a 500.
+describe('workspace-paths-core · link-free open', () => {
+  test('the control set is reported honestly for this platform', () => {
+    const controls = linkFreeControls();
+    assert.strictEqual(controls.platform, process.platform);
+    assert.strictEqual(controls.identity, true, 'the fstat-vs-lstat identity check is always on');
+    if (process.platform === 'win32') {
+      // Node does not define O_NOFOLLOW on win32, so the kernel refusal is NOT
+      // available there and the helper must not pretend it is. Pinned because a
+      // future "just OR the flag in" refactor would make flags NaN.
+      assert.strictEqual(controls.nofollow, false);
+      assert.strictEqual(controls.procSelfFd, false);
+    }
+    if (process.platform === 'linux') {
+      assert.strictEqual(controls.nofollow, true, 'Linux gets the kernel O_NOFOLLOW refusal');
+      assert.strictEqual(controls.procSelfFd, true, 'Linux gets the opened-path proof');
+    }
+  });
+
+  test('a NEW file and a NEW nested folder are created (the feature the guard broke)', () => {
+    const out = writeContainedFile(root, SLUG, 'brand/new/deep/file.txt', 'hello');
+    assert.strictEqual(out.created, true);
+    assert.strictEqual(out.bytes, 5);
+    assert.strictEqual(
+      fs.readFileSync(path.join(root, SLUG, 'brand', 'new', 'deep', 'file.txt'), 'utf8'),
+      'hello'
+    );
+    // upsert over an existing file REPLACES it, and says so.
+    const again = writeContainedFile(root, SLUG, 'brand/new/deep/file.txt', 'bye');
+    assert.strictEqual(again.created, false);
+    assert.strictEqual(fs.readFileSync(path.join(root, SLUG, 'brand/new/deep/file.txt'), 'utf8'), 'bye');
+  });
+
+  test('mode:create refuses an existing name atomically (O_EXCL), it never overwrites', () => {
+    writeContainedFile(root, SLUG, 'excl.txt', 'first');
+    assert.throws(
+      () => writeContainedFile(root, SLUG, 'excl.txt', 'second', { mode: 'create' }),
+      (e: any) => e?.statusCode === 400,
+      'create must not adopt an existing name'
+    );
+    assert.strictEqual(fs.readFileSync(path.join(root, SLUG, 'excl.txt'), 'utf8'), 'first');
+  });
+
+  test('a symlink LEAF is refused, and the target is untouched', (t) => {
+    if (plantLink('leaf-write', path.join(outside, 'secret.txt')) === 'skip') {
+      return t.skip('this platform refused to create a link');
+    }
+    for (const mode of ['upsert', 'create'] as const) {
+      assert.throws(
+        () => writeContainedFile(root, SLUG, 'leaf-write', 'PWNED', { mode }),
+        (e: any) => e?.statusCode === 400,
+        `mode ${mode} must refuse a link leaf`
+      );
+    }
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'SECRET');
+  });
+
+  test('a RACED INTERMEDIATE-directory swap can never move the write outside', (t) => {
+    // Executable on every platform: the planted link is a directory junction
+    // (Windows) / symlink (POSIX), which needs no elevation. This is the harder
+    // race of the two — `O_NOFOLLOW` only governs the LEAF, so a swapped
+    // parent is the case that needs the opened-path proof.
+    const canary = path.join(outside, 'race-dir-canary.txt');
+    fs.writeFileSync(canary, 'CANARY', 'utf8');
+    const mid = path.join(root, SLUG, 'racedir');
+    const kind = process.platform === 'win32' ? 'junction' : 'dir';
+    const swap = (want: boolean) => {
+      try {
+        fs.rmSync(mid, { recursive: true, force: true });
+        if (want) fs.symlinkSync(outside, mid, kind);
+      } catch {
+        /* reported by the caller */
+      }
+    };
+    try {
+      swap(true);
+      if (!fs.lstatSync(mid).isSymbolicLink()) throw new Error('no link');
+    } catch {
+      return t.skip('this platform refused to create a link');
+    }
+
+    for (let i = 0; i < 400; i += 1) {
+      swap(i % 2 === 0);
+      try {
+        writeContainedFile(root, SLUG, 'racedir/race-dir-canary.txt', 'PAYLOAD', { mode: 'upsert' });
+      } catch {
+        /* a refusal is a perfectly good outcome */
+      }
+      assert.strictEqual(
+        fs.readFileSync(canary, 'utf8'),
+        'CANARY',
+        `round ${i}: a directory created/written through a raced link escaped`
+      );
+      assert.strictEqual(fs.readFileSync(canary, 'utf8'), 'CANARY');
+    }
+    swap(false);
+  });
+
+test('a RACED leaf swap can never move the write outside the workspace', (t) => {
+    // The property under test is the one the old check-then-write violated: no
+    // interleaving of "plant/remove a link at the leaf" with "write this path"
+    // may put bytes outside the workspace. The canary is the assertion — it is
+    // checked for content every round, so a hit fails the row even if the race
+    // is only hit once. The row can also pass without the window ever being
+    // reached; that is inherent to a race, and is why the DESCRIPTOR row above
+    // (deterministic) is the one that proves the mechanism.
+    const canary = path.join(outside, 'race-canary.txt');
+    fs.writeFileSync(canary, 'CANARY', 'utf8');
+    const leaf = path.join(root, SLUG, 'raced.txt');
+    const linkTo = path.join(outside, 'race-canary.txt');
+    let planted = false;
+    const plant = () => {
+      try {
+        fs.rmSync(leaf, { force: true });
+        fs.symlinkSync(linkTo, leaf, process.platform === 'win32' ? 'file' : undefined);
+        planted = true;
+      } catch {
+        planted = false;
+      }
+    };
+    const clear = () => {
+      try {
+        fs.rmSync(leaf, { force: true });
+      } catch {
+        /* ignore */
+      }
+      planted = false;
+    };
+    try {
+      fs.symlinkSync(linkTo, leaf, process.platform === 'win32' ? 'file' : undefined);
+      planted = true;
+    } catch {
+      return t.skip('this platform refused to create a link');
+    }
+
+    for (let i = 0; i < 400; i += 1) {
+      // Half the rounds present a link, half present a free name — the swap
+      // between them is the race the old code lost.
+      if (i % 2 === 0) plant();
+      else clear();
+      try {
+        writeContainedFile(root, SLUG, 'raced.txt', 'PAYLOAD', { mode: 'upsert' });
+      } catch {
+        /* a refusal is a perfectly good outcome */
+      }
+      assert.strictEqual(
+        fs.readFileSync(canary, 'utf8'),
+        'CANARY',
+        `round ${i}: the canary outside the workspace was overwritten`
+      );
+    }
+    clear();
+  });
+
+  test('a link as an INTERMEDIATE directory cannot be created or written through', (t) => {
+    if (plantLink('write-dir', outside) === 'skip') {
+      return t.skip('this platform refused to create a link');
+    }
+    assert.throws(
+      () => writeContainedFile(root, SLUG, 'write-dir/secret.txt', 'PWNED'),
+      (e: any) => e?.statusCode === 400
+    );
+    // And with mkdirParents the primitive must not even CREATE a directory
+    // through it — `mkdirSync(<link>/new)` lands in the link's target, which is
+    // the same escape one level up.
+    assert.throws(
+      () => writeContainedFile(root, SLUG, 'write-dir/fresh/child.txt', 'PWNED'),
+      (e: any) => e?.statusCode === 400
+    );
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'SECRET');
+    assert.ok(!fs.existsSync(path.join(outside, 'fresh')), 'no directory may be created through the link');
+  });
+
+  test('copyContainedFile (the upload path) writes in, chunked, through the fd', () => {
+    const src = path.join(outside, 'upload-src.bin');
+    const payload = Buffer.alloc(200 * 1024, 0x41); // larger than the 64 KiB chunk
+    fs.writeFileSync(src, payload);
+    const out = copyContainedFile(root, SLUG, 'uploads/upload-src.bin', src, { mode: 'create' });
+    assert.strictEqual(out.created, true);
+    assert.strictEqual(out.bytes, payload.length);
+    assert.ok(
+      fs.readFileSync(path.join(root, SLUG, 'uploads', 'upload-src.bin')).equals(payload),
+      'the copied bytes must match exactly'
+    );
+    // `copyFileSync` would have silently overwritten this; the upload route
+    // de-duplicates on existsSync, which is itself a check-then-use.
+    assert.throws(() => copyContainedFile(root, SLUG, 'uploads/upload-src.bin', src, { mode: 'create' }), (e: any) => e?.statusCode === 400);
+  });
+
+  test('copyContainedFile cannot be aimed through a planted link', (t) => {
+    const src = path.join(outside, 'payload2.bin');
+    fs.writeFileSync(src, 'PAYLOAD');
+    if (plantLink('up-copy', path.join(outside, 'secret.txt')) === 'skip') {
+      return t.skip('this platform refused to create a link');
+    }
+    assert.throws(() => copyContainedFile(root, SLUG, 'up-copy', src, { mode: 'create' }), (e: any) => e?.statusCode === 400);
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'SECRET');
+  });
+
+  test('the workspace root itself is refused as a write target', () => {
+    assert.throws(() => writeContainedFile(root, SLUG, '.', 'PWNED'), (e: any) => e?.statusCode === 400);
+    assert.throws(() => writeContainedFile(root, SLUG, '', 'PWNED'), (e: any) => e?.statusCode === 400);
+  });
+
+  test('a missing project is still a 404, and a missing parent with mkdirParents:false is too', () => {
+    assert.throws(() => writeContainedFile(root, 'no-such-project', 'a.txt', 'x'), (e: any) => e?.statusCode === 404);
+    assert.throws(
+      () => writeContainedFile(root, SLUG, 'never/created/yet.txt', 'x', { mkdirParents: false }),
+      (e: any) => e?.statusCode === 404
+    );
+  });
+
+  test('the handle writes into the DESCRIPTOR, so a later path swap cannot redirect it', () => {
+    const handle = openContainedForWrite(root, SLUG, 'descriptor.txt', { mode: 'create' });
+    assert.ok(handle.fd > 0, 'a real descriptor is returned');
+    assert.strictEqual(handle.created, true);
+    // Swap the NAME to a link while the descriptor is open. The bytes must go
+    // to the file that was opened, and to nowhere else.
+    fs.writeFileSync(path.join(outside, 'swapped.txt'), 'ORIGINAL');
+    try {
+      fs.rmSync(path.join(root, SLUG, 'descriptor.txt'), { force: true });
+      fs.symlinkSync(path.join(outside, 'swapped.txt'), path.join(root, SLUG, 'descriptor.txt'));
+    } catch {
+      writeAndClose(handle.fd, 'bytes');
+      fs.rmSync(path.join(root, SLUG, 'descriptor.txt'), { force: true });
+      return; // platform refused the link; the descriptor assertion above stands
+    }
+    writeAndClose(handle.fd, 'bytes');
+    assert.strictEqual(
+      fs.readFileSync(path.join(outside, 'swapped.txt'), 'utf8'),
+      'ORIGINAL',
+      'the link target must NOT receive the write'
+    );
+    fs.rmSync(path.join(root, SLUG, 'descriptor.txt'), { force: true });
+  });
+
+  test('a directory and a FIFO are refused as write targets (no blocking open)', () => {
+    fs.mkdirSync(path.join(root, SLUG, 'a-directory'), { recursive: true });
+    assert.throws(() => writeContainedFile(root, SLUG, 'a-directory', 'PWNED'), (e: any) => e?.statusCode === 400);
   });
 });

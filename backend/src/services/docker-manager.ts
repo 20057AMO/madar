@@ -1184,7 +1184,15 @@ export async function cloneIntoWorkspace(
   userId?: string
 ): Promise<{ target: string; output: string }> {
   const projectSlug = validateProjectSlug(slug);
-  const base = path.resolve(WORKSPACES_ROOT, projectSlug);
+  // The base comes from the shared containment primitive, not from
+  // `path.resolve(WORKSPACES_ROOT, slug)`. `validateProjectSlug` folds the slug
+  // to `[a-z0-9-]`, so this is not reachable as an escape today — but the
+  // lexical join made every claim about this function's target depend on a
+  // filter in ANOTHER file staying strict, which is exactly the "accident of
+  // routing instead of containment" the primitive exists to remove. The
+  // primitive also refuses a workspace that is itself a link, which matters
+  // below because git writes THROUGH the directory it is handed.
+  const base = resolveContainedPath(WORKSPACES_ROOT, projectSlug, '', { mustExist: true });
   if (!fs.existsSync(base)) throw new HttpError(404, `Project workspace '${projectSlug}' not found`);
 
   const cleanUrl = String(url ?? '').trim();
@@ -1197,6 +1205,17 @@ export async function cloneIntoWorkspace(
 
   const existing = fs.readdirSync(base).filter((f) => f !== '.git');
   let target = existing.length === 0 ? base : path.join(base, repoName(cleanUrl));
+  // The clone target is resolved through the primitive as well, with
+  // mustExist:false because git is what creates it. Two reasons this is not
+  // optional: (1) `repoName` could return a name containing a separator, and
+  // `path.join` would then resolve outside the base; (2) a link PLANTED at
+  // exactly that name makes `git clone` write through it — git creates the
+  // directory itself, so nothing about the clone refuses a link the way an
+  // O_NOFOLLOW open does, and a planted `<repoName> -> /app/data` turns a clone
+  // into an arbitrary write. The primitive refuses both.
+  resolveContainedPath(WORKSPACES_ROOT, projectSlug, relativeCloneTarget(base, target), {
+    mustExist: false,
+  });
 
   // If we're cloning into the root, the only thing there may be the auto-init
   // .git scaffold (no commits) created for opencode registration — drop it so
@@ -1246,6 +1265,26 @@ function repoName(url: string): string {
   const cleaned = url.replace(/\/+$/, '').replace(/\.git$/i, '');
   const name = cleaned.split('/').pop() || cleaned.split(':').pop() || 'repo';
   return name.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80) || 'repo';
+}
+
+/**
+ * Workspace-relative form of an intended clone target, refusing anything that
+ * is not a single plain segment under the workspace.
+ *
+ * `repoName` filters to `[a-zA-Z0-9._-]`, which still KEEPS dots — so
+ * `https://h/x/..` yields `..`, and `path.join(base, '..')` resolved to the
+ * PARENT of the workspace: `git clone` would then create the repository
+ * outside the project (the janitor, not containment, is what keeps that from
+ * becoming a live project dir). The empty string is the documented "clone into
+ * the workspace root" case and is legal here.
+ */
+function relativeCloneTarget(base: string, target: string): string {
+  const rel = path.relative(base, target).split(path.sep).join('/');
+  if (rel === '') return '';
+  if (rel === '.' || rel === '..' || rel.startsWith('../') || rel.includes('/../')) {
+    throw new HttpError(400, 'Clone target is outside the project workspace');
+  }
+  return rel;
 }
 
 /**

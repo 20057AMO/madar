@@ -10,7 +10,7 @@ import path from 'path';
 import { WORKSPACES_ROOT } from './docker-manager';
 import { IGNORED_DIRS, invalidateProjectContext } from './project-context';
 import { HttpError } from './project-slug-core';
-import { resolveContainedPath, resolveWorkspaceBase } from './workspace-paths-core';
+import { writeContainedFile, resolveContainedPath, resolveWorkspaceBase } from './workspace-paths-core';
 
 const MAX_PREVIEW_CHARS = 200 * 1024;
 
@@ -341,29 +341,27 @@ export function writeWorkspaceFile(
   rel: string,
   content: string
 ): { ok: true; path: string; bytes: number } {
-  const base = workspaceBase(slug);
-  // mustExist:false — the target (and its parent folders) may not exist yet.
-  // The primitive still proves the deepest existing ancestor is a real,
-  // link-free directory strictly inside the workspace before we mkdir here.
-  const target = resolveWorkspacePath(slug, rel, { mustExist: false });
-  if (target === base) throw new HttpError(400, 'Invalid file path');
   if (typeof content !== 'string') throw new HttpError(400, 'Content must be a string');
   if (content.length > MAX_WRITE_CHARS) {
     throw new HttpError(413, `File too large (${content.length} chars, max ${MAX_WRITE_CHARS})`);
   }
-
-  try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    // Re-prove containment AFTER creating the parents: mkdir is the only step
-    // in this flow that touches the filesystem, and a link that appeared in a
-    // race would otherwise make the write land outside the workspace.
-    resolveWorkspacePath(slug, rel, { mustExist: false });
-    fs.writeFileSync(target, content, 'utf8');
-  } catch (err: any) {
-    throw new HttpError(500, err?.message || 'Failed to write file');
-  }
+  // The write goes through the primitive's LINK-FREE open, not through
+  // `mkdirSync` + `writeFileSync`. Both of those follow a symlink and expose no
+  // O_NOFOLLOW, so the containment proof a moment earlier was a promise about
+  // the past: an editor with root inside their own project container could swap
+  // the entry between the proof and the write (measured: a canary outside the
+  // workspace overwritten within ~2.2 s of racing). The kernel now refuses a
+  // symlink leaf at open() time, and the caller writes into the returned
+  // descriptor — there is no longer a second, link-following step. The 404 for
+  // a missing workspace and the refusal of the bare workspace root both still
+  // come from the primitive, unchanged.
+  const out = writeContainedFile(WORKSPACES_ROOT, slug, rel, content, {
+    mode: 'upsert',
+    mkdirParents: true,
+    invalidMessage: 'Invalid file path',
+  });
   invalidateProjectContext(slug);
-  return { ok: true, path: rel, bytes: Buffer.byteLength(content, 'utf8') };
+  return { ok: true, path: rel, bytes: out.bytes };
 }
 
 /** Rename or move a file/directory to another path in the same workspace. */

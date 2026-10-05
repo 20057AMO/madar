@@ -41,7 +41,7 @@ import { type ProjectLimits, getHostInfo } from './services/project-limits';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
-import { resolveContainedPath, parseUploadPaths, uploadRelativePath } from './services/workspace-paths-core';
+import { resolveContainedPath, parseUploadPaths, uploadRelativePath, copyContainedFile } from './services/workspace-paths-core';
 import { loadMeta, updateMeta, listMetaSlugs, memberList, writableMemberList } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
 
@@ -2671,31 +2671,48 @@ app.post('/api/projects/:slug/upload', requireProjectAccess('editor'), (req, res
     for (const file of files) {
       const rel = uploadRelativePath(requested[file.originalname] || file.originalname);
       if (!rel) continue;
-      let target: string;
+      let landed = '';
       try {
         // mustExist:false — the (folder-prefixed) target need not exist yet.
         // The primitive proves the deepest existing ancestor is a real,
         // link-free directory inside the workspace before anything is written.
-        target = resolveContainedPath(WORKSPACES_ROOT, slug, rel, { mustExist: false });
+        let target = resolveContainedPath(WORKSPACES_ROOT, slug, rel, { mustExist: false });
         if (fs.existsSync(target)) {
           target = uniqueTargetPath(base, target);
           // The suffixed candidate is a NEW path — prove it too, or a planted
           // link at that exact name would be written through.
           resolveContainedPath(WORKSPACES_ROOT, slug, workspaceRelative(base, target), { mustExist: false });
         }
-      } catch {
-        refused.push(rel);
-        continue;
-      }
-      try {
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(file.path, target);
-        saved.push({ name: file.originalname, path: workspaceRelative(base, target) });
+        // The de-dup above is an `existsSync`, i.e. another check-then-use — so
+        // the copy is made with `mode:'create'` (O_CREAT|O_EXCL), which is
+        // atomic: a name that appeared since the check fails EEXIST instead of
+        // being silently overwritten, and a symlink at that exact name fails
+        // instead of being written through. The loop re-picks a free candidate
+        // (up to 8 times) so the de-dup feature still works under a race
+        // instead of degrading into a refusal.
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            const out = copyContainedFile(WORKSPACES_ROOT, slug, workspaceRelative(base, target), file.path, {
+              mode: 'create',
+              mkdirParents: true,
+            });
+            target = out.path;
+            break;
+          } catch (err: any) {
+            if (attempt < 8 && fs.existsSync(target)) {
+              target = uniqueTargetPath(base, target);
+              continue;
+            }
+            throw err;
+          }
+        }
+        landed = workspaceRelative(base, target);
       } catch {
         refused.push(rel);
       } finally {
         try { fs.unlinkSync(file.path); } catch { /* temp file already gone */ }
       }
+      if (landed) saved.push({ name: file.originalname, path: landed });
     }
     res.status(201).json({ ok: true, files: saved, ...(refused.length ? { refused } : {}) });
   });
