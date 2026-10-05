@@ -41,7 +41,8 @@ import { type ProjectLimits, getHostInfo } from './services/project-limits';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
-import { loadMeta, updateMeta, listMetaSlugs } from './services/projects-meta';
+import { resolveContainedPath, parseUploadPaths, uploadRelativePath } from './services/workspace-paths-core';
+import { loadMeta, updateMeta, listMetaSlugs, memberList, writableMemberList } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
@@ -728,7 +729,7 @@ app.get('/api/users/with-memberships', requireAdmin, (req: any, res) => {
       list.push({ slug, name: projectName, role: 'admin', isOwner: true });
       memberships.set(ownerId, list);
     }
-    for (const m of meta.members || []) {
+    for (const m of memberList(meta)) {
       if (!m.userId || seen.has(m.userId)) continue;
       seen.add(m.userId);
       const list = memberships.get(m.userId) || [];
@@ -1925,7 +1926,7 @@ app.get('/api/projects/:slug/members', requireProjectAccess('viewer'), async (re
   try {
     const meta = loadMeta(req.params.slug);
     if (!meta) return res.status(404).json({ error: 'Project not found' });
-    const members = meta.members || [];
+    const members = memberList(meta);
     // Enrich with usernames
     const enriched = members.map((m) => {
       const info = getUserInfo(m.userId);
@@ -1964,13 +1965,14 @@ app.post('/api/projects/:slug/members', requireProjectAccess('admin'), async (re
       if (!meta.ownerId && !meta.members) {
         throw Object.assign(new Error('Project not found'), { statusCode: 404 });
       }
-      if (!meta.members) meta.members = [];
-      const existing = meta.members.find((m) => m.userId === userId);
+      // Refuses a corrupt `members` field instead of crashing on .find/.push.
+      const members = writableMemberList(meta);
+      const existing = members.find((m) => m.userId === userId);
       if (existing) {
         existing.role = memberRole;
         outcome.roleChanged = true;
       } else {
-        meta.members.push({ userId, role: memberRole, addedAt: new Date().toISOString() });
+        members.push({ userId, role: memberRole, addedAt: new Date().toISOString() });
       }
     });
     const action = outcome.roleChanged ? 'member-role-changed' : 'member-added';
@@ -2000,7 +2002,7 @@ app.delete('/api/projects/:slug/members/:userId', requireProjectAccess('viewer')
     const meta = loadMeta(slug);
     if (!meta) return res.status(404).json({ error: 'Project not found' });
 
-    const isProjectAdmin = meta.ownerId === callerId || meta.members?.some((m) => m.userId === callerId && m.role === 'admin');
+    const isProjectAdmin = meta.ownerId === callerId || memberList(meta).some((m) => m.userId === callerId && m.role === 'admin');
 
     // Users can remove themselves; otherwise must be admin
     if (callerId !== targetUserId && callerRole !== 'admin' && !isProjectAdmin) {
@@ -2015,9 +2017,9 @@ app.delete('/api/projects/:slug/members/:userId', requireProjectAccess('viewer')
     // updateMeta (not saveMeta): the member list is one field of a shared
     // document, so a concurrent writer's ports/limits/tags must survive.
     const removed = updateMeta(slug, (m) => {
-      if (!m.members) m.members = [];
-      const before = m.members.length;
-      m.members = m.members.filter((x) => x.userId !== targetUserId);
+      const members = writableMemberList(m);
+      const before = members.length;
+      m.members = members.filter((x) => x.userId !== targetUserId);
       if (m.members.length === before) {
         throw Object.assign(new Error('Member not found'), { statusCode: 404 });
       }
@@ -2058,7 +2060,7 @@ app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, as
     const callerId = req.user?.id;
     const callerRole = req.user?.role;
     const isAdminMember =
-      meta.ownerId === callerId || meta.members?.some((m) => m.userId === callerId && m.role === 'admin');
+      meta.ownerId === callerId || memberList(meta).some((m) => m.userId === callerId && m.role === 'admin');
     if (callerRole !== 'admin' && !isAdminMember) {
       return res.status(403).json({ error: 'Only the owner or a project/system admin can transfer ownership' });
     }
@@ -2095,11 +2097,11 @@ app.post('/api/projects/:slug/transfer-owner', userWriteLimiter, authLimiter, as
     // is an await, so writing the pre-await loaded doc back could clobber a
     // concurrent member change made while the password check was running.
     updateMeta(slug, (m) => {
-      if (!m.members) m.members = [];
+      const members = writableMemberList(m);
       const ensureAdmin = (ownerId: string) => {
-        const existing = m.members!.find((mm) => mm.userId === ownerId);
+        const existing = members.find((mm) => mm.userId === ownerId);
         if (existing) existing.role = 'admin';
-        else m.members!.push({ userId: ownerId, role: 'admin', addedAt: now });
+        else members.push({ userId: ownerId, role: 'admin', addedAt: now });
       };
       if (m.ownerId) ensureAdmin(m.ownerId);
       ensureAdmin(userId);
@@ -2643,9 +2645,15 @@ app.get('/api/projects/:slug/logs', requireProjectAccess('viewer'), async (req, 
 // Upload files into an existing project workspace (files only, no archives)
 app.post('/api/projects/:slug/upload', requireProjectAccess('editor'), (req, res) => {
   const slug = String(req.params.slug || '').trim();
-  const base = path.resolve(path.join(WORKSPACES_ROOT, slug));
-  if (!fs.existsSync(base)) {
-    return res.status(404).json({ error: `Project workspace '${slug}' not found` });
+  // The upload target goes through the SAME containment primitive as the Files
+  // tab. A lexical `resolve(base, rel)` + `startsWith` is not containment: a
+  // symlink the editor planted inside their own workspace satisfies every
+  // lexical rule while the bytes land anywhere the backend user can write.
+  let base: string;
+  try {
+    base = resolveContainedPath(WORKSPACES_ROOT, slug, '', { mustExist: true });
+  } catch (err: any) {
+    return res.status(err?.statusCode || 400).json({ error: err?.message || 'Invalid project workspace' });
   }
 
   upload.array('files', 50)(req, res, (err: any) => {
@@ -2657,17 +2665,39 @@ app.post('/api/projects/:slug/upload', requireProjectAccess('editor'), (req, res
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
+    const requested = parseUploadPaths((req.body as any)?.paths);
     const saved: { name: string; path: string }[] = [];
+    const refused: string[] = [];
     for (const file of files) {
-      const rel = normalizeUploadPath((req.body as any)?.paths?.[file.originalname] || file.originalname);
+      const rel = uploadRelativePath(requested[file.originalname] || file.originalname);
       if (!rel) continue;
-      const target = uniqueTargetPath(base, rel);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(file.path, target);
-      fs.unlinkSync(file.path);
-      saved.push({ name: file.originalname, path: path.relative(base, target).split(path.sep).join('/') });
+      let target: string;
+      try {
+        // mustExist:false — the (folder-prefixed) target need not exist yet.
+        // The primitive proves the deepest existing ancestor is a real,
+        // link-free directory inside the workspace before anything is written.
+        target = resolveContainedPath(WORKSPACES_ROOT, slug, rel, { mustExist: false });
+        if (fs.existsSync(target)) {
+          target = uniqueTargetPath(base, target);
+          // The suffixed candidate is a NEW path — prove it too, or a planted
+          // link at that exact name would be written through.
+          resolveContainedPath(WORKSPACES_ROOT, slug, workspaceRelative(base, target), { mustExist: false });
+        }
+      } catch {
+        refused.push(rel);
+        continue;
+      }
+      try {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(file.path, target);
+        saved.push({ name: file.originalname, path: workspaceRelative(base, target) });
+      } catch {
+        refused.push(rel);
+      } finally {
+        try { fs.unlinkSync(file.path); } catch { /* temp file already gone */ }
+      }
     }
-    res.status(201).json({ ok: true, files: saved });
+    res.status(201).json({ ok: true, files: saved, ...(refused.length ? { refused } : {}) });
   });
 });
 
@@ -2955,14 +2985,31 @@ app.get('/api/projects/:slug/subdir', requireProjectAccess('viewer'), (req, res)
 });
 
 /**
+ * Parse the client-supplied `paths` field: { "<original filename>": "<folder/name>" }.
+ *
+ * This field was ALWAYS dead code. multer hands multipart fields over as
+ * strings, so `req.body.paths` was the raw JSON text and the old
+ * `req.body.paths?.[file.originalname]` indexed into a STRING (undefined for
+ * any real filename) — every upload silently fell back to `file.originalname`
+ * and landed in the workspace root. Uploading into a folder selected in the
+ * Files tab therefore never worked, and the folder prefix the UI sends was
+ * discarded without a word.
+ *
+ * Parsing it makes the documented feature real, which is also why the write
+ * target now goes through workspace-paths-core: the subdirectory the client
+ * asks for is now attacker-influenced input that reaches the filesystem.
+ */
+/** Workspace-relative POSIX form of an absolute path already inside `base`. */
+function workspaceRelative(base: string, target: string): string {
+  return path.relative(base, target).split(path.sep).join('/');
+}
+
+/**
  * Resolve a target path inside the workspace; if a file already exists there,
  * append a numeric suffix before the extension so re-uploads never overwrite.
+ * The candidate is returned verbatim — the caller re-proves containment for it.
  */
-function uniqueTargetPath(base: string, rel: string): string {
-  const target = path.resolve(base, rel);
-  if (!target.startsWith(base)) return path.join(base, path.basename(rel));
-  if (!fs.existsSync(target)) return target;
-
+function uniqueTargetPath(base: string, target: string): string {
   const ext = path.extname(target);
   const stem = path.join(path.dirname(target), path.basename(target, ext));
   for (let i = 1; i < 1000; i++) {
@@ -2970,18 +3017,6 @@ function uniqueTargetPath(base: string, rel: string): string {
     if (!fs.existsSync(candidate)) return candidate;
   }
   return `${stem}-${Date.now()}${ext}`;
-}
-
-/**
- * Keep upload paths inside the project workspace; strips leading slashes,
- * resolves '..' segments safely, and falls back to the bare filename.
- */
-function normalizeUploadPath(raw: string): string | null {
-  const value = String(raw ?? '').trim();
-  const clean = value.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!clean || clean === '.') return null;
-  if (clean.startsWith('..') || clean.includes('/../') || clean.endsWith('/..')) return null;
-  return clean.slice(0, 1024);
 }
 
 // ── Serve frontend static build if present ───────────────────

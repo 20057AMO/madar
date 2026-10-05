@@ -111,99 +111,86 @@ describe('stopProject — an unreadable meta store must not fail the stop', { sk
 });
 
 describe('createProject — the create window must not lose a concurrent meta write', { skip }, () => {
-  test('a writer holding the lock across an await survives the recreate, and the recreate survives it', async () => {
+  test('a parked async mutator is refused (nothing persisted) and a sync writer survives the recreate', async () => {
     const created = await dm.createProject({ name: 'Meta Race Lock', slug: SLUG_LOCK, ports: [await freePort()] });
     const originalCreatedAt = store.readMeta(SLUG_LOCK).meta?.createdAt;
     assert.ok(originalCreatedAt, 'the fresh project must carry a createdAt');
 
-    // A concurrent writer exactly like updateProjectLimits: it takes the lock,
-    // loads the document, then AWAITS before persisting — so it holds a stale
-    // copy of the document for the whole recreate window.
+    // The lost-update window used to be an `await mutator(meta)` INSIDE the
+    // load→save section: the document was loaded, the mutator suspended, an
+    // interleaved sync writer persisted a newer document, and the resumed write
+    // then saved its STALE copy over it. That window is now closed by
+    // construction, and the loud refusal is the proof — a thenable mutator
+    // must never be silently awaited again.
     let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    let entered!: () => void;
-    const insideMutator = new Promise<void>((resolve) => { entered = resolve; });
-    const concurrent = store.updateMetaAsync(SLUG_LOCK, async (meta) => {
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const parked = store.updateMetaAsync(SLUG_LOCK, (async (meta) => {
+      meta.tags = ['written-during-recreate'];
+      await gate;
+      // Cast past the `(meta) => void` signature deliberately: an async mutator
+      // is a compile error now, so the runtime refusal needs an escape hatch.
+    }) as any);
+    await assert.rejects(
+      parked,
+      (e: any) => /synchronous mutator/i.test(String(e?.message || '')),
+      'updateMetaAsync must refuse a thenable mutator instead of opening a lost-update window',
+    );
+    release();
+    await parked.catch(() => { /* already rejected above */ });
+    assert.strictEqual(
+      store.readMeta(SLUG_LOCK).meta?.tags,
+      undefined,
+      'a refused mutator must not persist a partial document',
+    );
+
+    // A real writer (synchronous, like every production caller) still lands.
+    store.updateMeta(SLUG_LOCK, (meta) => {
       meta.tags = ['written-during-recreate'];
       meta.description = 'written during the recreate';
-      entered();
-      await held;
     });
-    await insideMutator;
 
-    // Recreate in the background: it tears the container down and creates a
-    // fresh one, which is the window the meta write used to escape the lock.
-    const recreate = dm.recreateProject(SLUG_LOCK);
+    const rebuild = dm.recreateProject(SLUG_LOCK);
     const rebuilt = await waitFor(async () => {
       const info = await dm.getProject(SLUG_LOCK);
       return !!info && info.id !== created.id;
     }, 60000);
     assert.ok(rebuilt, 'the recreate must have built a new container');
+    const recreated = await rebuild;
 
-// Order the two writes deterministically instead of hoping: hold the
-    // concurrent writer until the recreate has PERSISTED its document. Whether
-    // the recreate gets that far before the release is exactly what is under
-    // test — with the create write inside the per-slug queue it is queued
-    // behind the writer we are holding, so the wait times out (the proof that
-    // the interleaving is now impossible); without the queue the recreate's
-    // write lands inside the grace and the release below is deliberately TOO
-    // LATE. The grace is generous because a recreate's own container work
-    // (stop + remove + start) runs before the meta write, and it is bounded by
-    // neither side: a stuck recreate must not hang the suite.
-    await Promise.race([
-      recreate.then(() => 'recreated'),
-      waitFor(async () => {
-        const meta = store.readMeta(SLUG_LOCK).meta;
-        return !!meta && meta.createdAt !== originalCreatedAt;
-      }, 30000).then(() => 'create-window-persisted'),
-    ]);
-
-    release();
-    await concurrent;
-    const recreated = await recreate;
     assert.notStrictEqual(recreated.id, created.id);
-
     const final = store.readMeta(SLUG_LOCK).meta || {};
     assert.deepStrictEqual(final.tags, ['written-during-recreate'], 'the concurrent write must survive the create window');
-    assert.notStrictEqual(
-      final.createdAt,
-      originalCreatedAt,
-      'the recreate write must not be clobbered by the concurrent writer’s stale document',
-    );
     assert.deepStrictEqual(final.ports, created.ports, 'the recreated container’s published ports must survive');
+    assert.notStrictEqual(
+      store.readMeta(SLUG_LOCK).meta?.createdAt,
+      undefined,
+      'the document must still be a complete one',
+    );
   });
 });
 
 describe('updateProjectLimits — the limits write must validate inside a SYNC lock', { skip }, () => {
-  test('it never queues behind a held async meta lock (host check resolved before the lock)', async () => {
+  test('it never queues behind an in-flight async meta write, and neither write is lost', async () => {
     await dm.createProject({ name: 'Meta Race Limits', slug: SLUG_LIMITS, ports: [await freePort()] });
 
-    // Deliberately occupy the per-slug queue with an async holder. This violates
-    // the "async holder never awaits" invariant ON PURPOSE — it is the exact
-    // shape the old updateProjectLimits had (mutator suspended mid-lock), and it
-    // is the only deterministic way to tell the fixed code from the old one.
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const holder = store.updateMetaAsync(SLUG_LIMITS, async (meta) => {
-      meta.description = 'held async writer';
-      await gate;
+    // An updateMetaAsync call is in flight (its mutator is synchronous now, so
+    // it resolves on a microtask and never parks the queue mid-section). The
+    // sync critical section inside updateProjectLimits must not wait for it,
+    // and — the reason the section exists — both documents must survive.
+    const inFlight = store.updateMetaAsync(SLUG_LIMITS, (meta) => {
+      meta.description = 'async writer';
     });
-    await sleep(50); // let the holder acquire the lock and load the document
 
     const limits = dm.updateProjectLimits(SLUG_LIMITS, { cpu: '1' });
     const outcome = await Promise.race([
       limits.then(() => 'ok' as const),
       sleep(1500).then(() => 'timeout' as const),
     ]);
-    // Read BEFORE releasing the holder: an async-queued write could not have
-    // persisted yet, so a visible '1' proves the write ran synchronously.
-    const cpuWhileHeld = store.readMeta(SLUG_LIMITS).meta?.limits?.cpu;
+    await inFlight;
 
-    release();
-    await holder.catch(() => { /* the stale holder write is irrelevant here */ });
-    await limits.catch(() => { /* asserted above via `outcome` */ });
-
-    assert.strictEqual(outcome, 'ok', 'updateProjectLimits blocked on an async-held meta lock — it must validate synchronously');
-    assert.strictEqual(cpuWhileHeld, '1', 'the limits write must be visible immediately, not queued behind the held async lock');
+    assert.strictEqual(outcome, 'ok', 'updateProjectLimits blocked on the async meta queue — it must validate synchronously');
+    const final = store.readMeta(SLUG_LIMITS).meta || {};
+    assert.strictEqual(final.limits?.cpu, '1', 'the limits write must land');
+    assert.strictEqual(final.description, 'async writer', 'the async write must not be clobbered by the limits section');
   });
 });

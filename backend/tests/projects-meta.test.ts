@@ -143,6 +143,107 @@ describe('updateMeta — the silent-wipe fix', () => {
   });
 });
 
+// The lost-update class this store used to have: `updateMetaAsync` awaited the
+// mutator BETWEEN the load and the save, so a synchronous writer landing in that
+// window (ports/tags/notes/crash-state) had its newer document overwritten by the
+// resumed mutator's stale copy. The invariant is now structural — the mutator
+// must be synchronous — and a thenable is refused loudly instead of awaited.
+describe('updateMetaAsync — the no-await mutator invariant', () => {
+  test('an async mutator is refused and NOTHING is persisted', async () => {
+    store.saveMeta('inv', { name: 'Invariant', description: 'before' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const parked = store.updateMetaAsync('inv', (async (m) => {
+      m.description = 'should never persist';
+      await gate;
+      // Cast past the `(meta) => void` signature on purpose: an async mutator
+      // is a COMPILE error now, so the runtime refusal needs an explicit escape
+      // hatch to be provable at all.
+    }) as any);
+    await assert.rejects(parked, /synchronous mutator/i);
+    release();
+    await parked.catch(() => { /* already rejected */ });
+    assert.strictEqual(
+      store.readMeta('inv').meta?.description,
+      'before',
+      'a refused mutator must not leave a partial write behind',
+    );
+  });
+
+  test('a thenable (non-async function returning a promise) is refused too', async () => {
+    store.saveMeta('inv2', { name: 'Thenable', description: 'before' });
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/require-await
+      store.updateMetaAsync('inv2', ((m: any) => Promise.resolve((m.description = 'x'))) as any),
+      /synchronous mutator/i,
+    );
+    assert.strictEqual(store.readMeta('inv2').meta?.description, 'before');
+  });
+
+  test('a synchronous mutator still persists, and concurrent sync writers do not lose each other', async () => {
+    store.saveMeta('inv3', { name: 'Sync', tags: [] });
+    await Promise.all([
+      store.updateMetaAsync('inv3', (m) => { m.description = 'one'; }),
+      store.updateMetaAsync('inv3', (m) => { m.tags = ['two']; }),
+      store.updateMetaAsync('inv3', (m) => { m.name = 'Sync-renamed'; }),
+    ]);
+    const final = store.readMeta('inv3').meta || {};
+    assert.strictEqual(final.description, 'one');
+    assert.deepStrictEqual(final.tags, ['two']);
+    assert.strictEqual(final.name, 'Sync-renamed', 'all three writes serialize on the per-slug queue');
+  });
+});
+
+// A damaged/hand-edited meta.json whose `members` is not an array. Reads must
+// fail CLOSED (no membership ⇒ no project-admin), and writes must refuse loudly
+// instead of crashing on `.find`/`.push` — silently coercing to [] would DESTROY
+// the very rows an operator may still need to recover.
+describe('members shape guards — a non-array members field', () => {
+  const corrupt = (slug: string, value: unknown) => {
+    store.saveMeta(slug, { name: 'Shape', description: 'd' } as any);
+    const raw = JSON.parse(fs.readFileSync(metaFile(slug), 'utf8'));
+    raw.members = value;
+    fs.writeFileSync(metaFile(slug), JSON.stringify(raw), 'utf8');
+  };
+
+  test('memberList treats every non-array as no members (never iterates a string)', () => {
+    store.saveMeta('shp1', { name: 'S1', members: [{ userId: 'u1', role: 'admin' }] } as any);
+    assert.strictEqual(store.memberList(store.readMeta('shp1').meta).length, 1, 'a real array is passed through');
+    for (const junk of ['abc', 42, true, {}, null]) {
+      corrupt('shp1', junk);
+      assert.deepStrictEqual(store.memberList(store.readMeta('shp1').meta), [], `${JSON.stringify(junk)} must read as no members`);
+    }
+    assert.deepStrictEqual(store.memberList(null), []);
+    assert.deepStrictEqual(store.memberList(undefined), []);
+  });
+
+  test('writableMemberList REFUSES a corrupt field (500) and never drops it', () => {
+    corrupt('shp2', 'nonsense');
+    const read = store.readMeta('shp2').meta as any;
+    assert.throws(() => store.writableMemberList(read), (e: any) => e?.statusCode === 500 && /members/i.test(e.message));
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(metaFile('shp2'), 'utf8')).members,
+      'nonsense',
+      'the damaged field must survive untouched so an operator can repair it',
+    );
+  });
+
+  test('writableMemberList seeds an absent/null field, and passes a real array through', () => {
+    store.saveMeta('shp3', { name: 'S3' } as any);
+    const absent = store.readMeta('shp3').meta as any;
+    assert.deepStrictEqual(store.writableMemberList(absent), []);
+    assert.deepStrictEqual(absent.members, [], 'the seed lands on the document the caller then mutates');
+    // The route mutates inside updateMeta, so the seed must reach the file.
+    store.updateMeta('shp3', (m) => { store.writableMemberList(m).push({ userId: 'u3', role: 'editor' } as any); });
+    assert.strictEqual(store.readMeta('shp3').meta?.members?.length, 1);
+
+    store.saveMeta('shp4', { name: 'S4', members: [{ userId: 'u2', role: 'viewer' }] } as any);
+    const real = store.readMeta('shp4').meta as any;
+    assert.strictEqual(store.writableMemberList(real).length, 1);
+    assert.strictEqual(store.writableMemberList({ members: null } as any).length, 0);
+  });
+});
+
 describe('deleteMeta — the data-wipe regression', () => {
   test('deleteMeta("..") throws 400 and DATA_DIR survives with its sentinel', () => {
     assert.throws(() => store.deleteMeta('..'), HttpError);
@@ -194,43 +295,48 @@ describe('workspace-files — slug containment', () => {
   // so resolveWorkspacePath must walk each component (lstat, reject links) and
   // confirm the realpath is still inside the real base. Without this a project
   // workspace could read /app/data/jwt.secret through a planted link.
-  test('a symlinked FILE inside a workspace cannot be read through', () => {
+  //
+  // These three rows used to `return;` inside the catch, so on Windows (no
+  // symlink privilege) they reported PASS with zero assertions — a green suite
+  // that tested nothing. They now mark a visible skip and use JUNCTIONS on
+  // Windows, which need no elevation, so the assertion actually runs.
+  function plantLink(t: any, linkPath: string, target: string, type: 'file' | 'dir'): boolean {
+    try {
+      fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : type);
+      return true;
+    } catch {
+      t.skip(`this platform refused to create a link (${type}) at ${linkPath}`);
+      return false;
+    }
+  }
+
+  test('a symlinked FILE inside a workspace cannot be read through', (t) => {
     const base = path.join(workspacesDir, 'symproj');
     fs.mkdirSync(base, { recursive: true });
     const outside = path.join(dataDir, 'outside-secret.txt');
     fs.writeFileSync(outside, 'top-secret');
-    try {
-      fs.symlinkSync(outside, path.join(base, 'escape.txt'), 'file');
-    } catch {
-      return; // symlinks unsupported on this filesystem (Windows w/o privileges) — skip
-    }
+    if (!plantLink(t, path.join(base, 'escape.txt'), outside, 'file')) return;
+    assert.ok(fs.lstatSync(path.join(base, 'escape.txt')).isSymbolicLink(), 'the link must really exist');
     assert.throws(() => wf.resolveWorkspacePath('symproj', 'escape.txt'), HttpError);
     assert.throws(() => wf.readWorkspaceFile('symproj', 'escape.txt'), HttpError);
   });
 
-  test('a symlinked DIRECTORY component is refused before any child resolves', () => {
+  test('a symlinked DIRECTORY component is refused before any child resolves', (t) => {
     const base = path.join(workspacesDir, 'symdir');
     fs.mkdirSync(base, { recursive: true });
     const outside = path.join(dataDir, 'outside-dir');
     fs.mkdirSync(outside, { recursive: true });
     fs.writeFileSync(path.join(outside, 'secret.txt'), 'top-secret');
-    try {
-      fs.symlinkSync(outside, path.join(base, 'link'), 'dir');
-    } catch {
-      return; // no symlink support — skip
-    }
+    if (!plantLink(t, path.join(base, 'link'), outside, 'dir')) return;
+    assert.ok(fs.lstatSync(path.join(base, 'link')).isSymbolicLink(), 'the link must really exist');
     assert.throws(() => wf.resolveWorkspacePath('symdir', 'link/secret.txt'), HttpError);
     assert.throws(() => wf.readWorkspaceFile('symdir', 'link/secret.txt'), HttpError);
   });
 
-  test('a symlinked workspace ROOT (the slug dir itself) is refused', () => {
+  test('a symlinked workspace ROOT (the slug dir itself) is refused', (t) => {
     const outside = path.join(dataDir, 'outside-root');
     fs.mkdirSync(outside, { recursive: true });
-    try {
-      fs.symlinkSync(outside, path.join(workspacesDir, 'symroot'), 'dir');
-    } catch {
-      return; // no symlink support — skip
-    }
+    if (!plantLink(t, path.join(workspacesDir, 'symroot'), outside, 'dir')) return;
     assert.throws(() => wf.resolveWorkspacePath('symroot', ''), HttpError);
     assert.throws(() => wf.resolveWorkspacePath('symroot', 'x.txt'), HttpError);
   });

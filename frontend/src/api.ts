@@ -143,7 +143,13 @@ export interface PortHealth {
 
 export interface FileEntry {
   path: string;
-  type: 'file' | 'dir';
+  /**
+   * `link` is a symlink / junction that survived `readdir`. It is listed (never
+   * silently hidden) so the user can see and delete it, but the backend refuses
+   * to read or write THROUGH it, and its size is the link's own, never the
+   * target's.
+   */
+  type: 'file' | 'dir' | 'link';
   size: number;
   mtime: string;
 }
@@ -1236,7 +1242,7 @@ export async function fetchProjectFileRaw(slug: string, path: string, download =
   return res.blob();
 }
 export const deleteProjectFile = (slug: string, path: string) =>
-  api<{ ok: boolean; type: 'file' | 'dir' }>(
+  api<{ ok: boolean; type: 'file' | 'dir' | 'link' }>(
     `/api/projects/${slug}/file?path=${encodeURIComponent(path)}`,
     { method: 'DELETE' }
   );

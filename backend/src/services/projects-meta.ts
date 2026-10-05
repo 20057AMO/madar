@@ -212,6 +212,47 @@ function saveMetaRaw(slug: string, meta: ProjectMeta): void {
   fs.renameSync(tmp, final);
 }
 
+/**
+ * The membership list of a document, as a validated array.
+ *
+ * `members` is attacker-reachable only through a damaged/hand-edited
+ * meta.json, but that is enough: `meta.members || []` iterates a STRING
+ * character by character (garbage rows on the Team page) and
+ * `meta.members.find(...)` / `.some(...)` / `.push(...)` throw a bare
+ * TypeError, i.e. an opaque 500 that says nothing about what is wrong.
+ *
+ * For READS and AUTHORIZATION this fails CLOSED: a non-array is treated as no
+ * members at all, so a corrupt document can never grant project-admin rights
+ * to a caller (the safe direction for `.some`).
+ */
+export function memberList(meta: { members?: unknown } | null | undefined): ProjectMember[] {
+  const raw = meta?.members;
+  return Array.isArray(raw) ? (raw as ProjectMember[]) : [];
+}
+
+/**
+ * The write-path guard: refuse to mutate a document whose `members` field is
+ * present but not an array. Silently coercing it to `[]` would DROP whatever
+ * the field was meant to hold (membership rows that no longer parse are still
+ * data an operator may need to recover), and `!meta.members` never fires for a
+ * truthy junk value, so the old code went straight to `.find` and crashed.
+ * Callers pass a clean array (or the object is absent) to proceed.
+ */
+export function writableMemberList(meta: { members?: unknown }): ProjectMember[] {
+  const raw = meta.members;
+  if (raw === undefined || raw === null) {
+    meta.members = [];
+    return meta.members as ProjectMember[];
+  }
+  if (!Array.isArray(raw)) {
+    throw new HttpError(
+      500,
+      'Project metadata is corrupt: `members` is not an array — repair meta.json before changing team access',
+    );
+  }
+  return raw as ProjectMember[];
+}
+
 /** Per-slug write lock — prevents lost concurrent updates on meta.json. */
 export function saveMeta(slug: string, meta: ProjectMeta): void {
   const clean = assertSafeStoreSlug(slug, META_DIR);
@@ -245,21 +286,43 @@ export function updateMeta(
 }
 
 /**
- * Async variant of updateMeta — for mutators that must AWAIT inside the
- * read-modify-write (e.g. updateProjectLimits sanitizes + checks host ceilings
- * before persisting). Serialized per slug via withFileLockAsync, so the
- * loaded document can never go stale across the await.
+ * Async variant of updateMeta — kept for callers that already await it.
+ *
+ * The returned promise resolves the SAME work; what changed is the shape of
+ * the critical section. It used to `await mutator(meta)` UNCONDITIONALLY,
+ * which yields the microtask queue even for a synchronous mutator, so the
+ * window between "load the document" and "save the document" straddled a tick.
+ * An `updateMeta` call landing in that window read the pre-await state, wrote
+ * it, and the resumed async write then persisted ITS stale document over the
+ * newer one — a lost update that silently reverted a concurrent edit (the
+ * invariant write-queue.ts documents as "an async holder must never keep the
+ * lock across an await").
+ *
+ * So: the mutator MUST be synchronous, the window contains no await, and a
+ * thenable result is refused loudly rather than silently awaited. Resolve
+ * everything async BEFORE calling this (that is exactly what
+ * updateProjectLimits does with getHostInfo + checkCeilingsSync).
+ *
+ * The parameter is typed `(meta) => void`, NOT `=> void | Promise<void>`, so the
+ * refusal above is a COMPILE error for a new async mutator instead of a runtime
+ * 500 on a meta write. The runtime check stays for untyped JS callers and casts.
  */
-export async function updateMetaAsync(
+export function updateMetaAsync(
   slug: string,
-  mutator: (meta: ProjectMeta) => Promise<void> | void,
+  mutator: (meta: ProjectMeta) => void,
   init: ProjectMeta = { activity: [] },
 ): Promise<ProjectMeta> {
   const clean = assertSafeStoreSlug(slug, META_DIR);
   return withFileLockAsync(`meta:${clean}`, async () => {
     const loaded = loadMetaStrict(clean);
     const meta: ProjectMeta = loaded ?? { ...init };
-    await mutator(meta);
+    const result = mutator(meta) as unknown;
+    if (result && typeof (result as { then?: unknown }).then === 'function') {
+      throw new HttpError(
+        500,
+        'updateMetaAsync requires a synchronous mutator; resolve async work before calling it',
+      );
+    }
     saveMetaRaw(clean, meta);
     return meta;
   });

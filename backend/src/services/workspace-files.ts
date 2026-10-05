@@ -9,7 +9,8 @@ import fs from 'fs';
 import path from 'path';
 import { WORKSPACES_ROOT } from './docker-manager';
 import { IGNORED_DIRS, invalidateProjectContext } from './project-context';
-import { HttpError, cleanStoreSlug, isStrictlyInside } from './project-slug-core';
+import { HttpError } from './project-slug-core';
+import { resolveContainedPath, resolveWorkspaceBase } from './workspace-paths-core';
 
 const MAX_PREVIEW_CHARS = 200 * 1024;
 
@@ -19,27 +20,24 @@ const MAX_PREVIEW_CHARS = 200 * 1024;
 const MAX_LIST_ENTRIES = 1000;
 
 /**
- * Resolve a slug to its workspace dir and VERIFY it is strictly inside the
- * workspace root. The slug sanitizer keeps dots on purpose (legacy slugs
- * `my.project_2` exist), so `..` survives it and — before this check — made
- * `resolveWorkspacePath('..', 'etc/passwd')` resolve OUTSIDE /workspaces
- * (the rel-path guard only sanitized the RELATIVE part, never the base).
- * `.` / `..` / empty / separator-bearing slugs throw 400.
+ * Resolve a slug to its workspace dir, verified strictly inside the REAL
+ * workspace root and refused when the dir itself is a link. Every path
+ * consumer in this module goes through workspace-paths-core — see that file
+ * for why a lexical `resolve` + `startsWith` check is not containment.
  */
 function workspaceBase(slug: unknown): string {
-  const clean = cleanStoreSlug(String(slug ?? ''));
-  if (!clean || clean === '.' || clean === '..' || String(slug).includes('/') || String(slug).includes('\\')) {
-    throw new HttpError(400, 'Project slug is invalid');
-  }
-  const root = path.resolve(WORKSPACES_ROOT);
-  const base = path.resolve(root, clean);
-  if (!isStrictlyInside(root, base)) throw new HttpError(400, 'Project slug is invalid');
-  return base;
+  return resolveWorkspaceBase(WORKSPACES_ROOT, slug);
 }
 
 export interface FileEntry {
   path: string;
-  type: 'file' | 'dir';
+  /**
+   * `link` is a symlink / Windows junction. It is listed so the user can SEE
+   * and DELETE it — the alternative was a link that silently did not appear in
+   * the Files tab and could not be removed through the API at all. Nothing
+   * ever follows one: reads, previews, uploads and copies all refuse links.
+   */
+  type: 'file' | 'dir' | 'link';
   size: number;
   mtime: string;
 }
@@ -122,77 +120,21 @@ export function resolveProjectSubdir(slug: string): SubdirInfo {
   };
 }
 
-/** Resolve a workspace path safely; throws on traversal or missing workspace. */
-export function resolveWorkspacePath(slug: string, rel?: string): string {
-  const base = workspaceBase(slug);
-  const cleanSlug = cleanStoreSlug(String(slug ?? ''));
-  if (!fs.existsSync(base)) throw new HttpError(404, `Project workspace '${cleanSlug}' not found`);
-
-  const relClean = String(rel ?? '')
-    .replace(/\\/g, '/')
-    .replace(/^\/+/, '');
-  if (!relClean || relClean === '.') {
-    try {
-      const realBase = fs.realpathSync(base);
-      const root = path.resolve(WORKSPACES_ROOT);
-      if (!isStrictlyInside(root, realBase)) throw new HttpError(400, 'Invalid path');
-    } catch (err: any) {
-      if (err instanceof HttpError) throw err;
-      if (err.code === 'ENOENT') throw new HttpError(404, 'Project workspace ' + cleanSlug + ' not found');
-      throw new HttpError(400, 'Invalid path');
-    }
-    return base;
-  }
-
-  const normalized = path.posix.normalize(relClean);
-  if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
-    throw new HttpError(400, 'Invalid path');
-  }
-  const target = path.resolve(base, normalized);
-  if (target !== base && !target.startsWith(base + path.sep)) {
-    throw new HttpError(400, 'Invalid path');
-  }
-
-  const root = path.resolve(WORKSPACES_ROOT);
-  let current = base;
-  const relParts = normalized.split('/').filter((p) => p !== '.' && p !== '');
-  for (let i = 0; i < relParts.length; i++) {
-    current = path.join(current, relParts[i]);
-    try {
-      const st = fs.lstatSync(current);
-      if (st.isSymbolicLink()) {
-        throw new HttpError(400, 'Invalid path');
-      }
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        break;
-      }
-      throw new HttpError(400, 'Invalid path');
-    }
-  }
-
-  try {
-    let checkPath = target;
-    try {
-      checkPath = fs.realpathSync(target);
-    } catch (err: any) {
-      if (err.code !== 'ENOENT') throw err;
-      const parent = path.dirname(target);
-      const realParent = fs.realpathSync(parent);
-      checkPath = path.resolve(realParent, path.basename(target));
-    }
-    const realBase = fs.realpathSync(base);
-    if (!isStrictlyInside(root, realBase) || !isStrictlyInside(realBase, checkPath)) {
-      throw new HttpError(400, 'Invalid path');
-    }
-  } catch (err: any) {
-    if (err instanceof HttpError) throw err;
-    if (err.code === 'ENOENT') {
-      throw new HttpError(404, 'Path not found');
-    }
-    throw new HttpError(400, 'Invalid path');
-  }
-  return target;
+/**
+ * Resolve a workspace path safely. Throws on traversal, on a symlink /
+ * junction anywhere in the path, and on a missing workspace.
+ *
+ * `mustExist: false` is what lets the Files tab CREATE `new-folder/file.txt`:
+ * the old lexical+realpath proof called `realpathSync` on the (not yet
+ * existing) target's parent, so a path that did not exist yet failed the
+ * containment check and every folder-creating write answered 404 "Path not
+ * found" — while the UI label promised "folders allowed".
+ */
+export function resolveWorkspacePath(slug: string, rel?: string, opts: { mustExist?: boolean; allowLinkLeaf?: boolean } = {}): string {
+  return resolveContainedPath(WORKSPACES_ROOT, slug, rel, {
+    mustExist: opts.mustExist !== false,
+    allowLinkLeaf: opts.allowLinkLeaf === true,
+  });
 }
 
 export function listWorkspaceFiles(slug: string, rel?: string): FileListing {
@@ -222,26 +164,32 @@ export function listWorkspaceFiles(slug: string, rel?: string): FileListing {
       if (IGNORED_DIRS.has(item.name)) continue;
       entries.push({ path: item.name, type: 'dir', size: 0, mtime: '' });
       dirCount += 1;
-    } else if (item.isFile()) {
+    } else if (item.isFile() || item.isSymbolicLink()) {
+      // lstat, never stat: a link's own size is what the link costs, and
+      // stat-ing it would pull the TARGET's bytes into this workspace's totals
+      // (the same rule storage-core.ts follows for disk usage).
       let st: fs.Stats;
       try {
-        st = fs.statSync(path.join(dir, item.name));
+        st = fs.lstatSync(path.join(dir, item.name));
       } catch {
         continue;
       }
+      const isLink = st.isSymbolicLink();
       entries.push({
         path: item.name,
-        type: 'file',
+        type: isLink ? 'link' : 'file',
         size: st.size,
         mtime: st.mtime.toISOString(),
       });
+      // A link is not a directory, so it counts (and bills) as a file row.
       fileCount += 1;
       totalBytes += st.size;
     }
   }
 
   entries.sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    if (a.type === 'dir' && b.type !== 'dir') return -1;
+    if (b.type === 'dir' && a.type !== 'dir') return 1;
     return a.path.localeCompare(b.path);
   });
 
@@ -353,9 +301,12 @@ export function streamWorkspaceFile(
   };
 }
 
-export function deleteWorkspacePath(slug: string, rel: string): { ok: boolean; type: 'file' | 'dir' } {
+export function deleteWorkspacePath(slug: string, rel: string): { ok: boolean; type: 'file' | 'dir' | 'link' } {
   const base = workspaceBase(slug);
-  const target = resolveWorkspacePath(slug, rel);
+  // allowLinkLeaf: deleting must be able to remove the LINK itself. Every other
+  // operation refuses links, which used to make a link undeletable through the
+  // API — it could not be listed either, so it was simply invisible.
+  const target = resolveWorkspacePath(slug, rel, { allowLinkLeaf: true });
   if (target === base) throw new HttpError(400, 'Cannot delete the workspace root');
 
   let stat: fs.Stats;
@@ -364,11 +315,21 @@ export function deleteWorkspacePath(slug: string, rel: string): { ok: boolean; t
   } catch {
     throw new HttpError(404, 'Path not found');
   }
-  const type = stat.isDirectory() ? 'dir' : 'file';
-  if (type === 'dir') fs.rmSync(target, { recursive: true, force: true });
-  else fs.unlinkSync(target);
+  // Order matters: lstat on a symlink reports the LINK, never its target, so a
+  // link-to-directory is unlinked instead of rm -rf'd through.
+  if (stat.isSymbolicLink()) {
+    fs.unlinkSync(target);
+    invalidateProjectContext(slug);
+    return { ok: true, type: 'link' };
+  }
+  if (stat.isDirectory()) {
+    fs.rmSync(target, { recursive: true, force: true });
+    invalidateProjectContext(slug);
+    return { ok: true, type: 'dir' };
+  }
+  fs.unlinkSync(target);
   invalidateProjectContext(slug);
-  return { ok: true, type };
+  return { ok: true, type: 'file' };
 }
 
 /** Matches agent-tools MAX_FILE_WRITE so UI edits and agents share one cap. */
@@ -381,7 +342,10 @@ export function writeWorkspaceFile(
   content: string
 ): { ok: true; path: string; bytes: number } {
   const base = workspaceBase(slug);
-  const target = resolveWorkspacePath(slug, rel);
+  // mustExist:false — the target (and its parent folders) may not exist yet.
+  // The primitive still proves the deepest existing ancestor is a real,
+  // link-free directory strictly inside the workspace before we mkdir here.
+  const target = resolveWorkspacePath(slug, rel, { mustExist: false });
   if (target === base) throw new HttpError(400, 'Invalid file path');
   if (typeof content !== 'string') throw new HttpError(400, 'Content must be a string');
   if (content.length > MAX_WRITE_CHARS) {
@@ -390,6 +354,10 @@ export function writeWorkspaceFile(
 
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
+    // Re-prove containment AFTER creating the parents: mkdir is the only step
+    // in this flow that touches the filesystem, and a link that appeared in a
+    // race would otherwise make the write land outside the workspace.
+    resolveWorkspacePath(slug, rel, { mustExist: false });
     fs.writeFileSync(target, content, 'utf8');
   } catch (err: any) {
     throw new HttpError(500, err?.message || 'Failed to write file');
@@ -401,7 +369,8 @@ export function writeWorkspaceFile(
 /** Rename or move a file/directory to another path in the same workspace. */
 export function renameWorkspacePath(slug: string, from: string, to: string): { ok: true } {
   const src = resolveWorkspacePath(slug, from);
-  const dst = resolveWorkspacePath(slug, to);
+  // The destination may not exist yet — moving into a new folder has to work.
+  const dst = resolveWorkspacePath(slug, to, { mustExist: false });
   const base = workspaceBase(slug);
   if (src === base || dst === base) throw new HttpError(400, 'Invalid rename path');
   if (src === dst) return { ok: true };

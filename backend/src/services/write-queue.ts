@@ -24,11 +24,15 @@
  * invariant: **an async holder must never keep the lock across an `await`.**
  * A synchronous `fn` cannot wait for a pending promise (there is no blocking
  * `await` in JS), so if withFileLockAsync suspended mid-mutator, an interleaved
- * withFileLock call would run immediately and the resumed async mutator would
- * then persist its pre-await document — the lost-update class. The fix is
- * structural, not a queue trick: async mutators resolve everything they need
- * BEFORE the lock and validate synchronously inside it (see updateProjectLimits
- * → checkCeilingsSync), so no async path holds a key across a tick.
+ * withFileLock call would run immediately and the resumed async write would
+ * then persist its pre-await document — the lost-update class.
+ *
+ * That invariant is now ENFORCED, not merely documented: updateMetaAsync runs
+ * its whole load→mutate→save window without an await and throws when handed a
+ * thenable mutator (it used to `await` unconditionally, which opened the
+ * window for a synchronous mutator too). Async work is resolved BEFORE the
+ * lock is taken — updateProjectLimits calls getHostInfo first and validates
+ * with checkCeilingsSync inside it.
  */
 
 const chains = new Map<string, Promise<unknown>>();
@@ -37,11 +41,12 @@ const chains = new Map<string, Promise<unknown>>();
  * Synchronous variant — for purely synchronous fn. In single-threaded
  * Node.js, truly sync code between two calls cannot interleave, so this runs
  * fn directly; the "async-holder never awaits" invariant above is what makes
- * the fast path safe. Deliberately NOT a deferred enqueue: running fn inside
+ * the fast path safe, and updateMetaAsync now enforces it by refusing a
+ * thenable mutator. Deliberately NOT a deferred enqueue: running fn inside
  * `prev.then(...)` would always resolve on a later microtask, so a caller
  * could not get fn's return value synchronously (and a naive fallback would
  * execute fn twice). The real protection against interleaved async handlers
- * is withFileLockAsync plus that invariant.
+ * is withFileLockAsync plus that enforced invariant.
  */
 export function withFileLock<T>(key: string, fn: () => T): T {
   return fn();

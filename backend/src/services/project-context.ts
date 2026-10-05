@@ -17,6 +17,8 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { resolveWorkspaceBase } from './workspace-paths-core';
+import { HttpError } from './project-slug-core';
 import type { ProjectInfo } from './docker-manager';
 import { formatNotesForContext, noteCounts, notesSignature } from './project-notes';
 import { formatCanvasForContext, canvasSignature as canvasSig, canvasNodeCount } from './project-canvas';
@@ -188,14 +190,38 @@ export function capText(text: string, max: number): { text: string; truncated: b
   return { text: `${text.slice(0, max)}\n…(truncated, ${text.length} chars)`, truncated: true };
 }
 
-/** Resolve a project workspace dir safely (no path traversal outside root). */
+/**
+ * Resolve a project workspace dir safely.
+ *
+ * Routed through the shared containment primitive. This used to fold the slug
+ * and check the lexical prefix itself, which cannot tell a real project dir from
+ * a symlink pointing at one: a linked project dir made the scanner below walk
+ * the LINK'S TARGET and feed its files into the AI context block — and from
+ * there into a chat transcript any member can read. The scanner already skips
+ * link ENTRIES (a Dirent is neither file nor dir), but refusing a linked BASE is
+ * the half that matters.
+ *
+ * `resolveWorkspaceBase` alone is NOT enough: it only proves the slug is a safe
+ * single segment lexically inside the real root, so `workspaces/linked -> /app/data`
+ * passes it. The base's realness is checked here with lstat, and a project whose
+ * workspace does not exist yet still yields the path (the caller decides) — the
+ * same contract this function always had, so a fresh project is not an error.
+ */
 export function safeWorkspaceDir(slug: string): string {
-  const clean = String(slug).trim().replace(/[^a-z0-9._-]/g, '').slice(0, 32);
-  if (!clean) throw new Error('Invalid project slug');
-  const base = path.resolve(WORKSPACES_ROOT);
-  const dir = path.resolve(base, clean);
-  if (dir !== base && !dir.startsWith(base + path.sep)) throw new Error('Invalid project slug');
-  return dir;
+  const base = resolveWorkspaceBase(WORKSPACES_ROOT, slug);
+  try {
+    if (fs.lstatSync(base).isSymbolicLink()) {
+      throw new HttpError(400, 'Project workspace is not a real directory');
+    }
+  } catch (err: any) {
+    // A workspace that is not there yet is legitimate (create in flight); a
+    // base we cannot inspect is an absence of proof, so refuse it loudly.
+    if (err?.statusCode) throw err;
+    if (err?.code !== 'ENOENT') {
+      throw new HttpError(400, 'Project workspace is not readable');
+    }
+  }
+  return base;
 }
 
 function textLike(ext: string, size: number): boolean {

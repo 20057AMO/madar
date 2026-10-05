@@ -38,6 +38,7 @@ import {
 } from './opencode-api';
 import { ensureServeRunning, probeServe } from './project-serve';
 import { publicProject, publicProjects } from './project-public';
+import { resolveContainedPath } from './workspace-paths-core';
 
 // Re-exported so the rest of the app can import these helpers from the
 // docker-manager barrel as before.
@@ -1247,15 +1248,65 @@ function repoName(url: string): string {
   return name.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80) || 'repo';
 }
 
-/** Recursively copy one workspace dir into another (all files, incl. dotfiles). */
-function copyWorkspaceTree(srcDir: string, dstDir: string): void {
+/**
+ * Is `p` an existing symlink / Windows junction? Used to refuse writing
+ * THROUGH one; a missing path is not a link.
+ */
+function isLinkAt(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recursively copy one workspace dir into another (all files, incl. dotfiles).
+ *
+ * `lstat`, never `stat`: a source entry that is a symlink/junction must be
+ * SKIPPED, not followed. `stat` resolved the link and copied whatever it
+ * pointed at, so a single planted `x -> /app/data` inside a project copied the
+ * whole data directory (secrets, users.json) into the duplicate's workspace —
+ * which the duplicate's own editor could then read, download and exfiltrate.
+ * The destination is link-checked too, so the copy cannot be steered through a
+ * link that appeared mid-run.
+ *
+ * Exported for the regression test that proves the skip (a duplicate needs a
+ * Docker daemon; this walker does not).
+ */
+export function copyWorkspaceTree(srcDir: string, dstDir: string): void {
   if (!fs.existsSync(srcDir)) return;
-  fs.mkdirSync(dstDir, { recursive: true });
+  // The destination ROOT must be real. A link here would redirect the whole
+  // copy (mkdirSync on an existing junction succeeds, so every copyFileSync
+  // below would land in the link's target) — that is the mirror image of the
+  // source-side skip and the reason the check cannot live in the per-entry
+  // catch. Thrown, not skipped: a linked destination means the duplicate is
+  // writing somewhere nobody chose.
+  let dstStat: fs.Stats;
+  try {
+    dstStat = fs.lstatSync(dstDir);
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') throw err;
+    fs.mkdirSync(dstDir, { recursive: true });
+    return copyWorkspaceTree(srcDir, dstDir);
+  }
+  if (dstStat.isSymbolicLink()) {
+    throw new HttpError(400, 'Duplicate destination is not a real directory');
+  }
+  if (!dstStat.isDirectory()) {
+    throw new HttpError(400, 'Duplicate destination is not a directory');
+  }
   for (const entry of fs.readdirSync(srcDir)) {
     try {
       const s = path.join(srcDir, entry);
       const d = path.join(dstDir, entry);
-      const st = fs.statSync(s);
+      const st = fs.lstatSync(s);
+      // Never FOLLOW a link: copying its content would materialise whatever it
+      // points at inside the new workspace (an exfiltration primitive), so it is
+      // skipped entirely rather than dereferenced.
+      if (st.isSymbolicLink()) continue;
+      // Same on the destination side: a planted link must not receive our copy.
+      if (isLinkAt(d)) continue;
       if (st.isDirectory()) {
         copyWorkspaceTree(s, d);
       } else if (st.isFile()) {
@@ -1291,7 +1342,11 @@ export async function duplicateProject(
   const srcMeta = loadMeta(srcSlug);
   if (!srcMeta) throw new HttpError(404, `Project '${sourceSlug}' not found`);
 
-  const srcDir = path.join(WORKSPACES_ROOT, srcSlug);
+  // Both ends of the copy are resolved through the shared containment
+  // primitive: the source dir must be real (a link here would make "copy the
+  // project" copy its target instead) and the destination is the fresh dir
+  // createProject just provisioned.
+  const srcDir = resolveContainedPath(WORKSPACES_ROOT, srcSlug, '', { mustExist: true });
   if (!fs.existsSync(srcDir)) {
     throw new HttpError(404, `Project workspace '${sourceSlug}' not found`);
   }
@@ -1324,7 +1379,7 @@ export async function duplicateProject(
   }, userId);
 
   // Carry the source workspace files into the new project.
-  const dstDir = path.join(WORKSPACES_ROOT, created.slug);
+  const dstDir = resolveContainedPath(WORKSPACES_ROOT, created.slug, '', { mustExist: true });
   copyWorkspaceTree(srcDir, dstDir);
 
   // Carry over the developer notes (ideas/bugs/goals).

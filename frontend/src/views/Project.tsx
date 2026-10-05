@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit, Link2 } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -1823,8 +1823,12 @@ const isImagePath = (p: string) => {
 };
 
 /** Professional type icon for a file/dir name: folder / image / code / json / archive / text / plain. */
-function fileTypeMeta(name: string, type: 'file' | 'dir'): { Icon: any; color: string } {
+function fileTypeMeta(name: string, type: 'file' | 'dir' | 'link'): { Icon: any; color: string } {
   if (type === 'dir') return { Icon: Folder, color: 'var(--blue)' };
+  // A link gets its own icon, never the target's file-type icon: reading through
+  // it is refused server-side, so colouring it as the target would advertise a
+  // capability the row does not have. Delete is the only operation offered.
+  if (type === 'link') return { Icon: Link2, color: 'var(--warn, #eab308)' };
   const ext = (name.toLowerCase().split('.').pop() || '').trim();
   if (IMAGE_EXTS.has(ext)) return { Icon: FileImage, color: '#a78bfa' };
   if (ext === 'json' || ext === 'jsonc' || ext === 'yaml' || ext === 'yml' || ext === 'toml') return { Icon: FileJson, color: '#eab308' };
@@ -2221,15 +2225,27 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
           const { Icon: EIcon, color: eColor } = fileTypeMeta(e.path, e.type);
           return (
             <div class="file-row" key={e.path}>
-              <button
-                class="file-name"
-                onClick={() => (e.type === 'dir' ? setCwd(cwd ? `${cwd}/${e.path}` : e.path) : openFile(e.path))}
-              >
-                <span class={`file-icon ${e.type}`} style={`color:${eColor};display:inline-flex;align-items:center;justify-content:center`}>
-                  <EIcon width={15} height={15} />
+              {e.type === 'link' ? (
+                // Not a button on purpose: opening or descending a link is
+                // refused server-side, so a clickable name would only ever
+                // produce an error toast.
+                <span class="file-name" aria-disabled="true">
+                  <span class={`file-icon ${e.type}`} style={`color:${eColor};display:inline-flex;align-items:center;justify-content:center`}>
+                    <EIcon width={15} height={15} />
+                  </span>
+                  <span class="mono">{e.path}</span>
                 </span>
-                <span class="mono">{e.path}</span>
-              </button>
+              ) : (
+                <button
+                  class="file-name"
+                  onClick={() => (e.type === 'dir' ? setCwd(cwd ? `${cwd}/${e.path}` : e.path) : openFile(e.path))}
+                >
+                  <span class={`file-icon ${e.type}`} style={`color:${eColor};display:inline-flex;align-items:center;justify-content:center`}>
+                    <EIcon width={15} height={15} />
+                  </span>
+                  <span class="mono">{e.path}</span>
+                </button>
+              )}
               <span class="file-size">{e.type === 'file' ? fmtBytes(e.size) : ''}</span>
               <div class="file-actions">
                 {e.type === 'file' && (
@@ -2240,7 +2256,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
                     </button>
                   </>
                 )}
-                {renaming === e.path ? (
+                {e.type !== 'link' && (renaming === e.path ? (
                   <input
                     class="modern-input compact"
                     ref={renameInputRef}
@@ -2256,7 +2272,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
                   !readOnly && (
                     <button class="btn-ghost sm" onClick={() => startRename(e.path)}>{t('files.rename')}</button>
                   )
-                )}
+                ))}
                 {!readOnly && (
                   <button class="btn-danger sm" onClick={() => remove(e.path)}>{t('files.delete')}</button>
                 )}

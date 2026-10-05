@@ -5,6 +5,8 @@ import { execSync, type ExecSyncOptions } from 'child_process';
 /** Same convention as project-context/canvas/reviews: resolve locally. */
 const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 
+import { tryResolveContainedPath } from './workspace-paths-core';
+
 const MAX_OUTPUT = 50000;
 const EXEC_TIMEOUT = 30000;
 const MAX_FILE_READ = 200000;
@@ -45,24 +47,24 @@ const BLOCKED_CMD_PREFIXES = new Set([
   'iptables', 'ufw', 'firewall-cmd',
 ]);
 
-function safeSlug(slug: string): string {
-  return String(slug).replace(/[^a-z0-9._-]+/gi, '').slice(0, 32);
+/**
+ * Resolve a path inside a project workspace, or null when it is unusable.
+ *
+ * This used to be a local `safeSlug` (which KEEPS dots, so `..` survived it
+ * and `readFile('..', 'outside/secret.txt')` resolved outside /workspaces)
+ * plus a lexical `startsWith(base)` check, which a symlink inside the
+ * workspace satisfies while reading anywhere. Both now go through the shared
+ * containment primitive: slug is canonical, the root is realpath-ed, and a
+ * symlink / junction at any level is refused. Null keeps the agent-tool
+ * contract ("no such file" instead of a 500).
+ */
+function safePath(slug: string, rel: string): string | null {
+  return tryResolveContainedPath(WORKSPACES_ROOT, slug, rel);
 }
 
-function safePath(slug: string, rel: string): string | null {
-  const clean = safeSlug(slug);
-  const base = path.resolve(WORKSPACES_ROOT, clean);
-  if (!fs.existsSync(base)) return null;
-
-  const relClean = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!relClean || relClean === '.') return base;
-
-  const normalized = path.posix.normalize(relClean);
-  if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) return null;
-
-  const target = path.resolve(base, normalized);
-  if (target !== base && !target.startsWith(base + path.sep)) return null;
-  return target;
+/** The verified workspace dir for a slug, or null — for cwd / tree roots. */
+function safeWorkspaceDir(slug: string): string | null {
+  return tryResolveContainedPath(WORKSPACES_ROOT, slug, '');
 }
 
 export function readFile(slug: string, rel: string): string {
@@ -185,15 +187,16 @@ export function isDangerousCommand(cmd: string): string | null {
  * for deployments without per-project containers — it is inherently unsafe.
  */
 export async function execCommand(slug: string, cmd: string): Promise<string> {
-  const clean = safeSlug(slug);
   const danger = isDangerousCommand(cmd);
   if (danger) return `[Blocked] ${danger}`;
 
+  const base = safeWorkspaceDir(slug);
+  const clean = base ? path.basename(base) : '';
+
   if (process.env.WSD_AGENT_LOCAL_FALLBACK === '1') {
-    const cwd = path.resolve(WORKSPACES_ROOT, clean);
-    if (!fs.existsSync(cwd)) return `Workspace not found: ${slug}`;
+    if (!base) return `Workspace not found: ${slug}`;
     const opts: ExecSyncOptions = {
-      cwd,
+      cwd: base,
       timeout: EXEC_TIMEOUT,
       maxBuffer: MAX_OUTPUT,
       encoding: 'utf8',
@@ -222,9 +225,8 @@ export async function execCommand(slug: string, cmd: string): Promise<string> {
 }
 
 export function getProjectTree(slug: string, maxDepth = 3): string {
-  const clean = safeSlug(slug);
-  const base = path.resolve(WORKSPACES_ROOT, clean);
-  if (!fs.existsSync(base)) return '(workspace not found)';
+  const base = safeWorkspaceDir(slug);
+  if (!base) return '(workspace not found)';
 
   const lines: string[] = [];
   const stack: { rel: string; depth: number }[] = [{ rel: '', depth: 0 }];
