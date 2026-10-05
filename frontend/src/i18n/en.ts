@@ -420,7 +420,15 @@ export const en = {
     saveFail: 'Save failed: {error}',
     deleteTitle: 'Delete {path}?',
     deleteMessage: 'This file is removed from the workspace permanently.',
+    deleteLinkMessage: 'Only the link itself is removed — whatever it points to is left untouched.',
     deleteConfirm: 'Delete file',
+    deleteConfirmLink: 'Delete link',
+    // Symlink rows (visible, deletable, never openable)
+    linkRow: 'Symbolic link — cannot be opened, read or renamed.',
+    linkSizeNote: 'length of the link target, not file content',
+    removedFile: 'File removed.',
+    removedDir: 'Folder removed.',
+    removedLink: 'Link removed.',
   },
   logs: {
     title: 'Logs',

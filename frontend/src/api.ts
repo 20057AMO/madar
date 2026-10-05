@@ -141,17 +141,52 @@ export interface PortHealth {
   ms: number;
 }
 
-export interface FileEntry {
+interface FileEntryBase {
   path: string;
-  /**
-   * `link` is a symlink / junction that survived `readdir`. It is listed (never
-   * silently hidden) so the user can see and delete it, but the backend refuses
-   * to read or write THROUGH it, and its size is the link's own, never the
-   * target's.
-   */
-  type: 'file' | 'dir' | 'link';
-  size: number;
   mtime: string;
+}
+
+/** A real file — `size` is the file's own byte length. */
+export interface FileFileEntry extends FileEntryBase {
+  type: 'file';
+  size: number;
+}
+
+/** A directory — billed as 0 bytes and never previewed. */
+export interface FileDirEntry extends FileEntryBase {
+  type: 'dir';
+  size: number;
+}
+
+/**
+ * `link` is a symlink / junction that survived `readdir`. It is listed (never
+ * silently hidden) so the user can see and delete it, but the backend refuses
+ * to read, write, rename or descend THROUGH it — delete is its only operation.
+ *
+ * `size` is the link's own `lstat` size, i.e. the LENGTH OF THE TARGET STRING,
+ * never the target's content size. Never render it as "this file is N bytes".
+ */
+export interface FileLinkEntry extends FileEntryBase {
+  type: 'link';
+  size: number;
+}
+
+/**
+ * A discriminated union, not a `type` string union: every consumer must narrow
+ * on `type` before it can act on an entry, so a link can never fall through a
+ * file branch. Exhaust every `switch (entry.type)` with
+ * `default: return assertNeverFileEntry(entry)` — adding a fourth kind then
+ * fails the build instead of silently manufacturing broken data.
+ */
+export type FileEntry = FileFileEntry | FileDirEntry | FileLinkEntry;
+
+/**
+ * Compile-time exhaustiveness guard. The parameter is `never`, so a switch that
+ * misses a member fails to type-check with "Type '"file" | "dir" | "link"' is not
+ * assignable to parameter of type 'never'"; at runtime it is a last-resort throw.
+ */
+export function assertNeverFileEntry(entry: never): never {
+  throw new Error(`Unhandled workspace entry type: ${JSON.stringify((entry as { type?: unknown }).type)}`);
 }
 
 export interface FileListing {
@@ -1242,7 +1277,7 @@ export async function fetchProjectFileRaw(slug: string, path: string, download =
   return res.blob();
 }
 export const deleteProjectFile = (slug: string, path: string) =>
-  api<{ ok: boolean; type: 'file' | 'dir' | 'link' }>(
+  api<{ ok: boolean; type: FileEntry['type'] }>(
     `/api/projects/${slug}/file?path=${encodeURIComponent(path)}`,
     { method: 'DELETE' }
   );

@@ -422,7 +422,15 @@ export const ar: Dict = {
     saveFail: 'فشل الحفظ: {error}',
     deleteTitle: 'حذف {path}؟',
     deleteMessage: 'يُزال هذا الملف من مساحة العمل نهائياً.',
+    deleteLinkMessage: 'يُزال الرابط نفسه فقط — أما ما يشير إليه فيبقى كما هو دون تغيير.',
     deleteConfirm: 'حذف الملف',
+    deleteConfirmLink: 'حذف الرابط',
+    // صفوف الروابط الرمزية (مرئية، قابلة للحذف، لا تُفتح أبداً)
+    linkRow: 'رابط رمزي — لا يمكن فتحه أو قراءته أو إعادة تسميته.',
+    linkSizeNote: 'طول مسار وجهة الرابط، ليس حجم المحتوى',
+    removedFile: 'تم حذف الملف.',
+    removedDir: 'تم حذف المجلد.',
+    removedLink: 'تم حذف الرابط.',
   },
   logs: {
     title: 'السجلات',

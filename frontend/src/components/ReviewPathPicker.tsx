@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { FolderOpen, ChevronRight, ChevronDown, Folder, FileText, Loader2, RotateCcw } from 'lucide-preact';
-import { listProjectFiles, type FileEntry } from '../api';
+import { FolderOpen, ChevronRight, ChevronDown, Folder, FileText, Link2, Loader2, RotateCcw } from 'lucide-preact';
+import { listProjectFiles, assertNeverFileEntry, type FileEntry } from '../api';
+import { useI18n } from '../i18n';
 
 function joinPath(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
@@ -29,6 +30,7 @@ export function ReviewPathPicker({
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [dirErrors, setDirErrors] = useState<Record<string, string>>({});
+  const { t } = useI18n();
   const wrapRef = useRef<HTMLSpanElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
 
@@ -162,74 +164,98 @@ export function ReviewPathPicker({
   const renderRows = (list: FileEntry[], parent: string, depth: number) =>
     list.map((e) => {
       const full = joinPath(parent, e.path);
-      if (e.type === 'dir') {
-        const isOpen = openDirs.has(full);
-        const kids = dirs[full];
-        const loadingKids = loadingDirs.has(full);
-        const dirErr = dirErrors[full];
-        return (
-          <li key={full} style="list-style:none">
-            <button
-              type="button"
-              data-row="true"
-              data-dir={full}
-              class="btn-ghost sm"
-              style={rowStyle(depth)}
-              aria-expanded={isOpen}
-              onClick={() => toggleDir(full)}
-            >
-              {isOpen ? (
-                <ChevronDown width={13} height={13} class="icon" style="flex:none;color:var(--text-3)" />
-              ) : (
-                <ChevronRight width={13} height={13} class="icon" style="flex:none;color:var(--text-3)" />
-              )}
-              <Folder width={13} height={13} class="icon" style="flex:none;color:var(--blue)" />
-              <span class="mono" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.path}</span>
-              {loadingKids && <Loader2 width={12} height={12} class="icon spin" style="flex:none;color:var(--text-3)" />}
-            </button>
-            {isOpen && (
-              <ul role="list" style="list-style:none;margin:2px 0;padding:0">
-                {loadingKids ? (
-                  <li style="display:flex;align-items:center;gap:6px;min-height:28px;padding:4px 8px 4px 22px;font-size:0.7rem;color:var(--text-3)">
-                    <Loader2 width={11} height={11} class="icon spin" /> Loading…
-                  </li>
-                ) : dirErr ? (
-                  <li
-                    role="alert"
-                    style="display:flex;align-items:center;gap:6px;min-height:32px;padding:4px 8px 4px 22px;font-size:0.68rem;color:#fecaca"
-                  >
-                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{dirErr}</span>
-                    <button class="btn-ghost sm" onClick={() => retryDir(full)} aria-label={`Retry loading ${full}`}>
-                      <RotateCcw width={11} height={11} class="icon" /> Retry
-                    </button>
-                  </li>
-                ) : kids === undefined ? null : kids.length === 0 ? (
-                  <li style="padding:4px 8px 6px 22px;font-size:0.68rem;color:var(--text-3)">Empty directory</li>
+      // Narrow on `type` before acting. A link is neither a folder to expand nor
+      // a file to pick: the backend refuses to resolve it, so pre-filling it
+      // would create a review thread that can only ever answer "file not found".
+      // The switch ends on `never`, so the next entry kind is a build error here
+      // rather than a silent fall-through into the file branch.
+      switch (e.type) {
+        case 'dir': {
+          const isOpen = openDirs.has(full);
+          const kids = dirs[full];
+          const loadingKids = loadingDirs.has(full);
+          const dirErr = dirErrors[full];
+          return (
+            <li key={full} style="list-style:none">
+              <button
+                type="button"
+                data-row="true"
+                data-dir={full}
+                class="btn-ghost sm"
+                style={rowStyle(depth)}
+                aria-expanded={isOpen}
+                onClick={() => toggleDir(full)}
+              >
+                {isOpen ? (
+                  <ChevronDown width={13} height={13} class="icon" style="flex:none;color:var(--text-3)" />
                 ) : (
-                  renderRows(kids, full, depth + 1)
+                  <ChevronRight width={13} height={13} class="icon" style="flex:none;color:var(--text-3)" />
                 )}
-              </ul>
-            )}
-          </li>
-        );
+                <Folder width={13} height={13} class="icon" style="flex:none;color:var(--blue)" />
+                <span class="mono" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.path}</span>
+                {loadingKids && <Loader2 width={12} height={12} class="icon spin" style="flex:none;color:var(--text-3)" />}
+              </button>
+              {isOpen && (
+                <ul role="list" style="list-style:none;margin:2px 0;padding:0">
+                  {loadingKids ? (
+                    <li style="display:flex;align-items:center;gap:6px;min-height:28px;padding:4px 8px 4px 22px;font-size:0.7rem;color:var(--text-3)">
+                      <Loader2 width={11} height={11} class="icon spin" /> Loading…
+                    </li>
+                  ) : dirErr ? (
+                    <li
+                      role="alert"
+                      style="display:flex;align-items:center;gap:6px;min-height:32px;padding:4px 8px 4px 22px;font-size:0.68rem;color:#fecaca"
+                    >
+                      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{dirErr}</span>
+                      <button class="btn-ghost sm" onClick={() => retryDir(full)} aria-label={`Retry loading ${full}`}>
+                        <RotateCcw width={11} height={11} class="icon" /> Retry
+                      </button>
+                    </li>
+                  ) : kids === undefined ? null : kids.length === 0 ? (
+                    <li style="padding:4px 8px 6px 22px;font-size:0.68rem;color:var(--text-3)">Empty directory</li>
+                  ) : (
+                    renderRows(kids, full, depth + 1)
+                  )}
+                </ul>
+              )}
+            </li>
+          );
+        }
+        case 'link':
+          // Not a button and no `Use` badge: nothing here can consume a link, so
+          // the row is static. Its type + reason are text, not a colour-only
+          // glyph, and they are the only thing telling a screen-reader user why
+          // this entry cannot be picked.
+          return (
+            <li key={full} style="list-style:none">
+              <span style={rowStyle(depth)} title={full}>
+                <Link2 width={13} height={13} class="icon" style="flex:none;color:var(--yellow)" />
+                <span class="mono" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.path}</span>
+                <span class="sr-only">{t('files.linkRow')}</span>
+              </span>
+            </li>
+          );
+        case 'file':
+          return (
+            <li key={full} style="list-style:none">
+              <button
+                type="button"
+                data-row="true"
+                data-file={full}
+                class="btn-ghost sm"
+                style={rowStyle(depth)}
+                onClick={() => pick(full)}
+                title={full}
+              >
+                <FileText width={13} height={13} class="icon" style="flex:none;color:var(--text-3)" />
+                <span class="mono" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.path}</span>
+                <span style="flex:none;font-size:0.62rem;font-weight:700;color:var(--green)">Use</span>
+              </button>
+            </li>
+          );
+        default:
+          return assertNeverFileEntry(e);
       }
-      return (
-        <li key={full} style="list-style:none">
-          <button
-            type="button"
-            data-row="true"
-            data-file={full}
-            class="btn-ghost sm"
-            style={rowStyle(depth)}
-            onClick={() => pick(full)}
-            title={full}
-          >
-            <FileText width={13} height={13} class="icon" style="flex:none;color:var(--text-3)" />
-            <span class="mono" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.path}</span>
-            <span style="flex:none;font-size:0.62rem;font-weight:700;color:var(--green)">Use</span>
-          </button>
-        </li>
-      );
     });
 
   return (

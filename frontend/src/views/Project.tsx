@@ -37,6 +37,7 @@ import {
   stopServe,
   clearProjectCrash,
   canOpenProjectWorkspace,
+  assertNeverFileEntry,
 } from '../api';
 import type {
   Project,
@@ -1823,14 +1824,16 @@ const isImagePath = (p: string) => {
 };
 
 /** Professional type icon for a file/dir name: folder / image / code / json / archive / text / plain. */
-function fileTypeMeta(name: string, type: 'file' | 'dir' | 'link'): { Icon: any; color: string } {
+function fileTypeMeta(name: string, type: FileEntry['type']): { Icon: any; color: string } {
   if (type === 'dir') return { Icon: Folder, color: 'var(--blue)' };
   // A link gets its own icon, never the target's file-type icon: reading through
   // it is refused server-side, so colouring it as the target would advertise a
   // capability the row does not have. Delete is the only operation offered.
-  if (type === 'link') return { Icon: Link2, color: 'var(--warn, #eab308)' };
+  if (type === 'link') return { Icon: Link2, color: 'var(--yellow)' };
   const ext = (name.toLowerCase().split('.').pop() || '').trim();
   if (IMAGE_EXTS.has(ext)) return { Icon: FileImage, color: '#a78bfa' };
+  // Deliberately not --yellow: a link resolves to the same --yellow, and the two
+  // must stay distinguishable in the type-icon column.
   if (ext === 'json' || ext === 'jsonc' || ext === 'yaml' || ext === 'yml' || ext === 'toml') return { Icon: FileJson, color: '#eab308' };
   if (['zip', 'gz', 'tar', 'tgz', 'rar', '7z', 'bz2', 'xz'].includes(ext)) return { Icon: FileArchive, color: '#fb923c' };
   if (['js', 'jsx', 'ts', 'tsx', 'py', 'rb', 'go', 'rs', 'c', 'cpp', 'h', 'hpp', 'java', 'cs', 'php', 'sh', 'bash', 'sql', 'html', 'css', 'scss', 'vue', 'svelte', 'astro', 'swift', 'kt', 'wasm'].includes(ext)) return { Icon: FileCode, color: '#38bdf8' };
@@ -1854,7 +1857,11 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   const [fileMsg, setFileMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
-  const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null);
+  const [confirmDeleteFile, setConfirmDeleteFile] = useState<{
+    name: string;
+    type: FileEntry['type'];
+    index: number;
+  } | null>(null);
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -1864,9 +1871,14 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   const newFileInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const previewCardRef = useRef<HTMLDivElement | null>(null);
+  const fileListRef = useRef<HTMLDivElement | null>(null);
   const openerFocusRef = useRef<HTMLElement | null>(null);
   const discardAfterRef = useRef<(() => void) | null>(null);
   const [pendingDiscard, setPendingDiscard] = useState(false);
+  // Row index the keyboard was on before a delete, so focus can be restored to
+  // the row that took its place (the trigger button unmounts with its row).
+  const pendingRowFocusRef = useRef<number | null>(null);
+  const [listMsg, setListMsg] = useState('');
 
   // Live mirrors for the window keydown handler — the effect's [preview] deps
   // would otherwise read stale state and either skip the unsaved-changes
@@ -2108,27 +2120,53 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   };
 
   const remove = async (name: string) => {
-    setConfirmDeleteFile(name);
+    const idx = entries.findIndex((x) => x.path === name);
+    const found = entries[idx];
+    if (!found) return;
+    setConfirmDeleteFile({ name, type: found.type, index: idx });
   };
 
   const runRemoveFile = async () => {
-    const name = confirmDeleteFile;
-    if (!name) return;
+    const target = confirmDeleteFile;
+    if (!target) return;
+    const name = target.name;
     const p = cwd ? `${cwd}/${name}` : name;
     setConfirmDeleteFile(null);
     try {
-      await deleteProjectFile(slug, p);
+      // The server answers with the kind it actually removed, so the live-region
+      // announcement never guesses from a stale listing.
+      const res = await deleteProjectFile(slug, p);
       if (previewName === p) {
         setPreview(null);
         setPreviewName('');
         setEditContent(null);
         setFileMsg(null);
       }
+      pendingRowFocusRef.current = target.index;
+      setListMsg(
+        res.type === 'link' ? t('files.removedLink') : res.type === 'dir' ? t('files.removedDir') : t('files.removedFile')
+      );
       load(cwd);
     } catch (err: any) {
+      pendingRowFocusRef.current = null;
       setError(err.message);
     }
   };
+
+  // Focus restoration after a delete: ConfirmModal only restores its trigger
+  // while that trigger is connected, and the trigger IS the row's button — which
+  // unmounts with the row it deleted. Land on the row now at the same index
+  // (clamped), or on the list itself when the listing went empty.
+  useEffect(() => {
+    const idx = pendingRowFocusRef.current;
+    if (idx === null) return;
+    pendingRowFocusRef.current = null;
+    const list = fileListRef.current;
+    if (!list) return;
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-file-row]'));
+    const target = rows[Math.min(idx, rows.length - 1)];
+    (target ?? list).focus();
+  }, [entries]);
 
   const doUpload = async (files: File[]) => {
     if (files.length === 0) return;
@@ -2214,7 +2252,9 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
       )}
       {error && <div class="login-error" role="alert" style="margin: 8px 0">{error}</div>}
 
-      <div class="file-list" aria-busy={loading}>
+      <div class="sr-only" role="status" aria-live="polite">{listMsg}</div>
+
+      <div class="file-list" aria-busy={loading} ref={fileListRef} tabIndex={-1}>
         {loading && entries.length === 0 && (
           <div class="panel-muted" role="status">{t('files.loadingFiles')}</div>
         )}
@@ -2223,30 +2263,68 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
         )}
         {entries.map((e) => {
           const { Icon: EIcon, color: eColor } = fileTypeMeta(e.path, e.type);
-          return (
-            <div class="file-row" key={e.path}>
-              {e.type === 'link' ? (
+          const glyph = (
+            <span class={`file-icon ${e.type}`} style={`color:${eColor};display:inline-flex;align-items:center;justify-content:center`}>
+              <EIcon width={15} height={15} />
+            </span>
+          );
+          const label = <span class="mono">{e.path}</span>;
+          // Narrow on `type` before acting: a link is neither a file to open nor
+          // a folder to descend, and the switch ends on `never` so a new kind of
+          // entry is a build error instead of a silent fall-through.
+          const nameCell = (() => {
+            switch (e.type) {
+              case 'link':
                 // Not a button on purpose: opening or descending a link is
                 // refused server-side, so a clickable name would only ever
-                // produce an error toast.
-                <span class="file-name" aria-disabled="true">
-                  <span class={`file-icon ${e.type}`} style={`color:${eColor};display:inline-flex;align-items:center;justify-content:center`}>
-                    <EIcon width={15} height={15} />
+                // produce an error toast. The lucide glyph is aria-hidden, so
+                // the type + reason are spelled out as text for screen readers
+                // (invisible to sighted users) — the icon alone conveys nothing.
+                return (
+                  <span class="file-name">
+                    {glyph}
+                    {label}
+                    <span class="sr-only">{t('files.linkRow')}</span>
                   </span>
-                  <span class="mono">{e.path}</span>
-                </span>
-              ) : (
-                <button
-                  class="file-name"
-                  onClick={() => (e.type === 'dir' ? setCwd(cwd ? `${cwd}/${e.path}` : e.path) : openFile(e.path))}
-                >
-                  <span class={`file-icon ${e.type}`} style={`color:${eColor};display:inline-flex;align-items:center;justify-content:center`}>
-                    <EIcon width={15} height={15} />
-                  </span>
-                  <span class="mono">{e.path}</span>
-                </button>
-              )}
-              <span class="file-size">{e.type === 'file' ? fmtBytes(e.size) : ''}</span>
+                );
+              case 'dir':
+                return (
+                  <button class="file-name" data-file-row={e.path} onClick={() => setCwd(cwd ? `${cwd}/${e.path}` : e.path)}>
+                    {glyph}
+                    {label}
+                  </button>
+                );
+              case 'file':
+                return (
+                  <button class="file-name" data-file-row={e.path} onClick={() => openFile(e.path)}>
+                    {glyph}
+                    {label}
+                  </button>
+                );
+              default:
+                return assertNeverFileEntry(e);
+            }
+          })();
+          return (
+            <div class="file-row" key={e.path}>
+              {nameCell}
+              <span
+                class="file-size"
+                title={e.type === 'link' ? t('files.linkSizeNote') : undefined}
+              >
+                {e.type === 'file' ? (
+                  fmtBytes(e.size)
+                ) : e.type === 'link' ? (
+                  // The bytes are the link's own (the target STRING length), so
+                  // they are labelled as such — never as content size.
+                  <>
+                    {fmtBytes(e.size)}
+                    <span class="sr-only"> {t('files.linkSizeNote')}</span>
+                  </>
+                ) : (
+                  ''
+                )}
+              </span>
               <div class="file-actions">
                 {e.type === 'file' && (
                   <>
@@ -2274,7 +2352,9 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
                   )
                 ))}
                 {!readOnly && (
-                  <button class="btn-danger sm" onClick={() => remove(e.path)}>{t('files.delete')}</button>
+                  // A link row has no focusable name, so its Delete button is the
+                  // row's focus-restore anchor (see the [entries] effect).
+                  <button class="btn-danger sm" data-file-row={e.type === 'link' ? e.path : undefined} onClick={() => remove(e.path)}>{t('files.delete')}</button>
                 )}
               </div>
             </div>
@@ -2297,7 +2377,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
             <div class="file-preview-head">
               <h3 class="file-preview-name"><span class="mono">{previewName}</span></h3>
               {editContent !== null && editContent !== preview.content && (
-                <span class="dim" style="color: var(--warn, #eab308); font-size:0.72rem">{t('files.unsaved')}</span>
+                <span class="dim" style="color: var(--yellow); font-size:0.72rem">{t('files.unsaved')}</span>
               )}
               <span class="dim" style="color: var(--text-3); font-size:0.72rem">
                 {preview.binary ? `${fmtBytes(preview.size)} · ${t('files.binary')}` : `${fmtBytes(preview.size)}${preview.truncated ? ` · ${t('files.readOnlyLarge')}` : ''}`}
@@ -2366,9 +2446,9 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
       <ConfirmModal
         open={!!confirmDeleteFile}
         danger
-        title={t('files.deleteTitle', { path: cwd ? `${cwd}/${confirmDeleteFile}` : (confirmDeleteFile ?? '') })}
-        message={t('files.deleteMessage')}
-        confirmLabel={t('files.deleteConfirm')}
+        title={t('files.deleteTitle', { path: cwd ? `${cwd}/${confirmDeleteFile?.name}` : (confirmDeleteFile?.name ?? '') })}
+        message={confirmDeleteFile?.type === 'link' ? t('files.deleteLinkMessage') : t('files.deleteMessage')}
+        confirmLabel={confirmDeleteFile?.type === 'link' ? t('files.deleteConfirmLink') : t('files.deleteConfirm')}
         onConfirm={runRemoveFile}
         onCancel={() => setConfirmDeleteFile(null)}
       />
