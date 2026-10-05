@@ -72,12 +72,17 @@ export async function withFileLockAsync<T>(
 ): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve();
   let result!: T;
+  // A flag, not a sentinel: `undefined` is a legal rejection reason, and
+  // testing the caught value against it would resolve that failure as a
+  // success — a silently dropped write in the only serialization primitive.
+  let threw = false;
   let thrownError: unknown;
 
   const next = prev.then(async () => {
     try {
       result = await fn();
     } catch (e) {
+      threw = true;
       thrownError = e;
     }
   });
@@ -86,6 +91,6 @@ export async function withFileLockAsync<T>(
   chains.set(key, next.catch(() => {}));
 
   await next;
-  if (thrownError !== undefined) throw thrownError;
+  if (threw) throw thrownError;
   return result;
 }

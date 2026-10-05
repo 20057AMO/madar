@@ -10,6 +10,8 @@
  *   - concurrent async saves from two "users" preserve both fields
  *   - different keys run independently (no cross-blocking)
  *   - an error in one call does not poison the chain for the next caller
+ *   - a rejection whose reason is falsy (undefined / 0 / '' / null / false /
+ *     NaN) still propagates as a failure instead of resolving as a success
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
@@ -135,5 +137,44 @@ describe('withFileLockAsync', () => {
       () => withFileLockAsync('rej', async () => { throw new Error('fail'); }),
       { message: 'fail' },
     );
+  });
+
+  test('a rejection whose reason is undefined still surfaces as a failure', async () => {
+    let outcome = 'pending';
+    await withFileLockAsync('undef-reason', async () => {
+      throw undefined;
+    }).then(
+      () => { outcome = 'resolved'; },
+      () => { outcome = 'rejected'; },
+    );
+    assert.strictEqual(
+      outcome, 'rejected',
+      'a rejection with an undefined reason must not resolve as a success',
+    );
+  });
+
+  test('a falsy non-undefined reason (0 / "" / null / false) still propagates', async () => {
+    for (const reason of [0, '', null, false, NaN]) {
+      let outcome = 'pending';
+      await withFileLockAsync(`falsy-${String(reason)}`, async () => {
+        throw reason;
+      }).then(
+        () => { outcome = 'resolved'; },
+        () => { outcome = 'rejected'; },
+      );
+      assert.strictEqual(outcome, 'rejected', `reason ${String(reason)} was swallowed`);
+    }
+  });
+
+  test('an undefined-reason rejection does not poison the chain', async () => {
+    let ran = false;
+    const first = withFileLockAsync('undef-poison', async () => {
+      throw undefined;
+    }).catch(() => { /* swallow */ });
+    const second = withFileLockAsync('undef-poison', async () => {
+      ran = true;
+    });
+    await Promise.all([first, second]);
+    assert.strictEqual(ran, true, 'next caller must still run after an undefined-reason rejection');
   });
 });
