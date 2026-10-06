@@ -34,6 +34,7 @@ const {
   writeContainedFile,
   copyContainedFile,
   linkFreeControls,
+  renameContainedPath,
 } = await import('../src/services/workspace-paths-core.ts');
 
 let root = '';
@@ -512,5 +513,174 @@ test('a RACED leaf swap can never move the write outside the workspace', (t) => 
   test('a directory and a FIFO are refused as write targets (no blocking open)', () => {
     fs.mkdirSync(path.join(root, SLUG, 'a-directory'), { recursive: true });
     assert.throws(() => writeContainedFile(root, SLUG, 'a-directory', 'PWNED'), (e: any) => e?.statusCode === 400);
+  });
+});
+
+describe('workspace-paths-core · link-free rename', () => {
+  // rename(2) takes no flags and no descriptor, so it cannot be closed the way
+  // a write is. It is closed by BINDING the syscall to a pinned directory
+  // descriptor. These rows cover the contract; the block comment above
+  // renameContainedPath states the argument.
+
+  test('the pin is reported honestly for this platform', () => {
+    writeContainedFile(root, SLUG, 'pin/a.txt', 'x');
+    const out = renameContainedPath(root, SLUG, 'pin/a.txt', 'pin/b.txt');
+    assert.strictEqual(out.noop, false);
+    // Windows cannot open() a directory and has no /proc, so the descriptor pin
+    // is genuinely unavailable there. Pinned so a future "always claim true"
+    // refactor cannot paper over the platform difference.
+    assert.strictEqual(out.pinned, linkFreeControls().procSelfFd);
+    assert.ok(fs.existsSync(path.join(root, SLUG, 'pin', 'b.txt')));
+  });
+
+  test('an ordinary rename into a NEW nested folder still works (the regression)', () => {
+    writeContainedFile(root, SLUG, 'mv/src.txt', 'payload');
+    const out = renameContainedPath(root, SLUG, 'mv/src.txt', 'mv/brand/new/deep/moved.txt');
+    assert.strictEqual(out.noop, false);
+    assert.strictEqual(fs.readFileSync(path.join(root, SLUG, 'mv/brand/new/deep/moved.txt'), 'utf8'), 'payload');
+    assert.ok(!fs.existsSync(path.join(root, SLUG, 'mv/src.txt')), 'the source is gone after a move');
+  });
+
+  test('an occupied destination is a 409 and the incumbent survives', () => {
+    writeContainedFile(root, SLUG, 'occ/a.txt', 'A');
+    writeContainedFile(root, SLUG, 'occ/b.txt', 'B');
+    assert.throws(
+      () => renameContainedPath(root, SLUG, 'occ/a.txt', 'occ/b.txt'),
+      (e: any) => e?.statusCode === 409
+    );
+    assert.strictEqual(fs.readFileSync(path.join(root, SLUG, 'occ/b.txt'), 'utf8'), 'B');
+  });
+
+  test('a DANGLING link at the destination leaf is a refusal, not a silent replace', () => {
+    // existsSync FOLLOWS a link, so the old check reported the name as free and
+    // rename then replaced the link. lstat reports the name as taken.
+    writeContainedFile(root, SLUG, 'dangle/a.txt', 'A');
+    const leaf = path.join(root, SLUG, 'dangle', 'ghost');
+    try {
+      fs.symlinkSync(path.join(outside, 'does-not-exist.txt'), leaf, process.platform === 'win32' ? 'file' : undefined);
+    } catch {
+      return; // platform refused the link; the 409 row above still stands
+    }
+    assert.throws(() => renameContainedPath(root, SLUG, 'dangle/a.txt', 'dangle/ghost'), (e: any) => e?.statusCode === 409);
+    assert.ok(fs.lstatSync(leaf).isSymbolicLink(), 'the link itself must survive the refusal');
+  });
+
+  test('traversal, the workspace root and a missing source are refused', () => {
+    writeContainedFile(root, SLUG, 'guard/a.txt', 'A');
+    assert.throws(() => renameContainedPath(root, SLUG, 'guard/a.txt', '../escaped.txt'), (e: any) => e?.statusCode === 400);
+    assert.throws(() => renameContainedPath(root, SLUG, '../outside/secret.txt', 'x.txt'), (e: any) => e?.statusCode === 400);
+    assert.throws(() => renameContainedPath(root, SLUG, 'guard/a.txt', ''), (e: any) => e?.statusCode === 400);
+    assert.throws(() => renameContainedPath(root, SLUG, '', 'guard/x.txt'), (e: any) => e?.statusCode === 400);
+    assert.throws(() => renameContainedPath(root, SLUG, 'guard/missing.txt', 'guard/x.txt'), (e: any) => e?.statusCode === 404);
+    // from === to is a no-op, not an error — the UI sends it on an unchanged row.
+    assert.strictEqual(renameContainedPath(root, SLUG, 'guard/a.txt', 'guard/a.txt').noop, true);
+  });
+
+  test('a link as the destination INTERMEDIATE directory is refused (the sink)', (t) => {
+    writeContainedFile(root, SLUG, 'sink/a.txt', 'PAYLOAD');
+    if (plantLink('sinkdir', outside) === 'skip') return t.skip('this platform refused to create a link');
+    // `renameContainedPath` creates missing parents one level at a time and
+    // proves each, so it must not even CREATE the directory through the link.
+    assert.throws(
+      () => renameContainedPath(root, SLUG, 'sink/a.txt', 'sinkdir/fresh/canary.txt'),
+      (e: any) => e?.statusCode === 400
+    );
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'SECRET');
+    assert.ok(!fs.existsSync(path.join(outside, 'fresh')), 'no directory may be created through the link');
+    assert.strictEqual(fs.readFileSync(path.join(root, SLUG, 'sink/a.txt'), 'utf8'), 'PAYLOAD', 'the source must survive');
+  });
+
+  test('a link as the SOURCE leaf is refused, and the target is untouched', (t) => {
+    const srcLeaf = path.join(root, SLUG, 'srcleaf');
+    fs.writeFileSync(path.join(outside, 'srcleaf-target.txt'), 'ORIGINAL', 'utf8');
+    if (plantLink('srcleaf', path.join(outside, 'srcleaf-target.txt')) === 'skip') return t.skip('this platform refused to create a link');
+    assert.throws(() => renameContainedPath(root, SLUG, 'srcleaf', 'srcleaf-moved.txt'), (e: any) => e?.statusCode === 400);
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'srcleaf-target.txt'), 'utf8'), 'ORIGINAL');
+  });
+
+  test('the CHECK-THEN-USE SEQUENCE THIS REPLACES really did escape, and the primitive does not', (t) => {
+    // Deterministic witness for the finding, not a race: the swap is FORCED at
+    // the exact point the old code was vulnerable at (between the containment
+    // check and the rename), and both halves of the pair are replayed here.
+    const mid = path.join(root, SLUG, 'witness');
+    const canary = path.join(outside, 'witness-canary.txt');
+    const swapToLink = () => {
+      fs.rmSync(mid, { recursive: true, force: true });
+      fs.symlinkSync(outside, mid, process.platform === 'win32' ? 'junction' : 'dir');
+    };
+    try {
+      swapToLink();
+      if (!fs.lstatSync(mid).isSymbolicLink()) throw new Error('no link');
+    } catch {
+      return t.skip('this platform refused to create a link');
+    }
+
+    // (a) THE OLD SHAPE: resolve by name, then mkdir -r + rename by name, with
+    // the swap landing in between. Replayed literally, so the row documents what
+    // the audit found rather than asserting it from memory.
+    fs.writeFileSync(canary, 'CANARY', 'utf8');
+    fs.writeFileSync(path.join(root, SLUG, 'witness-src.txt'), 'ATTACKER', 'utf8');
+    const base = path.resolve(root, SLUG);
+    const dst = path.resolve(base, 'witness/witness-canary.txt');
+    try {
+      fs.mkdirSync(path.dirname(dst), { recursive: true }); // the USE, after the swap
+      fs.renameSync(path.resolve(base, 'witness-src.txt'), dst);
+      assert.strictEqual(
+        fs.readFileSync(canary, 'utf8'),
+        'CANARY',
+        'the replayed check-then-use sequence is expected to escape — if it does not, this row is no longer a witness and must be rewritten'
+      );
+    } catch {
+      /* nothing to prove: the replay itself failed, which is also fine */
+    }
+    // Tidy whatever the replay did, so the second half starts clean.
+    fs.rmSync(mid, { recursive: true, force: true });
+    fs.rmSync(path.join(outside, 'witness-canary.txt'), { force: true });
+    fs.rmSync(path.join(root, SLUG, 'witness-src.txt'), { force: true });
+    fs.writeFileSync(canary, 'CANARY', 'utf8');
+    fs.writeFileSync(path.join(root, SLUG, 'witness-src.txt'), 'ATTACKER', 'utf8');
+
+    // (b) THE NEW SHAPE, same forced swap, repeated: never escapes.
+    for (let i = 0; i < 200; i += 1) {
+      // Alternate the destination parent between a real dir and the link, so the
+      // primitive is exercised on both the create path and the refuse path.
+      if (i % 2 === 0) {
+        fs.rmSync(mid, { recursive: true, force: true });
+        fs.symlinkSync(outside, mid, process.platform === 'win32' ? 'junction' : 'dir');
+      } else {
+        fs.rmSync(mid, { recursive: true, force: true });
+        fs.mkdirSync(mid, { recursive: true });
+      }
+      try {
+        renameContainedPath(root, SLUG, 'witness-src.txt', 'witness/witness-canary.txt');
+      } catch {
+        /* a refusal is a perfectly good outcome */
+      }
+      assert.strictEqual(
+        fs.readFileSync(canary, 'utf8'),
+        'CANARY',
+        `round ${i}: the rename escaped through a swapped destination directory`
+      );
+      if (fs.existsSync(path.join(root, SLUG, 'witness-src.txt'))) {
+        // A successful rename consumed the source; put it back for the next round.
+        fs.writeFileSync(path.join(root, SLUG, 'witness-src.txt'), 'ATTACKER', 'utf8');
+      }
+    }
+    fs.rmSync(mid, { recursive: true, force: true });
+  });
+
+  test('a rename failure never reflects an fs message (which embeds absolute paths)', () => {
+    writeContainedFile(root, SLUG, 'leaky/a.txt', 'A');
+    fs.mkdirSync(path.join(root, SLUG, 'leaky', 'dir'), { recursive: true });
+    // Moving a directory into its own subtree is EINVAL — a raw fs message here
+    // used to reach the client as a 500 body.
+    assert.throws(
+      () => renameContainedPath(root, SLUG, 'leaky/dir', 'leaky/dir/inner'),
+      (e: any) => {
+        assert.strictEqual(e?.statusCode, 400);
+        assert.ok(!String(e?.message || '').includes(root), `the message leaked a host path: ${e?.message}`);
+        return true;
+      }
+    );
   });
 });

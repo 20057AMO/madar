@@ -10,7 +10,7 @@ import path from 'path';
 import { WORKSPACES_ROOT } from './docker-manager';
 import { IGNORED_DIRS, invalidateProjectContext } from './project-context';
 import { HttpError } from './project-slug-core';
-import { writeContainedFile, resolveContainedPath, resolveWorkspaceBase } from './workspace-paths-core';
+import { writeContainedFile, renameContainedPath, resolveContainedPath, resolveWorkspaceBase } from './workspace-paths-core';
 
 const MAX_PREVIEW_CHARS = 200 * 1024;
 
@@ -150,8 +150,11 @@ export function listWorkspaceFiles(slug: string, rel?: string): FileListing {
   let items: fs.Dirent[];
   try {
     items = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (err: any) {
-    throw new HttpError(500, err?.message || 'Failed to read directory');
+  } catch (err) {
+    // Same rule as the rename path: an fs error message embeds absolute host
+    // paths, so it is logged here and the client gets a generic sentence.
+    console.error(`[workspace-files] readdir failed:`, err);
+    throw new HttpError(500, 'Failed to read directory');
   }
 
   const entries: FileEntry[] = [];
@@ -366,21 +369,35 @@ export function writeWorkspaceFile(
 
 /** Rename or move a file/directory to another path in the same workspace. */
 export function renameWorkspacePath(slug: string, from: string, to: string): { ok: true } {
-  const src = resolveWorkspacePath(slug, from);
-  // The destination may not exist yet — moving into a new folder has to work.
-  const dst = resolveWorkspacePath(slug, to, { mustExist: false });
-  const base = workspaceBase(slug);
-  if (src === base || dst === base) throw new HttpError(400, 'Invalid rename path');
-  if (src === dst) return { ok: true };
-  if (!fs.existsSync(src)) throw new HttpError(404, 'Source not found');
-  if (fs.existsSync(dst)) throw new HttpError(409, 'Target already exists');
-
+  // This used to be the Files tab's one remaining check-then-USE: resolve both
+  // ends (lstat every component), then `mkdirSync(dirname(dst), {recursive})`
+  // + `renameSync(src, dst)` by NAME. `rename(2)` takes no O_NOFOLLOW and no
+  // descriptor, so nothing about that pair re-verifies the directory the kernel
+  // is about to walk — an editor racing a destination intermediate directory
+  // (`rm -rf d; ln -s /app/data d`) moves a workspace file out of the
+  // workspace. `renameContainedPath` pins each parent by descriptor, re-proves
+  // from the kernel where that descriptor points, and hands the syscall the
+  // procfs magic link, so a later swap of any ancestor name cannot redirect it.
+  // See the block comment above `renameContainedPath` for the full argument and
+  // for what is only narrowed on a platform without procfs.
+  let moved = false;
+  let pinned = false;
   try {
-    fs.mkdirSync(path.dirname(dst), { recursive: true });
-    fs.renameSync(src, dst);
-  } catch (err: any) {
-    throw new HttpError(500, err?.message || 'Rename failed');
+    const out = renameContainedPath(WORKSPACES_ROOT, slug, from, to);
+    moved = !out.noop;
+    pinned = out.pinned;
+  } catch (err) {
+    // F4: an fs error message embeds absolute host paths, so it is logged and
+    // never reflected. The primitive already maps errno to a clean 4xx/5xx.
+    if (err instanceof HttpError) throw err;
+    console.error(`[workspace-files] rename failed in project '${slug}':`, err);
+    throw new HttpError(500, 'Rename failed');
   }
-  invalidateProjectContext(slug);
+  if (!pinned) {
+    // Never silently degrade: the rename still happened inside the workspace,
+    // but only the name-based checks ran. Say so where an operator will see it.
+    console.warn(`[workspace-files] rename in project '${slug}' ran WITHOUT a descriptor pin (no /proc/self/fd)`);
+  }
+  if (moved) invalidateProjectContext(slug);
   return { ok: true };
 }

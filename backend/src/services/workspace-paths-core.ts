@@ -49,6 +49,13 @@
  * path is read back out of `/proc/self/fd/<fd>` and re-proved inside the
  * workspace, which is what also catches a swapped INTERMEDIATE directory.
  * See `linkFreeControls()` for the exact control set on the current platform.
+ *
+ * `rename(2)` cannot be driven that way — it takes no flags and no descriptor —
+ * so `renameContainedPath` closes it the only other way a syscall can be
+ * bound: it pins each parent DIRECTORY by descriptor, proves from the kernel
+ * where that descriptor really points, and hands `rename` the `/proc/self/fd`
+ * magic link instead of the name. The long block comment above
+ * `renameContainedPath` states what that does and does not prove.
  */
 import fs from 'fs';
 import path from 'path';
@@ -86,6 +93,12 @@ function inside(parent: string, child: string): boolean {
 function strictlyInside(parent: string, child: string): boolean {
   const same = process.platform === 'win32' ? parent === child.toLowerCase() : parent === child;
   return !same && inside(parent, child);
+}
+
+/** Same as strictlyInside but accepts the parent itself (a workspace root). */
+function sameOrInside(parent: string, child: string): boolean {
+  return strictlyInside(parent, child) ||
+    (process.platform === 'win32' ? parent === child.toLowerCase() : parent === child);
 }
 
 /**
@@ -426,8 +439,14 @@ function refusalFromErrno(err: unknown, invalidMessage: string): HttpError {
   }
 }
 
+/** The clean POSIX segments of a client path. `..` is rejected upstream. */
+function relPartsOf(rel: string): string[] {
+  const relClean = String(rel ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
+  return path.posix.normalize(relClean).split('/').filter((p) => p !== '.' && p !== '');
+}
+
 /** Create the parent chain ONE component at a time, proving each one first. */
-function ensureParentChain(base: string, parts: string[], invalidMessage: string): void {
+function ensureParentChain(base: string, parts: string[], invalidMessage: string): string {
   let current = base;
   for (const part of parts) {
     const next = path.join(current, part);
@@ -464,6 +483,7 @@ function ensureParentChain(base: string, parts: string[], invalidMessage: string
     }
     current = next;
   }
+  return current;
 }
 
 /** The OPENED inode's real path, or null when the platform cannot report one. */
@@ -519,8 +539,7 @@ export function openContainedForWrite(
   const base = resolveWorkspaceBase(root, slug);
   if (target === base) throw new HttpError(400, invalidMessage);
 
-  const relClean = String(rel ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
-  const parts = path.posix.normalize(relClean).split('/').filter((p) => p !== '.' && p !== '');
+  const parts = relPartsOf(rel);
   const parents = parts.slice(0, -1);
 
   // (2) Parents, proved and created one at a time.
@@ -695,4 +714,256 @@ export function copyContainedFile(
     /* already closed */
   }
   return { path: handle.path, bytes: total, created: handle.created };
+}
+
+// ── Link-free rename ────────────────────────────────────────────────────────
+//
+// `rename(2)` is the one mutating workspace op that takes NO flag, so there is
+// no `O_NOFOLLOW` to hand it and no descriptor to write into: it resolves BOTH
+// arguments as paths, inside the kernel, at syscall time. Reason about what that
+// actually means before assuming the worst — and what it does NOT mean:
+//
+//   * The LEAF is safe by kernel semantics, not by our checking. POSIX rename
+//     does not follow a symlink at either end: a link at the destination is
+//     REPLACED (unlinked, never written through), and a link at the source is
+//     MOVED (the link itself, never its target). So `to = x/jwt.secret` where
+//     `x` is a link to `/app/data` does NOT let the link's target be written —
+//     the file lands on the link's own name, and the link disappears.
+//   * The INTERMEDIATE components are the entire attack surface. Each one is a
+//     path the kernel walks, and a symlink/junction there sends the whole
+//     operation somewhere else entirely. That is the sink: `rm -rf d; ln -s
+//     /app/data d` racing the request moves a workspace file OUT of the
+//     workspace (and, with the destination aimed at a name that does not exist
+//     there, writes INTO /app/data).
+//
+// So the control cannot be "don't follow the leaf" — it has to be "the syscall
+// can only ever be handed a directory we already proved". The way to do that
+// without a new kernel primitive is to pin the directory by DESCRIPTOR and then
+// hand rename the procfs magic link `/proc/self/fd/<n>`: the kernel resolves
+// that prefix to the inode the descriptor holds, not to whatever the name points
+// at now. Three properties fall out, and only the third is new:
+//
+//   1. `open(dir, O_RDONLY|O_NOFOLLOW)` — the kernel refuses a link leaf, so the
+//      pinned object is a real directory, not a link's target.
+//   2. `realpath('/proc/self/fd/<n>')` — we ASK THE KERNEL where we actually
+//      got. This is what makes the pin self-verifying and what closes the
+//      intermediate race: a swap between the lstat chain and this open is now
+//      visible, because the descriptor names the real directory rather than the
+//      requested one. Refuse if it is not inside the workspace.
+//   3. `rename('/proc/self/fd/<srcDir>/<leaf>', '/proc/self/fd/<dstDir>/<leaf>')`
+//      — resolution of the prefix goes through the magic link, so a later swap
+//      of ANY ancestor name (including the project directory itself) cannot
+//      redirect it. Worst case the pinned inode was unlinked meanwhile and the
+//      syscall fails (ENOENT/ENXIO): an availability cost, never an escape.
+//
+// HONESTY ABOUT WHAT IS ONLY NARROWED, because this is the part worth stating:
+//   * `pinned: false` means step 2/3 were unavailable, and then the leaf and
+//     parent-chain checks are CHECKS again — the old guarantee, just re-verified
+//     adjacent to the syscall. That is the state on Windows (Node cannot
+//     `open()` a directory there and `/proc` does not exist) and it is reported,
+//     never assumed.
+//   * Even when pinned, the SOURCE LEAF is re-lstat'ed, re-opened with
+//     O_NOFOLLOW and identity-compared (fstat dev/ino) immediately before the
+//     rename, and the landed inode is identity-checked immediately after. The
+//     only remaining window is a leaf swapped between that fstat and the rename
+//     syscall itself — a handful of instructions, and closing it would need
+//     `renameat2(RENAME_EXCHANGE)` plus a mount-namespace bind. The destination
+//     side, which is what this finding is about, has no such window.
+
+export interface RenameOptions {
+  /** 400 text for a refused rename. */
+  invalidMessage?: string;
+  /** 409 text when the destination name is already taken. */
+  existsMessage?: string;
+  /** 404 text for a source that is gone by the time we use it. */
+  missingMessage?: string;
+}
+
+export interface RenameResult {
+  /** Absolute contained source path (lexical). */
+  src: string;
+  /** Absolute contained destination path (lexical). */
+  dst: string;
+  /** True when from === to, so nothing had to be moved. */
+  noop: boolean;
+  /**
+   * True only when BOTH parent directories were pinned by descriptor and the
+   * syscall was handed the procfs paths. False means the checks ran but the
+   * descriptor pin did not, which is the weaker guarantee — see the note above.
+   */
+  pinned: boolean;
+}
+
+interface PinnedDir {
+  /** The path to hand to the syscall: the procfs magic link when pinned. */
+  use: string;
+  fd: number | null;
+}
+
+/** errno -> HttpError for a rename. NEVER err.message: fs errors embed paths. */
+function renameRefusal(err: unknown, invalidMessage: string, missingMessage: string): HttpError {
+  switch (errnoOf(err)) {
+    case 'ENOENT':
+      return new HttpError(404, missingMessage);
+    case 'EINVAL': // renaming a directory into its own subtree
+    case 'ENOTEMPTY':
+    case 'EISDIR':
+    case 'ENOTDIR':
+    case 'ELOOP':
+    case 'EXDEV':
+    case 'EEXIST':
+      return new HttpError(400, invalidMessage);
+    case 'EACCES':
+    case 'EPERM':
+    case 'EROFS':
+      return new HttpError(403, 'Workspace path is not writable');
+    default:
+      return new HttpError(500, 'Rename failed');
+  }
+}
+
+/**
+ * Hold `dir` open by descriptor and prove from the kernel that it is a real
+ * directory inside `base`. Returns the path the syscall must use — which is NOT
+ * `dir` when the pin succeeded.
+ */
+function pinContainedDir(base: string, dir: string, invalidMessage: string): PinnedDir {
+  if (!linkFreeControls().procSelfFd) return { use: dir, fd: null };
+  let fd = -1;
+  try {
+    // O_RDONLY on a DIRECTORY is legal on Linux and is the only portable way to
+    // hold one. O_NOFOLLOW is what stops the pin from acquiring a link's target.
+    fd = fs.openSync(dir, writeFlags(fs.constants.O_RDONLY, true));
+    const real = fs.realpathSync(`/proc/self/fd/${fd}`);
+    if (!sameOrInside(base, real)) {
+      fs.closeSync(fd);
+      throw new HttpError(400, invalidMessage);
+    }
+    return { use: `/proc/self/fd/${fd}`, fd };
+  } catch (err) {
+    if (fd >= 0) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* already closed */
+      }
+    }
+    if (err instanceof HttpError) throw err;
+    // Unpinnable (no procfs, no read permission, a FUSE mount that will not
+    // resolve the magic link). Degrade to the lexical path and let the caller
+    // report `pinned: false` — never pretend the control is still there.
+    return { use: dir, fd: null };
+  }
+}
+
+/**
+ * Rename/move inside one workspace, with the destination bound to a directory
+ * that was proved by descriptor rather than by name. See the block comment above
+ * for why this cannot be done by checking and re-checking a path.
+ */
+export function renameContainedPath(
+  root: string,
+  slug: unknown,
+  from: string,
+  to: string,
+  opts: RenameOptions = {}
+): RenameResult {
+  const invalidMessage = opts.invalidMessage || 'Invalid rename path';
+  const existsMessage = opts.existsMessage || 'Target already exists';
+  const missingMessage = opts.missingMessage || 'Source not found';
+
+  const base = resolveWorkspaceBase(root, slug);
+  // The cheap proof first, so a traversal / link / missing project answers with
+  // the message callers already expect. It is not the control.
+  const src = resolveContainedPath(root, slug, from);
+  const dst = resolveContainedPath(root, slug, to, { mustExist: false });
+  if (src === base || dst === base) throw new HttpError(400, invalidMessage);
+  if (src === dst) return { src, dst, noop: true, pinned: false };
+
+  const srcParents = ensureParentChain(base, relPartsOf(from).slice(0, -1), invalidMessage);
+  const dstParents = ensureParentChain(base, relPartsOf(to).slice(0, -1), invalidMessage);
+  const srcPin = pinContainedDir(base, srcParents, invalidMessage);
+  const dstPin = pinContainedDir(base, dstParents, invalidMessage);
+
+  try {
+    const srcUse = path.join(srcPin.use, path.basename(src));
+    const dstUse = path.join(dstPin.use, path.basename(dst));
+
+    // Re-decide BOTH leaves inside the pinned directories, immediately before the
+    // syscall: same objects the syscall will see, not the ones an earlier lstat
+    // saw.
+    let srcSt: fs.Stats;
+    try {
+      srcSt = fs.lstatSync(srcUse);
+    } catch (err) {
+      throw renameRefusal(err, invalidMessage, missingMessage);
+    }
+    if (srcSt.isSymbolicLink()) throw new HttpError(400, invalidMessage);
+
+    // Occupancy via lstat, not existsSync: existsSync FOLLOWS a link, so a
+    // dangling link at the destination used to look free and get replaced.
+    try {
+      fs.lstatSync(dstUse);
+      throw new HttpError(409, existsMessage);
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      if (errnoOf(err) !== 'ENOENT') throw renameRefusal(err, invalidMessage, missingMessage);
+    }
+
+    const srcId = `${srcSt.dev}:${srcSt.ino}`;
+
+    // Prove the object we are about to MOVE is the object we inspected: open it
+    // THROUGH the pinned parent with O_NOFOLLOW (kernel refuses a swapped-in
+    // link) and require fstat to agree with the lstat above.
+    if (srcPin.fd !== null) {
+      let probe = -1;
+      try {
+        probe = fs.openSync(srcUse, writeFlags(fs.constants.O_RDONLY, true));
+      } catch (err) {
+        throw renameRefusal(err, invalidMessage, missingMessage);
+      }
+      try {
+        const opened = fs.fstatSync(probe);
+        if (`${opened.dev}:${opened.ino}` !== srcId) throw new HttpError(400, invalidMessage);
+      } catch (err) {
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(400, invalidMessage);
+      } finally {
+        try {
+          fs.closeSync(probe);
+        } catch {
+          /* already closed */
+        }
+      }
+    }
+
+    try {
+      fs.renameSync(srcUse, dstUse);
+    } catch (err) {
+      throw renameRefusal(err, invalidMessage, missingMessage);
+    }
+
+    // The inode that landed must be the inode we inspected.
+    if (dstPin.fd !== null) {
+      let landed: fs.Stats;
+      try {
+        landed = fs.lstatSync(dstUse);
+      } catch {
+        throw new HttpError(500, 'Rename failed');
+      }
+      if (`${landed.dev}:${landed.ino}` !== srcId) throw new HttpError(500, 'Rename failed');
+    }
+
+    return { src, dst, noop: false, pinned: srcPin.fd !== null && dstPin.fd !== null };
+  } finally {
+    for (const pin of [srcPin, dstPin]) {
+      if (pin.fd !== null) {
+        try {
+          fs.closeSync(pin.fd);
+        } catch {
+          /* already closed */
+        }
+      }
+    }
+  }
 }

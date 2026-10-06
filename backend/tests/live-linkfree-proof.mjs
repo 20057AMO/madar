@@ -1,24 +1,36 @@
 /**
- * Live proof against the RUNNING container for the link-free write primitive.
+ * Live proof against the RUNNING container for the link-free WRITE and RENAME
+ * primitives.
  *
  * Offline suites cannot answer "is this right on the production platform", and
  * this one is specifically about Linux: O_NOFOLLOW and /proc/self/fd exist here
- * and do NOT on the Windows dev host where the offline suite runs. The four
- * proofs required after the fix:
+ * and do NOT on the Windows dev host where the offline suite runs.
  *
+ * It is NOT part of `node --test` on purpose: it needs the container, it mutates
+ * /app/data, and it is slow. Run it explicitly after a rebuild:
+ *
+ *     docker compose build app && docker compose up -d app
+ *     cd backend && node tests/live-linkfree-proof.mjs
+ *
+ * or `npm run test:live-linkfree`. Rows:
  *   1. a planted WSD_CANVAS.md link is refused (and the target is untouched)
  *   2. repeated upload canaries never follow a raced link
  *   3. a NEW nested folder is created (the feature the old guard broke)
  *   4. a repeated Files-tab write never follows a raced link
  *   5. agent-tool writes create a new file + nested folder again
- *
- * Run: node tests/live-linkfree-proof.mjs   (server must be up on :3000)
+ *   6. RENAME: the replayed check-then-use sequence escapes, the route refuses
+ *   7. RENAME under a real concurrent racer never moves a file out (md5 of
+ *      /app/data/jwt.secret before/after), and an ordinary rename still works
+ *   8. reviews.fileExists is not a host-file existence oracle (a VIEWER asking)
+ *   9. a snapshot export skips a planted link without touching its target
  */
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 
 const BASE = process.env.WSD_BASE || 'http://localhost:3000';
 const CONTAINER = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
+const RENAME_ROUNDS = Number(process.env.WSD_LIVE_RENAME_ROUNDS || 60);
 
 const sh = (cmd) => execFileSync('docker', ['exec', CONTAINER, 'sh', '-c', cmd], { encoding: 'utf8' });
 
@@ -31,11 +43,13 @@ const admin = users.find((u) => u.role === 'admin');
 if (!admin) throw new Error('no admin user found');
 
 const { default: jwt } = await import('jsonwebtoken');
-const token = jwt.sign(
-  { id: admin.id, username: admin.username, role: 'admin', tv: admin.tokenVersion || 0, jti: crypto.randomBytes(8).toString('hex') },
-  secret,
-  { expiresIn: '24h' }
-);
+const sign = (u) =>
+  jwt.sign(
+    { id: u.id, username: u.username, role: u.role, tv: u.tokenVersion || 0, jti: crypto.randomBytes(8).toString('hex') },
+    secret,
+    { expiresIn: '24h' }
+  );
+const token = sign(admin);
 const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
 let pass = 0, fail = 0;
@@ -59,6 +73,7 @@ async function api(method, p, body, extra = {}) {
 // A throwaway project, torn down in the finally.
 const slug = `livelink-${Date.now().toString(36)}`;
 let created = false;
+let victimSlug = '';
 try {
   const cr = await api('POST', '/api/projects', { name: slug, image: 'ubuntu:24.04' });
   check('project created', cr.status === 201 || cr.status === 200, `status=${cr.status}`);
@@ -164,14 +179,207 @@ try {
   // ── 6. agent tools create a new file + nested folder again ──
   // Driven through the delegate/tool path is heavy; the offline suite already
   // covers the tool contract. Here we prove the WORKSPACE side it depends on.
-  const agentNested = await api('PUT', `/api/projects/${slug}/file?path=agent/new/deep/file.ts`, { content: 'export const x = 1;' });
+const agentNested = await api('PUT', `/api/projects/${slug}/file?path=agent/new/deep/file.ts`, { content: 'export const x = 1;' });
   check('the nested path an agent writeFile needs is creatable', agentNested.status === 200,
     `status=${agentNested.status}`);
+
+  // ── 6. RENAME: the sequence that WAS there, replayed, versus the route ──
+  // rename(2) takes no O_NOFOLLOW, so this sink is only closable by binding the
+  // syscall to a pinned directory descriptor.
+  //
+  // The link target MUST be on the same device: `/workspaces` is dev 71 and
+  // `/app/data` is dev 2096 here, so a rename aimed at the data volume is
+  // refused by the KERNEL with EXDEV before any code of ours runs. That is an
+  // accident of this Docker Desktop layout, not a control — so the witness uses
+  // ANOTHER PROJECT's workspace (same dev 71, same uid, a real isolation
+  // boundary), which is the strongest thing an editor can actually reach.
+  const victim = `livevictim${Date.now().toString(36)}`;
+  const victimCreated = await api('POST', '/api/projects', { name: `rename witness victim ${Date.now().toString(36)}`, description: 'live proof' });
+  victimSlug = victimCreated.json?.project?.slug || (victimCreated.json?.slug ?? '');
+  const vws = `/workspaces/${victimSlug}`;
+  check('the cross-project witness victim project was created', victimCreated.status === 201 && !!victimSlug && vws !== '/workspaces/',
+    `status=${victimCreated.status} slug="${victimSlug}"`);
+  if (!victimSlug || vws === '/workspaces/') throw new Error('cannot continue without a victim project');
+  await api('PUT', `/api/projects/${victimSlug}/file?path=secret.txt`, { content: 'VICTIM-CANARY' });
+  await api('PUT', `/api/projects/${victimSlug}/file?path=secret.txt`, { content: 'VICTIM-CANARY' });
+
+  // First half: the OLD check-then-USE, replayed verbatim, with the swap forced
+  // at the exact vulnerable point — a witness that the finding was real.
+  sh(`mkdir -p ${ws}/d ${ws}/real; printf '%s' 'ATTACKER' > ${ws}/real/w.txt`);
+  const witness = sh(`node -e '
+    const fs=require("fs"),path=require("path");
+    const ws=process.argv[1], victim=process.argv[2];
+    const base=path.join(ws);
+    // the CHECK (lexical resolve, exactly the old shape) ...
+    const src=path.resolve(base,"real","w.txt");
+    const dst=path.resolve(base,"d","stolen.txt");
+    if(src!==base&&!src.startsWith(base+path.sep)) throw new Error("refused");
+    if(fs.existsSync(dst)) { console.log("OCCUPIED"); process.exit(0); }
+    // ... then the forced swap, then the USE.
+    fs.rmSync(path.join(base,"d"),{recursive:true,force:true});
+    fs.symlinkSync(victim, path.join(base,"d"), "dir");
+    fs.mkdirSync(path.dirname(dst),{recursive:true});
+    fs.renameSync(src,dst);
+    console.log("ESCAPED");
+  ' ${ws} ${vws}`).trim();
+  check(
+    'WITNESS: the old check-then-use rename DID move a file into another project (swap forced mid-flight)',
+    witness === 'ESCAPED' && sh(`cat ${vws}/stolen.txt 2>/dev/null || true`).trim() === 'ATTACKER',
+    `replay="${witness}" victimNow=${sh(`cat ${vws}/stolen.txt 2>/dev/null || echo ABSENT`).trim()}`
+  );
+  sh(`rm -f ${vws}/stolen.txt`);
+
+  // Second half: the SAME request through the route, with the destination
+  // intermediate a permanent link to the victim — refused, victim untouched.
+  sh(`rm -rf ${ws}/planted; ln -s ${vws} ${ws}/planted; mkdir -p ${ws}/real; printf '%s' 'ATTACKER' > ${ws}/real/w.txt`);
+  const plantedRename = await api('POST', `/api/projects/${slug}/file/rename`, {
+    from: 'real/w.txt',
+    to: 'planted/stolen.txt',
+  });
+  check(
+    'the route refuses the identical swap and the victim project is untouched',
+    plantedRename.status >= 400 && plantedRename.status < 500 &&
+      sh(`test -e ${vws}/stolen.txt && echo PRESENT || echo ABSENT`).trim() === 'ABSENT' &&
+      sh(`cat ${ws}/real/w.txt`).trim() === 'ATTACKER',
+    `status=${plantedRename.status} body=${plantedRename.text.slice(0, 80)} victim=${sh(`test -e ${vws}/stolen.txt && echo PRESENT || echo ABSENT`).trim()}`
+  );
+  sh(`rm -f ${ws}/planted`);
+
+  // ── 7. RENAME under a REAL concurrent racer (the finding's own repro) ──
+  // An editor inside their own project container swaps the destination
+  // intermediate for a link to the victim in a tight loop while the rename is
+  // called in a loop. The victim's file md5 is the assertion.
+  const victimMd5 = () => sh(`md5sum ${vws}/secret.txt | cut -d" " -f1`).trim();
+  const victimBefore = victimMd5();
+  console.log(`      md5 victim secret.txt BEFORE = ${victimBefore}`);
+  sh(`rm -rf ${ws}/d`);
+  const racer = spawn(
+    'docker',
+    ['exec', slug, 'sh', '-c', `while :; do rm -rf /workspace/d; ln -s ${vws} /workspace/d; done`],
+    { stdio: 'ignore' }
+  );
+  const renameStatuses = new Map();
+  for (let i = 0; i < RENAME_ROUNDS; i += 1) {
+    // Re-seed every round: a successful rename consumes the source, and a
+    // missing source would answer 404 without ever reaching the race.
+    sh(`mkdir -p ${ws}/real; printf '%s' 'attacker-payload' > ${ws}/real/f.txt`);
+    const r = await api('POST', `/api/projects/${slug}/file/rename`, { from: 'real/f.txt', to: 'd/f.txt' });
+    renameStatuses.set(r.status, (renameStatuses.get(r.status) || 0) + 1);
+  }
+  racer.kill('SIGKILL');
+  const victimAfter = victimMd5();
+  console.log(`      md5 victim secret.txt AFTER  = ${victimAfter}`);
+  // A 200 here is honest: the racer's `rm -rf d; ln -s` leaves a window where d
+  // is missing, and the route creates it as a REAL directory — an in-workspace
+  // move the racer then consumes. The escape we fear is a file appearing in the
+  // VICTIM, so the assertions are md5 + "no new file name in the victim".
+  check(
+    `${RENAME_ROUNDS} raced renames never moved a file into another project`,
+    victimBefore === victimAfter &&
+      sh(`test -e ${vws}/f.txt && echo PRESENT || echo ABSENT`).trim() === 'ABSENT' &&
+      sh(`test -e ${vws}/stolen.txt && echo PRESENT || echo ABSENT`).trim() === 'ABSENT',
+    `statuses=${JSON.stringify(Object.fromEntries(renameStatuses))} md5Unchanged=${victimBefore === victimAfter} victimGainedFile=${sh(`test -e ${vws}/f.txt && echo YES || echo NO`).trim()}`
+  );
+
+  // The finding's original target, for the record: /app/data is a different
+  // device here, so the KERNEL refuses it (EXDEV) even unchecked. The route must
+  // refuse it too, and the signing secret must be byte-identical afterwards.
+  sh('cp /app/data/jwt.secret /app/data/.jwt.secret.proofbak');
+  const jwtMd5 = () => sh('md5sum /app/data/jwt.secret | cut -d" " -f1').trim();
+  const jwtBefore = jwtMd5();
+  console.log(`      md5 /app/data/jwt.secret BEFORE = ${jwtBefore}`);
+  sh(`rm -rf ${ws}/d`);
+  const racer2 = spawn(
+    'docker',
+    ['exec', slug, 'sh', '-c', 'while :; do rm -rf /workspace/d; ln -s /app/data /workspace/d; done'],
+    { stdio: 'ignore' }
+  );
+  const jwtStatuses = new Map();
+  for (let i = 0; i < RENAME_ROUNDS; i += 1) {
+    sh(`mkdir -p ${ws}/real; printf '%s' 'attacker-payload' > ${ws}/real/f.txt`);
+    const r = await api('POST', `/api/projects/${slug}/file/rename`, { from: 'real/f.txt', to: 'd/jwt.secret' });
+    jwtStatuses.set(r.status, (jwtStatuses.get(r.status) || 0) + 1);
+  }
+  racer2.kill('SIGKILL');
+  const jwtAfter = jwtMd5();
+  console.log(`      md5 /app/data/jwt.secret AFTER  = ${jwtAfter}`);
+  check(
+    `${RENAME_ROUNDS} raced renames aimed at /app/data/jwt.secret never changed it`,
+    jwtBefore === jwtAfter && sh(`ls ${vws} 2>/dev/null | grep -c '^jwt' || true`).trim() === '0',
+    `statuses=${JSON.stringify(Object.fromEntries(jwtStatuses))} md5Unchanged=${jwtBefore === jwtAfter}`
+  );
+  sh('cp /app/data/.jwt.secret.proofbak /app/data/jwt.secret 2>/dev/null || true; rm -f /app/data/.jwt.secret.proofbak');
+
+  // The regression the old guard caused: renaming into a NEW folder must work.
+  sh(`rm -rf ${ws}/d ${ws}/brand; mkdir -p ${ws}/real; printf '%s' 'attacker-payload' > ${ws}/real/f.txt`);
+  const ord = await api('POST', `/api/projects/${slug}/file/rename`, {
+    from: 'real/f.txt',
+    to: 'brand/new/deep/moved.txt',
+  });
+  check(
+    'an ordinary rename into a NEW nested folder still works',
+    ord.status === 200 && sh(`cat ${ws}/brand/new/deep/moved.txt 2>/dev/null || echo MISSING`).trim() === 'attacker-payload',
+    `status=${ord.status}`
+  );
+
+  // ── 8. reviews.fileExists is not a host-file existence oracle (a VIEWER) ──
+  const viewerName = `liveview${Date.now().toString(36)}`;
+  const cu = await api('POST', '/api/users', { username: viewerName, password: 'LiveProof12345!', role: 'viewer' });
+  const viewerId = cu.json?.user?.id || cu.json?.id;
+  if (cu.status !== 201 || !viewerId) {
+    check('a viewer user could be created for the fileExists oracle row', false, `status=${cu.status} body=${cu.text.slice(0, 120)}`);
+  } else {
+    await api('POST', `/api/projects/${slug}/members`, { userId: viewerId, role: 'viewer' });
+    const viewerAuth = { Authorization: `Bearer ${sign({ id: viewerId, username: viewerName, role: 'viewer', tokenVersion: 0 })}` };
+    const oracleTarget = '/app/data/live-oracle-target.txt';
+    sh(`printf '%s' 'EXISTS-OUTSIDE' > ${oracleTarget}`);
+    sh(`rm -rf ${ws}/escape; ln -s /app/data ${ws}/escape`);
+    const opened = await api('POST', `/api/projects/${slug}/reviews`, {
+      path: 'escape/live-oracle-target.txt',
+      text: 'pinned on a planted link',
+    });
+    const listed = await fetch(`${BASE}/api/projects/${slug}/reviews`, { headers: viewerAuth });
+    const body = await listed.json();
+    const thread = (body?.threads || []).find((t) => t.path === 'escape/live-oracle-target.txt');
+    check(
+      'a VIEWER sees fileExists=false for a planted link even though the target exists',
+      opened.status === 201 && listed.status === 200 && !!thread && thread.fileExists === false,
+      `open=${opened.status} list=${listed.status} fileExists=${thread ? thread.fileExists : 'no thread'}`
+    );
+    sh(`rm -f ${ws}/escape ${oracleTarget}`);
+    await api('DELETE', `/api/users/${viewerId}`);
+  }
+
+  // ── 9. a snapshot export skips a planted link without touching its target ──
+  const exportTarget = '/app/data/live-export-target.txt';
+  sh(`printf '%s' 'UNTOUCHED' > ${exportTarget}`);
+  sh(`rm -rf ${ws}/snaplink; ln -s /app/data ${ws}/snaplink`);
+  sh(`printf '%s' 'kept' > ${ws}/keep.txt`);
+  const exp = await fetch(`${BASE}/api/projects/${slug}/export`, { headers: auth });
+  const raw = exp.ok ? Buffer.from(await exp.arrayBuffer()) : Buffer.alloc(0);
+  let names = '';
+  try {
+    const tar = gunzipSync(raw).toString('latin1');
+    names = (tar.match(/[\w./-]*live-export-target\.txt/g) || []).join(',');
+  } catch {
+    names = '';
+  }
+  check(
+    'a snapshot export with a planted link succeeds, ships no link entry, and the target is untouched',
+    exp.status === 200 && raw.length > 0 && !names.includes('live-export-target') &&
+      sh(`cat ${exportTarget}`).trim() === 'UNTOUCHED',
+    `status=${exp.status} bytes=${raw.length} linkEntries="${names}" target=${sh(`cat ${exportTarget}`).trim()}`
+  );
+  sh(`rm -f ${ws}/snaplink ${exportTarget}`);
 } finally {
-  sh(`rm -f /app/data/live-canary.txt`);
+  sh('rm -f /app/data/live-canary.txt /app/data/live-rename-canary.txt /app/data/.jwt.secret.proofbak');
   if (created) {
     const del = await api('DELETE', `/api/projects/${slug}`);
     console.log(`cleanup: DELETE /api/projects/${slug} -> ${del.status}`);
+  }
+  if (typeof victimSlug === 'string' && victimSlug) {
+    const vdel = await api('DELETE', `/api/projects/${victimSlug}`);
+    console.log(`cleanup: DELETE /api/projects/${victimSlug} -> ${vdel.status}`);
   }
 }
 

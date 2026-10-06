@@ -167,17 +167,23 @@ async function* walkTree(absRoot: string, relRoot = ''): AsyncGenerator<{ name: 
     if (EXCLUDE_DIRS.has(e.name)) continue;
     const abs = path.join(absRoot, e.name);
     const rel = relRoot ? `${relRoot}/${e.name}` : e.name;
-    let mtime = 0;
+    // lstat, then DECIDE on it — never stat first and skip afterwards. The old
+    // order resolved the link's target (touching a host file the viewer cannot
+    // otherwise reach) just to throw the row away, and it also let the decision
+    // and the emitted metadata disagree whenever an entry was swapped between
+    // readdir and stat. One lstat answers both questions about the same object.
+    let st: fs.Stats;
     try {
-      const st = await fs.promises.stat(abs);
-      mtime = Math.floor(st.mtimeMs / 1000);
+      st = await fs.promises.lstat(abs);
     } catch {
       continue; // unreadable/broken entry — never fail the export over one file
     }
-    if (e.isDirectory()) {
+    if (st.isSymbolicLink()) continue; // skipped without ever resolving the target
+    const mtime = Math.floor(st.mtimeMs / 1000);
+    if (st.isDirectory()) {
       yield { name: rel, abs, type: 'dir', mtime };
       yield* walkTree(abs, rel);
-    } else if (e.isFile()) {
+    } else if (st.isFile()) {
       yield { name: rel, abs, type: 'file', mtime };
     }
   }

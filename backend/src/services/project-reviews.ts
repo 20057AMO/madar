@@ -53,6 +53,7 @@ import {
   type ReviewThread,
   type ReviewComment,
 } from './reviews-core';
+import { tryResolveContainedPath } from './workspace-paths-core';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || path.join(__dirname, '..', '..', 'data');
 const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
@@ -337,11 +338,20 @@ export interface EnrichedReviewThread extends ReviewThread {
 }
 
 function workspaceFileExists(clean: string, relPath: string): boolean {
+  // Routed through the containment primitive, and lstat — never
+  // `path.resolve` + `startsWith` + `stat`. A lexical check proves nothing
+  // about links and statSync FOLLOWS them, which turned this read-only
+  // enrichment into a host-file existence oracle: plant `x -> /app/data`, pin a
+  // thread on `x/jwt.secret`, and `fileExists` answers whether the signing
+  // secret is on disk. `tryResolveContainedPath` REFUSES a link anywhere in the
+  // path, and lstat refuses a link leaf, so the answer is "no" for anything that
+  // is not a real file inside the workspace. `fileExists: false` is a
+  // legitimate answer here, not an error — a viewer asking about a deleted file
+  // must get a clean boolean, and this never throws.
+  const target = tryResolveContainedPath(WORKSPACES_ROOT, clean, relPath);
+  if (target === null) return false;
   try {
-    const base = path.resolve(WORKSPACES_ROOT, clean);
-    const target = path.resolve(base, relPath);
-    if (target !== base && !target.startsWith(base + path.sep)) return false;
-    return fs.statSync(target).isFile();
+    return fs.lstatSync(target).isFile();
   } catch {
     return false;
   }

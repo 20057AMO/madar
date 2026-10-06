@@ -43,6 +43,7 @@ const ctx = await import('../src/services/project-context.ts');
 const store = await import('../src/services/projects-meta.ts');
 const notesSvc = await import('../src/services/project-notes.ts');
 const canvasSvc = await import('../src/services/project-canvas.ts');
+const reviews = await import('../src/services/project-reviews.ts');
 
 const { HttpError } = await import('../src/services/project-slug-core.ts');
 
@@ -102,6 +103,87 @@ describe('workspace-files · the Files tab surface', () => {
     assert.ok(!fs.existsSync(path.join(dir, 'a.txt')), 'the source is gone after a move');
     assert.throws(() => wf.renameWorkspacePath(slug, 'moved/b.txt', '../escaped.txt'), HttpError);
     assert.throws(() => wf.renameWorkspacePath(slug, '../outside/secret.txt', 'x.txt'), HttpError);
+  });
+
+  test('rename is NOT the check-then-use the primitive replaced: a link destination never escapes', (t) => {
+    // A unit test of renameContainedPath cannot show that the Files tab ROUTE
+    // reaches it, and the old code did its own `mkdir -r` + path-based
+    // `renameSync` here, so this row is the one that would have caught the sink.
+    const slug = 'rename-link-dest';
+    const dir = makeProject(slug);
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'ATTACKER', 'utf8');
+    if (!plantLink(t, path.join(dir, 'd'), outside, 'dir')) return;
+
+    // The planted link is the destination's INTERMEDIATE directory, which is the
+    // only part of a rename the kernel follows — a link at the leaf is replaced,
+    // never written through.
+    assert.throws(() => wf.renameWorkspacePath(slug, 'a.txt', 'd/secret.txt'), HttpError);
+    assert.throws(() => wf.renameWorkspacePath(slug, 'a.txt', 'd/planted-by-rename.txt'), HttpError);
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), SECRET, 'the outside target is untouched');
+    assert.ok(
+      !fs.existsSync(path.join(outside, 'planted-by-rename.txt')),
+      'the rename must not CREATE a file outside the workspace either'
+    );
+
+    // And the source survives every refusal, so the operation is not half-done.
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'ATTACKER');
+
+    // Same source, a real destination: still works after the refusals.
+    wf.renameWorkspacePath(slug, 'a.txt', 'fresh/nested/ok.txt');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'fresh', 'nested', 'ok.txt'), 'utf8'), 'ATTACKER');
+  });
+
+  test('a rename refusal never answers 500 with a raw filesystem message', () => {
+    const slug = 'rename-msg';
+    const dir = makeProject(slug);
+    fs.mkdirSync(path.join(dir, 'dir'), { recursive: true });
+    // EINVAL in the kernel, an absolute path in the message.
+    assert.throws(
+      () => wf.renameWorkspacePath(slug, 'dir', 'dir/inner'),
+      (e: any) => {
+        assert.ok(e instanceof HttpError, 'the route must receive an HttpError, not a raw fs error');
+        assert.ok(e.statusCode >= 400 && e.statusCode < 500, `expected a 4xx, got ${e.statusCode}`);
+        assert.ok(
+          !String(e.message).includes(workspacesDir) && !String(e.message).includes(os.tmpdir()),
+          `the client message leaked a host path: ${e.message}`
+        );
+        return true;
+      }
+    );
+  });
+
+  test('reviews.fileExists is a containment check, not a host-file existence oracle', (t) => {
+    // The last viewer-reachable lexical path check: a lexical resolve +
+    // startsWith proved nothing about links and statSync FOLLOWED them, so a
+    // thread pinned on `escape/secret.txt` behind a planted link answered
+    // "true" for a file outside the workspace. listReviews is viewer-gated, so
+    // this is a read primitive reachable by the least-privileged member.
+    const slug = 'reviews-fileexists';
+    const dir = makeProject(slug);
+    fs.writeFileSync(path.join(dir, 'present.ts'), 'ts', 'utf8');
+    if (!plantLink(t, path.join(dir, 'escape'), outside, 'dir')) return;
+
+    const thread = (id: string, p: string) => ({
+      id,
+      path: p,
+      status: 'open',
+      createdAt: new Date().toISOString(),
+      createdBy: 'u-owner',
+      createdByName: 'owner',
+      comments: [],
+    });
+    fs.writeFileSync(
+      path.join(projectsDir, slug, 'reviews.json'),
+      JSON.stringify([thread('r-1', 'present.ts'), thread('r-2', 'escape/secret.txt'), thread('r-3', 'escape/nope.txt')]),
+      'utf8'
+    );
+
+    const listed = reviews.listReviews(slug);
+    const byPath = new Map(listed.threads.map((t2: any) => [t2.path, t2.fileExists]));
+    assert.strictEqual(byPath.get('present.ts'), true, 'a real file in the workspace is still reported present');
+    // The link's target EXISTS on disk — the old statSync answered true here.
+    assert.strictEqual(byPath.get('escape/secret.txt'), false, 'a link must never report the outside target as present');
+    assert.strictEqual(byPath.get('escape/nope.txt'), false);
   });
 
   test('a listed link is reported as type "link" and never traversed', (t) => {
