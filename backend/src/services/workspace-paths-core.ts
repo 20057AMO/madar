@@ -716,6 +716,162 @@ export function copyContainedFile(
   return { path: handle.path, bytes: total, created: handle.created };
 }
 
+// ── Link-free reads ─────────────────────────────────────────────────────────
+//
+// A read has the same TOCTOU the writes above had, with a different symptom:
+// nothing on disk is corrupted — the bytes of the WRONG file simply end up in
+// a response. And one read was never even check-then-use: the AI-context
+// scanner read `WSD_PROJECT.md` with bare `existsSync` + `readFileSync`, which
+// FOLLOWS a symlink, so a planted `WSD_PROJECT.md -> /app/data/jwt.secret` was
+// pasted into every chat prompt with no race at all. Bind every workspace read
+// the way a write is bound, and keep the READ bounded while doing it.
+
+export interface LinkFreeReadOptions {
+  /** Hard cap on bytes copied out (clamped to 1 B … 8 MiB). Default 256 KiB. */
+  maxBytes?: number;
+  /** 400 text for a refused read (link / directory / non-regular entry). */
+  invalidMessage?: string;
+  /** 404 text when the target is not there. */
+  missingMessage?: string;
+}
+
+export interface LinkFreeReadResult {
+  /** Absolute, contained target path (lexical). */
+  path: string;
+  /** The bytes actually copied out — never more than `maxBytes`. */
+  data: Buffer;
+  /** TRUE size of the opened object, never the size of `data`. */
+  size: number;
+  /** True when `size` exceeds the bytes returned (only the head was read). */
+  truncated: boolean;
+}
+
+const DEFAULT_READ_MAX_BYTES = 256 * 1024;
+const HARD_READ_MAX_BYTES = 8 * 1024 * 1024;
+
+/** errno -> HttpError for a read. NEVER err.message: fs errors embed paths. */
+function readRefusal(err: unknown, invalidMessage: string, missingMessage: string): HttpError {
+  switch (errnoOf(err)) {
+    case 'ENOENT':
+      return new HttpError(404, missingMessage);
+    case 'ELOOP':
+    case 'ENOTDIR':
+    case 'EISDIR':
+      return new HttpError(400, invalidMessage);
+    case 'EACCES':
+    case 'EPERM':
+      return new HttpError(403, 'Workspace path is not readable');
+    default:
+      return new HttpError(500, 'Read failed');
+  }
+}
+
+/**
+ * Read `rel` out of a workspace through the link-free open.
+ *
+ * The steps mirror `openContainedForWrite`, minus the mutation:
+ *   1. `resolveContainedPath(..., {mustExist:true})` — slug, root, traversal,
+ *      every component's link-ness, plus the caller's 404. Cheap; NOT the
+ *      control, and it is what keeps the "missing workspace" contract intact.
+ *   2. A pre-open `lstat`: a link, a directory or a FIFO is refused BEFORE it
+ *      is opened (a FIFO would block; a directory is not a file), and this is
+ *      the identity step 4 compares against.
+ *   3. `open` with `O_NOFOLLOW` — the kernel refuses a symlink leaf at open
+ *      time, so a link planted after step 1 is ELOOP, never a read of its
+ *      target.
+ *   4. `fstat` vs that pre-open `lstat` (dev/ino) — the opened object must BE
+ *      the object that was inspected.
+ *   5. `/proc/self/fd/<fd>` re-proof on Linux — the opened inode reports where
+ *      it really lives, the only step that also covers a swapped INTERMEDIATE
+ *      directory.
+ *
+ * The bytes are copied out of the DESCRIPTOR at a fixed position, so the path
+ * is never re-resolved after the proof, and a file that grows after step 2 can
+ * only be reported as truncated. On Windows steps 3 and 5 degrade (no
+ * O_NOFOLLOW, no /proc) while steps 2 and 4 still refuse a leaf link and a
+ * swapped leaf — see `linkFreeControls()` for the honest matrix.
+ */
+export function readContainedFile(
+  root: string,
+  slug: unknown,
+  rel: string,
+  opts: LinkFreeReadOptions = {}
+): LinkFreeReadResult {
+  const invalidMessage = opts.invalidMessage || 'Invalid path';
+  const missingMessage = opts.missingMessage || 'Path not found';
+  const requested =
+    typeof opts.maxBytes === 'number' && Number.isFinite(opts.maxBytes)
+      ? Math.floor(opts.maxBytes)
+      : DEFAULT_READ_MAX_BYTES;
+  const maxBytes = Math.min(Math.max(requested, 1), HARD_READ_MAX_BYTES);
+
+  // (1) The cheap proof + the lexical target. A missing workspace still answers
+  // with the 404 callers already rely on.
+  const target = resolveContainedPath(root, slug, rel, { mustExist: true, missingMessage });
+  const base = resolveWorkspaceBase(root, slug);
+  if (target === base) throw new HttpError(400, invalidMessage);
+
+  // (2) Pre-open inspection: identity for step 4, and the refusal of anything
+  // that is not a regular file.
+  let expected: string;
+  try {
+    const st = fs.lstatSync(target);
+    if (st.isSymbolicLink() || !st.isFile()) throw new HttpError(400, invalidMessage);
+    expected = `${st.dev}:${st.ino}`;
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw readRefusal(err, invalidMessage, missingMessage);
+  }
+
+  // (3) The kernel-enforced open.
+  let fd = -1;
+  try {
+    fd = fs.openSync(target, writeFlags(fs.constants.O_RDONLY, linkFreeControls().nofollow));
+  } catch (err) {
+    throw readRefusal(err, invalidMessage, missingMessage);
+  }
+
+  try {
+    // (4) The opened object must be the object that was inspected.
+    let opened: fs.Stats;
+    try {
+      opened = fs.fstatSync(fd);
+    } catch {
+      throw new HttpError(400, invalidMessage);
+    }
+    if (!opened.isFile()) throw new HttpError(400, invalidMessage);
+    if (`${opened.dev}:${opened.ino}` !== expected) throw new HttpError(400, invalidMessage);
+
+    // (5) The opened inode's real path, straight out of the kernel.
+    const realOpened = openedFdRealPath(fd);
+    if (realOpened !== null && !strictlyInside(base, realOpened)) {
+      throw new HttpError(400, invalidMessage);
+    }
+
+    const size = opened.size;
+    const want = Math.min(size, maxBytes);
+    const data = Buffer.allocUnsafe(want);
+    let off = 0;
+    while (off < want) {
+      const n = fs.readSync(fd, data, off, want - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    return {
+      path: target,
+      data: off === want ? data : data.subarray(0, off),
+      size,
+      truncated: size > off,
+    };
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
 // ── Link-free rename ────────────────────────────────────────────────────────
 //
 // `rename(2)` is the one mutating workspace op that takes NO flag, so there is
@@ -757,11 +913,14 @@ export function copyContainedFile(
 //      syscall fails (ENOENT/ENXIO): an availability cost, never an escape.
 //
 // HONESTY ABOUT WHAT IS ONLY NARROWED, because this is the part worth stating:
-//   * `pinned: false` means step 2/3 were unavailable, and then the leaf and
-//     parent-chain checks are CHECKS again — the old guarantee, just re-verified
-//     adjacent to the syscall. That is the state on Windows (Node cannot
-//     `open()` a directory there and `/proc` does not exist) and it is reported,
-//     never assumed.
+//   * `pinned: false` now means exactly two things: the platform has no
+//     `/proc/self/fd` to pin with (Windows — Node cannot `open()` a directory
+//     there, so `linkFreeControls().procSelfFd` is false), or the call was a
+//     no-op (`from === to`). It does NOT mean "the pin was attempted and failed":
+//     on a platform that HAS procfs, a pin that cannot be established is a
+//     REFUSAL (400/403/404 out of `renameRefusal`), never a silent fall back to
+//     the lexical path. A control that reports itself as "degraded but fine"
+//     is indistinguishable from one that was never there.
 //   * Even when pinned, the SOURCE LEAF is re-lstat'ed, re-opened with
 //     O_NOFOLLOW and identity-compared (fstat dev/ino) immediately before the
 //     rename, and the landed inode is identity-checked immediately after. The
@@ -788,8 +947,10 @@ export interface RenameResult {
   noop: boolean;
   /**
    * True only when BOTH parent directories were pinned by descriptor and the
-   * syscall was handed the procfs paths. False means the checks ran but the
-   * descriptor pin did not, which is the weaker guarantee — see the note above.
+   * syscall was handed the procfs paths. False means the platform has no
+   * `/proc/self/fd` to pin with (Windows) or the call was a no-op — a pin that
+   * was ATTEMPTED and failed refuses the rename instead of degrading, see the
+   * note above.
    */
   pinned: boolean;
 }
@@ -827,7 +988,12 @@ function renameRefusal(err: unknown, invalidMessage: string, missingMessage: str
  * directory inside `base`. Returns the path the syscall must use — which is NOT
  * `dir` when the pin succeeded.
  */
-function pinContainedDir(base: string, dir: string, invalidMessage: string): PinnedDir {
+function pinContainedDir(
+  base: string,
+  dir: string,
+  invalidMessage: string,
+  missingMessage: string
+): PinnedDir {
   if (!linkFreeControls().procSelfFd) return { use: dir, fd: null };
   let fd = -1;
   try {
@@ -837,6 +1003,7 @@ function pinContainedDir(base: string, dir: string, invalidMessage: string): Pin
     const real = fs.realpathSync(`/proc/self/fd/${fd}`);
     if (!sameOrInside(base, real)) {
       fs.closeSync(fd);
+      fd = -1;
       throw new HttpError(400, invalidMessage);
     }
     return { use: `/proc/self/fd/${fd}`, fd };
@@ -849,10 +1016,12 @@ function pinContainedDir(base: string, dir: string, invalidMessage: string): Pin
       }
     }
     if (err instanceof HttpError) throw err;
-    // Unpinnable (no procfs, no read permission, a FUSE mount that will not
-    // resolve the magic link). Degrade to the lexical path and let the caller
-    // report `pinned: false` — never pretend the control is still there.
-    return { use: dir, fd: null };
+    // A platform that HAS procfs but cannot pin is FAIL-CLOSED: a directory
+    // that vanished, is unreadable, or will not resolve its own magic link
+    // means we cannot prove the syscall's destination, so the rename is
+    // refused. Degrading to the lexical path here would put the whole pin
+    // design back to sleep behind a `pinned: false` nobody reads.
+    throw renameRefusal(err, invalidMessage, missingMessage);
   }
 }
 
@@ -882,8 +1051,8 @@ export function renameContainedPath(
 
   const srcParents = ensureParentChain(base, relPartsOf(from).slice(0, -1), invalidMessage);
   const dstParents = ensureParentChain(base, relPartsOf(to).slice(0, -1), invalidMessage);
-  const srcPin = pinContainedDir(base, srcParents, invalidMessage);
-  const dstPin = pinContainedDir(base, dstParents, invalidMessage);
+  const srcPin = pinContainedDir(base, srcParents, invalidMessage, missingMessage);
+  const dstPin = pinContainedDir(base, dstParents, invalidMessage, missingMessage);
 
   try {
     const srcUse = path.join(srcPin.use, path.basename(src));

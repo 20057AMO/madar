@@ -35,6 +35,7 @@ const {
   copyContainedFile,
   linkFreeControls,
   renameContainedPath,
+  readContainedFile,
 } = await import('../src/services/workspace-paths-core.ts');
 
 let root = '';
@@ -682,5 +683,111 @@ describe('workspace-paths-core · link-free rename', () => {
         return true;
       }
     );
+  });
+});
+
+describe('workspace-paths-core · link-free reads', () => {
+  test('a regular file is read whole with its TRUE size, never truncated', () => {
+    writeContainedFile(root, SLUG, 'read/ok.txt', 'hello world');
+    const r = readContainedFile(root, SLUG, 'read/ok.txt');
+    assert.strictEqual(r.data.toString('utf8'), 'hello world');
+    assert.strictEqual(r.size, 11);
+    assert.strictEqual(r.truncated, false);
+  });
+
+  test('the read is BOUNDED: maxBytes caps the bytes while size stays honest', () => {
+    writeContainedFile(root, SLUG, 'read/big.txt', 'x'.repeat(5000));
+    const r = readContainedFile(root, SLUG, 'read/big.txt', { maxBytes: 1000 });
+    assert.strictEqual(r.data.length, 1000, 'exactly maxBytes bytes');
+    assert.strictEqual(r.size, 5000, 'size reports the TRUE file size, not the slice');
+    assert.strictEqual(r.truncated, true);
+  });
+
+  test('a pathological maxBytes is clamped to the hard ceiling, never slurped', () => {
+    // 9 MiB of zeros — asking for 64 MiB must still come back ≤ 8 MiB.
+    const big = path.join(root, SLUG, 'read', 'huge.bin');
+    fs.writeFileSync(big, Buffer.alloc(9 * 1024 * 1024));
+    try {
+      const r = readContainedFile(root, SLUG, 'read/huge.bin', { maxBytes: 64 * 1024 * 1024 });
+      assert.ok(r.data.length <= 8 * 1024 * 1024, `read ${r.data.length} bytes past the hard ceiling`);
+      assert.strictEqual(r.truncated, true, '9 MiB cannot fit under an 8 MiB ceiling');
+      assert.strictEqual(r.size, 9 * 1024 * 1024);
+    } finally {
+      fs.rmSync(big, { force: true });
+    }
+  });
+
+  test('missing / traversal / directory / root answers with the caller messages', () => {
+    assert.throws(
+      () => readContainedFile(root, SLUG, 'read/nope.txt', { missingMessage: 'Gone' }),
+      (e: any) => e?.statusCode === 404 && e?.message === 'Gone'
+    );
+    assert.throws(
+      () => readContainedFile(root, SLUG, '../outside/secret.txt'),
+      (e: any) => e?.statusCode === 400
+    );
+    assert.throws(
+      () => readContainedFile(root, SLUG, 'read/../../escape.txt'),
+      (e: any) => e?.statusCode === 400
+    );
+    // A directory is NOT a file — refused, never opened (FIFOs included by the
+    // fstat check) — with the caller's message, not an fs message.
+    assert.throws(
+      () => readContainedFile(root, SLUG, 'real-dir', { invalidMessage: 'Not a file' }),
+      (e: any) => e?.statusCode === 400 && e?.message === 'Not a file'
+    );
+    // The workspace slug dir itself: `target === base` is refused, never
+    // "read the directory".
+    assert.throws(
+      () => readContainedFile(root, SLUG, ''),
+      (e: any) => e?.statusCode === 400
+    );
+    // An unknown slug is 404 — the workspace-not-found contract callers rely
+    // on (distinct from a missing file inside a real workspace).
+    assert.throws(
+      () => readContainedFile(root, 'no-such-project', 'a.txt'),
+      (e: any) => e?.statusCode === 404 && String(e?.message).includes("no-such-project' not found")
+    );
+    // A refusal never echoes an absolute host path back to the client.
+    assert.throws(
+      () => readContainedFile(root, SLUG, 'real-dir', { invalidMessage: 'Not a file' }),
+      (e: any) => !String(e?.message || '').includes(root)
+    );
+  });
+
+  test('a planted link at the LEAF never yields the target bytes', (t) => {
+    fs.writeFileSync(path.join(outside, 'read-secret.txt'), 'TARGET-BYTES', 'utf8');
+    if (plantLink('read-link.txt', path.join(outside, 'read-secret.txt')) === 'skip') {
+      return t.skip('this platform refused to create a link');
+    }
+    assert.throws(
+      () => readContainedFile(root, SLUG, 'read-link.txt'),
+      (e: any) => e?.statusCode === 400
+    );
+    // The naive read this replaced DOES follow the link wherever the platform
+    // can resolve one — on platforms where a file link cannot resolve at all,
+    // the refusal row above still stands on its own.
+    let naive = '';
+    try {
+      naive = fs.readFileSync(path.join(root, SLUG, 'read-link.txt'), 'utf8');
+    } catch {
+      /* unresolvable on this platform — see the diagnostic below */
+    }
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'read-secret.txt'), 'utf8'), 'TARGET-BYTES');
+    if (naive !== 'TARGET-BYTES') {
+      t.diagnostic('platform cannot resolve a file link — refusal asserted, follow-witness skipped');
+    }
+  });
+
+  test('a planted link as an INTERMEDIATE directory is refused before the open', (t) => {
+    fs.writeFileSync(path.join(outside, 'deep-target.txt'), 'DEEP', 'utf8');
+    if (plantLink('linkdir', outside) === 'skip') {
+      return t.skip('this platform refused to create a link');
+    }
+    assert.throws(
+      () => readContainedFile(root, SLUG, 'linkdir/deep-target.txt'),
+      (e: any) => e?.statusCode === 400
+    );
+    assert.strictEqual(fs.readFileSync(path.join(outside, 'deep-target.txt'), 'utf8'), 'DEEP');
   });
 });

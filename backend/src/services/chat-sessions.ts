@@ -15,6 +15,18 @@ const INDEX_FILE = path.join(CHATS_DIR, 'sessions.json');
 
 const DEFAULT_SLUG = 'global';
 
+/**
+ * Deterministic fallback for an id that sanitizes to nothing (or to a pure dot
+ * segment). STABLE by contract: the same input must map to the same key on
+ * write and on every later lookup, so the old `chat-${Date.now()}` fallback
+ * would orphan rows and could collide with a real session created in the same
+ * millisecond. `'..'`/`'.'` used to survive the filters below verbatim, and
+ * `path.join(CHATS_DIR, slug, '..')` then named a directory OUTSIDE the
+ * session — the rmSync in deleteSession walked up to DATA_DIR itself (see
+ * chatDirFor). Mirrors chat-store.sanitizeId.
+ */
+const FALLBACK_ID = 'chat-unspecified';
+
 export interface ChatSession {
   /** Project slug (or 'global' for general conversations). */
   slug: string;
@@ -37,12 +49,37 @@ let cache: ChatSession[] | null = null;
 function sanitizeSlug(slug: string | undefined): string {
   if (!slug) return DEFAULT_SLUG;
   const clean = String(slug).trim().replace(/[^a-z0-9._-]/g, '-').slice(0, 32);
-  return clean || DEFAULT_SLUG;
+  // The filter DELIBERATELY keeps dots (legacy `my.project` dirs), so '.',
+  // '..' and '....' pass through it untouched — map them off before any
+  // caller can path.join them with a base.
+  if (!clean || /^\.+$/.test(clean)) return DEFAULT_SLUG;
+  return clean;
 }
 
 function sanitizeChatId(chatId: string): string {
   const clean = String(chatId).replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 64);
-  return clean || `chat-${Date.now()}`;
+  if (!clean || /^\.+$/.test(clean)) return FALLBACK_ID;
+  return clean;
+}
+
+/**
+ * The directory a session's events live in, WITH a structural proof that the
+ * joined path really is `CHATS_DIR/<slug>/<chatId>` and nothing else.
+ *
+ * `path.join` happily consumes `..` segments: `join(CHATS_DIR, 'global', '..')`
+ * is CHATS_DIR itself and `join(CHATS_DIR, '..', '..')` is DATA_DIR — the data
+ * directory that holds users.json and jwt.secret. The sanitizers above already
+ * refuse dot segments, but a containment decision must not rest on a filter
+ * this far from the syscall: the RELATIVE path is checked here, exactly two
+ * segments, neither a dot segment. Null means "not a session directory" and
+ * callers must treat it as 404 without touching the filesystem.
+ */
+function chatDirFor(slug: string, chatId: string): string | null {
+  const dir = path.join(CHATS_DIR, slug, chatId);
+  const parts = path.relative(CHATS_DIR, dir).split(path.sep);
+  if (parts.length !== 2) return null;
+  if (parts.some((p) => !p || p === '.' || p === '..')) return null;
+  return dir;
 }
 
 function sessionKey(s: ChatSession): string {
@@ -209,9 +246,17 @@ export function deleteSession(project: string | undefined, chatId: string): bool
   const list = load();
   const idx = list.findIndex((x) => x.slug === s && x.chatId === c);
   if (idx === -1) return false;
+  // The containment proof runs BEFORE anything is removed. A crafted
+  // `DELETE /api/chat/sessions/..?project=global` used to reach this rmSync
+  // with `path.join(CHATS_DIR, 'global', '..')` = CHATS_DIR (every
+  // conversation on the server) and, with both segments '..', DATA_DIR itself.
+  // An unshaped answer is "no such session": the row is left alone and the
+  // filesystem is never touched.
+  const dir = chatDirFor(s, c);
+  if (!dir) return false;
   list.splice(idx, 1);
   save();
-  fs.rmSync(path.join(CHATS_DIR, s, c), { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
   return true;
 }
 

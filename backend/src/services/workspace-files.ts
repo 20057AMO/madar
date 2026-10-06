@@ -10,7 +10,7 @@ import path from 'path';
 import { WORKSPACES_ROOT } from './docker-manager';
 import { IGNORED_DIRS, invalidateProjectContext } from './project-context';
 import { HttpError } from './project-slug-core';
-import { writeContainedFile, renameContainedPath, resolveContainedPath, resolveWorkspaceBase } from './workspace-paths-core';
+import { writeContainedFile, renameContainedPath, resolveContainedPath, resolveWorkspaceBase, readContainedFile } from './workspace-paths-core';
 
 const MAX_PREVIEW_CHARS = 200 * 1024;
 
@@ -210,37 +210,22 @@ export interface FilePreview {
 }
 
 export function readWorkspaceFile(slug: string, rel: string): FilePreview {
-  const target = resolveWorkspacePath(slug, rel);
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(target);
-  } catch {
-    throw new HttpError(404, 'File not found');
-  }
-  if (stat.isDirectory()) throw new HttpError(400, 'Is a directory');
-
-  const size = stat.size;
-  // Bound the READ, not just the response: a huge workspace file must never be
-  // slurped into memory only to be sliced. Read at most the preview budget.
-  const readSize = Math.min(size, MAX_PREVIEW_CHARS);
-  let buf: Buffer;
-  if (readSize <= 0) {
-    buf = Buffer.alloc(0);
-  } else {
-    const fd = fs.openSync(target, 'r');
-    try {
-      buf = Buffer.alloc(readSize);
-      let off = 0;
-      while (off < readSize) {
-        const n = fs.readSync(fd, buf, off, readSize - off, off);
-        if (n <= 0) break;
-        off += n;
-      }
-      if (off < readSize) buf = buf.subarray(0, off);
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
+  // The preview read is bound by the same primitive as every write. This used
+  // to be `resolve` + `statSync` + `open` by NAME — statSync FOLLOWS a link, so
+  // a planted `notes.txt -> /app/data/jwt.secret` was previewed, downloaded
+  // and, through the AI-context scanner, pasted into chat prompts. Now the
+  // link refusal and the descriptor identity proof come first, and the bytes
+  // are copied OUT OF THE DESCRIPTOR at a fixed position (never re-resolved by
+  // name). Refusals are 400/403/404 out of the primitive; a directory answers
+  // 400 "Invalid path" (the old "Is a directory" text is gone with the
+  // statSync that produced it — no caller asserted the string).
+  const read = readContainedFile(WORKSPACES_ROOT, slug, rel, {
+    maxBytes: MAX_PREVIEW_CHARS,
+    invalidMessage: 'Invalid path',
+    missingMessage: 'Path not found',
+  });
+  const size = read.size;
+  const buf = read.data;
   const binary = buf.length > 0 && buf.subarray(0, Math.min(8192, buf.length)).includes(0);
   if (binary) return { content: '', truncated: size > buf.length, size, binary: true };
 
@@ -393,9 +378,10 @@ export function renameWorkspacePath(slug: string, from: string, to: string): { o
     console.error(`[workspace-files] rename failed in project '${slug}':`, err);
     throw new HttpError(500, 'Rename failed');
   }
-  if (!pinned) {
-    // Never silently degrade: the rename still happened inside the workspace,
-    // but only the name-based checks ran. Say so where an operator will see it.
+  if (moved && !pinned) {
+    // Never silently degrade. With the pin now FAIL-CLOSED this can only be a
+    // platform without /proc/self/fd (Windows), where the primitive still
+    // refused every link it saw — but say so where an operator will see it.
     console.warn(`[workspace-files] rename in project '${slug}' ran WITHOUT a descriptor pin (no /proc/self/fd)`);
   }
   if (moved) invalidateProjectContext(slug);

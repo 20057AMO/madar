@@ -455,8 +455,11 @@ export function refreshCanvasMirror(slug: unknown): void {
       mode: 'upsert',
       invalidMessage: 'Invalid canvas mirror path',
     });
-  } catch {
-    /* mirror is best-effort — never fail a board save over it */
+  } catch (err: any) {
+    // Best-effort by contract, but never SILENT: one observed mirror-less save
+    // (200 on the PUT, 404 on the mirror read) was undiagnosable without the
+    // reason. Log it server-side; the save still succeeds either way.
+    console.warn(`[canvas] mirror refresh failed for '${String(slug)}':`, err?.code || err?.message || err);
   }
 }
 

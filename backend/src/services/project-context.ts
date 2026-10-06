@@ -17,7 +17,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { resolveWorkspaceBase } from './workspace-paths-core';
+import { resolveWorkspaceBase, readContainedFile } from './workspace-paths-core';
 import { HttpError } from './project-slug-core';
 import type { ProjectInfo } from './docker-manager';
 import { formatNotesForContext, noteCounts, notesSignature } from './project-notes';
@@ -76,6 +76,10 @@ export function setContextDockerSource(src: ProjectContextDockerSource | null): 
 export const DEFAULT_MAX_CHARS = 24000;
 const BRIEF_MAX_CHARS = 4000;
 const GOALS_MAX_CHARS = 4000;
+const GOALS_READ_BYTES = 32 * 1024;
+const KEY_FILE_READ_BYTES = 64 * 1024;
+const SIG_MAX_BYTES = 256 * 1024;
+const SIG_READ_BYTES = 256 * 1024;
 const TREE_MAX_CHARS = 3000;
 const SMALL_FILE_BYTES = 8 * 1024;
 const KEY_FILE_MAX_BYTES = 64 * 1024;
@@ -84,6 +88,30 @@ const TREE_MAX_ENTRIES = 400;
 const MAX_SCAN_FILES = 2000;
 const MAX_SCAN_DEPTH = 8;
 const MAX_LOG_LINES = 60;
+
+/**
+ * Read one workspace text file through the link-free read primitive.
+ *
+ * Every file this module feeds into a chat prompt used to come from a bare
+ * `readFileSync`, which FOLLOWS symlinks: a planted
+ * `WSD_PROJECT.md -> /app/data/jwt.secret` needed no race at all and was
+ * pasted into every prompt (this was a LIVE finding, not a hypothetical).
+ * `reason: 'refused'` covers link / directory / non-regular entry / outside
+ * the workspace / unreadable — the caller renders it as an explicit marker
+ * rather than silently dropping the section, so planting a link cannot hide
+ * content either. `'missing'` is the old "file simply is not there" case.
+ */
+type WorkspaceRead = { ok: true; text: string } | { ok: false; reason: 'missing' | 'refused' };
+
+function readWorkspaceText(slug: string, rel: string, maxBytes: number): WorkspaceRead {
+  try {
+    const read = readContainedFile(WORKSPACES_ROOT, slug, rel, { maxBytes });
+    return { ok: true, text: read.data.toString('utf8') };
+  } catch (err) {
+    if (err instanceof HttpError && err.statusCode === 404) return { ok: false, reason: 'missing' };
+    return { ok: false, reason: 'refused' };
+  }
+}
 
 export const IGNORED_DIRS = new Set([
   'node_modules',
@@ -260,10 +288,15 @@ function scanWorkspace(dir: string): ScannedFile[] {
         const abs = path.join(dir, child);
         let stat: fs.Stats;
         try {
-          stat = fs.statSync(abs);
+          // lstat, never stat: statSync FOLLOWS a link, so a file swapped for a
+          // symlink between readdir and here would contribute the TARGET's size
+          // (and the read sites below used to follow it too). A link is not a
+          // regular file, so it is never scanned.
+          stat = fs.lstatSync(abs);
         } catch {
           continue;
         }
+        if (!stat.isFile()) continue;
         const ext = path.extname(e.name).toLowerCase();
         if (!textLike(ext, stat.size)) continue;
         out.push({
@@ -315,16 +348,12 @@ function buildTree(base: string, rel: string, depth: number, budget: { count: nu
   return lines;
 }
 
-/** Extract declaration signatures from a code file (with line numbers). */
-function extractSignatures(file: ScannedFile, maxLines: number): string[] {
+/** Extract declaration signatures from a code file (with line numbers).
+ *  The caller reads the content through `readWorkspaceText` — this function
+ *  never opens a path itself. */
+function extractSignatures(file: ScannedFile, content: string, maxLines: number): string[] {
   const codeExt = file.codeExt;
   if (!codeExt) return [];
-  let content: string;
-  try {
-    content = fs.readFileSync(file.abs, 'utf8');
-  } catch {
-    return [];
-  }
   const pattern = CODE_SIG_PATTERNS.find((p) => p.exts.includes(codeExt))!;
   const lines: string[] = [];
   const seen = new Set<string>();
@@ -501,15 +530,14 @@ async function buildFullContext(
     parts.push('(container metadata unavailable — workspace present on disk)');
   }
 
-  // 1) Goals
-  const goalsPath = path.join(dir, 'WSD_PROJECT.md');
-  if (fs.existsSync(goalsPath)) {
-    try {
-      const goals = fs.readFileSync(goalsPath, 'utf8').slice(0, GOALS_MAX_CHARS);
-      parts.push(`\n## Project goals (WSD_PROJECT.md)\n${goals || '(empty)'}`);
-    } catch {
-      /* unreadable goals file */
-    }
+  // 1) Goals — read link-free. A planted WSD_PROJECT.md symlink used to be
+  // read with existsSync+readFileSync (both FOLLOW the link), so the target's
+  // bytes went straight into the system prompt.
+  const goals = readWorkspaceText(clean, 'WSD_PROJECT.md', GOALS_READ_BYTES);
+  if (goals.ok) {
+    parts.push(`\n## Project goals (WSD_PROJECT.md)\n${goals.text.slice(0, GOALS_MAX_CHARS) || '(empty)'}`);
+  } else if (goals.reason === 'refused') {
+    parts.push(`\n## Project goals (WSD_PROJECT.md)\n(refused — not a regular file)`);
   }
 
   // 1.5) Developer notes from the Madar Notes tab (open bugs → goals → ideas).
@@ -537,14 +565,12 @@ async function buildFullContext(
     const f = byRel.get(rel) || byRel.get(rel.toLowerCase());
     if (!f || keySet.has(f.rel)) continue;
     keySet.add(f.rel);
-    try {
-      if (f.size > KEY_FILE_MAX_BYTES) continue;
-      const content = fs.readFileSync(f.abs, 'utf8');
-      const body = f.size <= SMALL_FILE_BYTES ? content : `${content.slice(0, 800)}\n…(file too large, showing head)`;
-      keyParts.push(`\n## ${f.rel}\n${body.slice(0, 4000)}`);
-    } catch {
-      /* skip unreadable key file */
-    }
+    if (f.size > KEY_FILE_MAX_BYTES) continue;
+    const read = readWorkspaceText(clean, f.rel, KEY_FILE_READ_BYTES);
+    if (!read.ok) continue; // missing or refused — a link contributes nothing
+    const content = read.text;
+    const body = f.size <= SMALL_FILE_BYTES ? content : `${content.slice(0, 800)}\n…(file too large, showing head)`;
+    keyParts.push(`\n## ${f.rel}\n${body.slice(0, 4000)}`);
   }
   if (keyParts.length) parts.push(`\n## Key files\n${keyParts.join('\n')}`);
 
@@ -553,20 +579,19 @@ async function buildFullContext(
   for (const f of files) {
     if (keySet.has(f.rel) || f.rel === 'WSD_PROJECT.md' || f.rel === 'WSD_CANVAS.md') continue;
     if (f.size > SMALL_FILE_BYTES) continue;
-    try {
-      const content = fs.readFileSync(f.abs, 'utf8');
-      smallParts.push(`\n### ${f.rel}\n${content}`);
-    } catch {
-      /* skip */
-    }
+    const read = readWorkspaceText(clean, f.rel, SMALL_FILE_BYTES);
+    if (!read.ok) continue;
+    smallParts.push(`\n### ${f.rel}\n${read.text}`);
   }
   if (smallParts.length) parts.push(`\n## Source files (small)\n${smallParts.join('\n')}`);
 
   // 4) Code signatures of larger files.
   const sigParts: string[] = [];
   for (const f of files) {
-    if (f.size <= SMALL_FILE_BYTES || !f.codeExt || f.size > 256 * 1024) continue;
-    const sigs = extractSignatures(f, 40);
+    if (f.size <= SMALL_FILE_BYTES || !f.codeExt || f.size > SIG_MAX_BYTES) continue;
+    const read = readWorkspaceText(clean, f.rel, SIG_READ_BYTES);
+    if (!read.ok) continue;
+    const sigs = extractSignatures(f, read.text, 40);
     if (sigs.length) sigParts.push(`\n### ${f.rel}\n${sigs.join('\n')}`);
   }
   if (sigParts.length) parts.push(`\n## Code signatures\n${sigParts.join('\n')}`);

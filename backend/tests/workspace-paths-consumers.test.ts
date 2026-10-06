@@ -486,4 +486,49 @@ describe('project-context · the AI context scanner', () => {
     assert.strictEqual(ctx.safeWorkspaceDir(slug), dir);
     assert.ok(typeof ctx.getProjectContext === 'function');
   });
+
+  test('a planted WSD_PROJECT.md link never reaches the AI context — refused, not followed', async (t) => {
+    // F2: the goals read was a bare existsSync+readFileSync, both of which
+    // FOLLOW a link, so `WSD_PROJECT.md -> /app/data/jwt.secret` was pasted
+    // into every prompt with no race at all.
+    const slug = 'ctx-goals-link';
+    const dir = makeProject(slug);
+    const secretText = 'LEAK-TOKEN-9271';
+    fs.writeFileSync(path.join(outside, 'ctx-secret.txt'), secretText, 'utf8');
+    if (!plantLink(t, path.join(dir, 'WSD_PROJECT.md'), path.join(outside, 'ctx-secret.txt'), 'file')) return;
+
+    // The naive read this replaced follows the link wherever the platform can
+    // resolve one. Where it resolves, this witness proves the row is a real
+    // leak the primitive had to close; where it cannot (Windows file links),
+    // the refusal marker below is still the honest regression guard — the old
+    // code silently DROPPED the section instead of reporting the refusal.
+    let naive = '';
+    try {
+      naive = fs.readFileSync(path.join(dir, 'WSD_PROJECT.md'), 'utf8');
+    } catch {
+      t.diagnostic('platform cannot resolve a file link — refusal asserted, follow-witness skipped');
+    }
+
+    // Deterministic: no docker inspect roundtrip in an offline suite.
+    ctx.setContextDockerSource({
+      listProjects: async () => [],
+      getProject: async () => null,
+      projectLogs: async () => '',
+    });
+    try {
+      const out = await ctx.getProjectContext(slug);
+      assert.ok(!out.text.includes(secretText), 'the planted link must never reach the AI context');
+      assert.match(
+        out.text,
+        /refused — not a regular file/,
+        'a refused goals file must be reported explicitly, never silently dropped'
+      );
+      if (naive === secretText) {
+        t.diagnostic('follow-witness: the naive read DID see the target, the context did not');
+      }
+      assert.strictEqual(fs.readFileSync(path.join(outside, 'ctx-secret.txt'), 'utf8'), secretText, 'the link target is untouched');
+    } finally {
+      ctx.setContextDockerSource(null);
+    }
+  });
 });

@@ -41,7 +41,7 @@ import { type ProjectLimits, getHostInfo } from './services/project-limits';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
-import { resolveContainedPath, parseUploadPaths, uploadRelativePath, copyContainedFile } from './services/workspace-paths-core';
+import { resolveContainedPath, parseUploadPaths, uploadRelativePath, copyContainedFile, readContainedFile } from './services/workspace-paths-core';
 import { loadMeta, updateMeta, listMetaSlugs, memberList, writableMemberList } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
 
@@ -940,19 +940,39 @@ app.get('/api/chat/models', async (req, res) => {
 });
 
 // Preview the project-awareness context that will be injected into the model
-app.get('/api/chat/context', async (req, res) => {
+app.get('/api/chat/context', async (req: any, res) => {
   const project = String(req.query.project || '').trim();
   if (!project) {
     return res.status(400).json({ error: 'Missing project query (use "all" or a project slug)' });
   }
   try {
-    const ctx = project === 'all' ? await listProjectsBrief() : await getProjectContext(project);
-    let indexStats;
+    // F1: this route used to hand ANY authenticated user the full context of
+    // ANY project — WSD_PROJECT.md goals, key files, small source files, code
+    // signatures and recent container logs — while the WebSocket that CONSUMES
+    // this same context is member-gated (ws-chat: read=viewer, write=editor).
+    // Gate it at the same level, and fold ONCE to the canonical slug BEFORE the
+    // gate: a raw near-miss ("my-project!") used to miss the meta store, trip
+    // the legacy no-meta fallback and pass, while downstream resolved the real
+    // project — the exact hole /api/opencode/open was fixed for (see the
+    // canonicalize-before-the-gate rule there). 'all' stays ungated:
+    // listProjectsBrief is tail-only and every authenticated user can already
+    // read /api/projects.
+    let scope = project;
     if (project !== 'all') {
-      indexStats = getIndexStats(project);
+      const canonical = canonicalProjectSlug(project);
+      if (!canonical) return res.status(400).json({ error: 'Project slug is invalid' });
+      const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, 'viewer');
+      if (!allowed) return res.status(403).json({ error: 'Access denied to this project' });
+      // Everything below acts on the SAME canonical value the gate authorised.
+      scope = canonical;
+    }
+    const ctx = scope === 'all' ? await listProjectsBrief() : await getProjectContext(scope);
+    let indexStats;
+    if (scope !== 'all') {
+      indexStats = getIndexStats(scope);
       const query = String(req.query.query || '').trim();
       if (query) {
-        const ret = await retrieveProject(project, query, 6);
+        const ret = await retrieveProject(scope, query, 6);
         const block = formatRetrievedChunks(ret);
         if (block) ctx.text = capText(`${ctx.text}\n\n${block}`, 24000).text;
       }
@@ -963,27 +983,51 @@ app.get('/api/chat/context', async (req, res) => {
   }
 });
 
+// F1 siblings: the chat-session store is keyed by PROJECT, yet these four
+// routes were open to any authenticated user — an outsider could list, create,
+// rename and DELETE another project's conversation history (and, with
+// `project=..`, walk straight into the traversal this round also closed). Same
+// gate as /api/chat/context: reads are viewer-level, mutations editor-level,
+// matching what ws-chat/ws-agent admit for the same scope. No `project` = the
+// caller's own unscoped/global rows, which stay ungated.
+function chatSessionGate(req: any, project: string, level: 'viewer' | 'editor'): string | null {
+  if (!project) return null; // global rows — no project to authorise against
+  const canonical = canonicalProjectSlug(project);
+  if (!canonical) return 'Project slug is invalid';
+  const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, level);
+  return allowed ? null : 'Access denied to this project';
+}
+
 // ── Chat sessions (per-project conversation history) ──────────
-app.get('/api/chat/sessions', (_req, res) => {
-  const project = String(_req.query.project || '').trim() || undefined;
+app.get('/api/chat/sessions', (req: any, res) => {
+  const project = String(req.query.project || '').trim() || undefined;
+  const denied = project ? chatSessionGate(req, project, 'viewer') : null;
+  if (denied) return res.status(denied === 'Project slug is invalid' ? 400 : 403).json({ error: denied });
   res.json({ sessions: listSessions(project) });
 });
 
-app.post('/api/chat/sessions', userWriteLimiter, (req, res) => {
+app.post('/api/chat/sessions', userWriteLimiter, (req: any, res) => {
   const { name, project } = req.body || {};
-  res.status(201).json({ session: createSession({ project, name }) });
+  const raw = typeof project === 'string' ? project.trim() : '';
+  const denied = chatSessionGate(req, raw, 'editor');
+  if (denied) return res.status(denied === 'Project slug is invalid' ? 400 : 403).json({ error: denied });
+  res.status(201).json({ session: createSession({ project: raw || undefined, name }) });
 });
 
-app.put('/api/chat/sessions/:chatId', (req, res) => {
+app.put('/api/chat/sessions/:chatId', (req: any, res) => {
   const project = String(req.query.project || '').trim() || undefined;
+  const denied = project ? chatSessionGate(req, project, 'editor') : null;
+  if (denied) return res.status(denied === 'Project slug is invalid' ? 400 : 403).json({ error: denied });
   const name = String(req.body?.name || '').trim();
   const session = renameSession(project, req.params.chatId, name);
   if (!session) return res.status(404).json({ error: 'Session not found' });
   res.json({ session });
 });
 
-app.delete('/api/chat/sessions/:chatId', (req, res) => {
+app.delete('/api/chat/sessions/:chatId', (req: any, res) => {
   const project = String(req.query.project || '').trim() || undefined;
+  const denied = project ? chatSessionGate(req, project, 'editor') : null;
+  if (denied) return res.status(denied === 'Project slug is invalid' ? 400 : 403).json({ error: denied });
   if (!deleteSession(project, req.params.chatId)) {
     return res.status(404).json({ error: 'Session not found' });
   }
@@ -2965,18 +3009,33 @@ app.post('/api/projects/:slug/file/rename', requireProjectAccess('editor'), (req
 // ── npm scripts ───────────────────────────────────────────────
 app.get('/api/projects/:slug/scripts', requireProjectAccess('viewer'), (req, res) => {
   try {
-    const base = path.resolve(WORKSPACES_ROOT, String(req.params.slug || '').trim());
-    const pkgPath = path.join(base, 'package.json');
-    if (!fs.existsSync(pkgPath)) return res.json({ scripts: {} });
+    // F4: this was `path.resolve(WORKSPACES_ROOT, slug)` + `existsSync` +
+    // `readFileSync` with NO containment and no slug fold — a planted
+    // `package.json -> /app/data/users.json` (or any host file) was served to
+    // any project viewer. Route it through the link-free read primitive like
+    // every other workspace read; requireProjectAccess has already folded the
+    // slug, so gate and act see the same value. Missing file keeps the old
+    // `{scripts:{}}` answer (team-access asserts it), a refused link/dir is an
+    // honest 400 that never carries the target's bytes, and unparseable JSON
+    // still reads as "no scripts".
     let pkg: any = {};
     try {
-      pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    } catch {
+      const read = readContainedFile(WORKSPACES_ROOT, req.params.slug, 'package.json', {
+        maxBytes: 4 * 1024 * 1024,
+        invalidMessage: 'Invalid path',
+        missingMessage: 'Path not found',
+      });
+      pkg = JSON.parse(read.data.toString('utf8'));
+    } catch (err: any) {
+      if (err instanceof HttpError) {
+        if (err.statusCode === 404) return res.json({ scripts: {} });
+        throw err;
+      }
       /* invalid json — treat as no scripts */
     }
     res.json({ scripts: pkg?.scripts || {} });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 

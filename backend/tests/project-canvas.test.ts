@@ -526,9 +526,6 @@ test('canvas presence: roster broadcast + cursor relay between two clients', asy
   let wsA: WebSocket | null = null;
   let wsB: WebSocket | null = null;
   try {
-    wsA = await open(signTestToken());
-    wsB = await open(peerToken);
-
     // Each client eventually sees a roster containing BOTH users.
     const rosterWithBoth = (ws: WebSocket) =>
       new Promise<any>((resolve, reject) => {
@@ -545,8 +542,18 @@ test('canvas presence: roster broadcast + cursor relay between two clients', asy
         };
         ws.on('message', onMsg);
       });
-    const ra = await rosterWithBoth(wsA);
-    await rosterWithBoth(wsB);
+
+    // Attach each listener IMMEDIATELY after its own socket opens — before the
+    // peer even connects. The server broadcasts the roster once per join and
+    // never rebroadcasts, so listeners attached only after BOTH sockets were
+    // open could miss both frames (the join-time roster arrives in the window
+    // between the second 'open' and the attach) and flake on timing.
+    wsA = await open(signTestToken());
+    const raPending = rosterWithBoth(wsA);
+    wsB = await open(peerToken);
+    const rbPending = rosterWithBoth(wsB);
+    const ra = await raPending;
+    await rbPending;
     const adminId = ra.users.find((u: any) => u.id !== peer.id)?.id;
     assert.ok(adminId, 'roster includes the initiating user too');
     assert.ok(ra.users.every((u: any) => typeof u.username === 'string'), 'roster carries usernames');

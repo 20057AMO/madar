@@ -39,9 +39,21 @@ export class ChatStore {
     fs.mkdirSync(this.dir, { recursive: true });
   }
 
+  /**
+   * Sanitize one path segment of a conversation key. The output can only be
+   * `[a-zA-Z0-9._-]{1,64}` with no dot-only value, so the `path.join` in
+   * `file()` is structurally two segments below `chats/` — '..' as a slug or
+   * chatId used to survive the character filter verbatim and made
+   * `join(chats, '..', '..')` name a directory OUTSIDE the data dir, where
+   * mkdir+append happily wrote. The empty-input fallback is STABLE (the same
+   * input must resolve to the same file on write and on read; the old
+   * `chat-${Date.now()}` generated a different key per call). Mirrors
+   * chat-sessions.sanitizeChatId.
+   */
   private sanitizeId(id: string): string {
     const clean = id.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 64);
-    return clean || `chat-${Date.now()}`;
+    if (!clean || /^\.+$/.test(clean)) return 'chat-unspecified';
+    return clean;
   }
 
   private file(slug: string, chatId: string): string {
