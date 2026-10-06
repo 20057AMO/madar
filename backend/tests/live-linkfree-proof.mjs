@@ -23,6 +23,9 @@
  *      /app/data/jwt.secret before/after), and an ordinary rename still works
  *   8. reviews.fileExists is not a host-file existence oracle (a VIEWER asking)
  *   9. a snapshot export skips a planted link without touching its target
+ *  10. /file/raw refuses a planted link and still streams a real file byte-exact (descriptor stream, F2)
+ *  11. agent readFile answers the marker through a planted link, reads the real file, writeFile still creates (F1)
+ *  12. the project index never walks nor chunks a planted link, still indexes the real file, index.json is 0600 (F1)
  */
 import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
@@ -371,6 +374,106 @@ const agentNested = await api('PUT', `/api/projects/${slug}/file?path=agent/new/
     `status=${exp.status} bytes=${raw.length} linkEntries="${names}" target=${sh(`cat ${exportTarget}`).trim()}`
   );
   sh(`rm -f ${ws}/snaplink ${exportTarget}`);
+
+  // ── 10. /file/raw streams FROM the verified descriptor (F2) ──
+  const secretText = sh('cat /app/data/jwt.secret').trim();
+  sh(`rm -f ${ws}/raw-link.txt; ln -s /app/data/jwt.secret ${ws}/raw-link.txt`);
+  const linkRes = await fetch(`${BASE}/api/projects/${slug}/file/raw?path=raw-link.txt`, { headers: auth });
+  const linkBody = await linkRes.text();
+  check(
+    '/file/raw refuses a planted link: a clean 4xx and zero secret bytes',
+    linkRes.status >= 400 && linkRes.status < 500 && !linkBody.includes(secretText),
+    `status=${linkRes.status} secret="${linkBody.includes(secretText) ? 'LEAKED' : 'absent'}" body="${linkBody.slice(0, 60)}"`
+  );
+  sh(`rm -f ${ws}/raw-link.txt`);
+
+  const ctrl = await fetch(`${BASE}/api/projects/${slug}/file/raw?path=brands-new/nested/deep/file.txt`, { headers: auth });
+  const ctrlBuf = Buffer.from(await ctrl.arrayBuffer());
+  const ctrlCl = ctrl.headers.get('content-length');
+  check(
+    'control: a real file still streams byte-exact with an honest Content-Length',
+    ctrl.status === 200 && ctrlBuf.toString('utf8') === 'created by the live proof' &&
+      Number(ctrlCl) === ctrlBuf.length,
+    `status=${ctrl.status} bytes=${ctrlBuf.length} contentLength=${ctrlCl}`
+  );
+
+  const missRaw = await fetch(`${BASE}/api/projects/${slug}/file/raw?path=nope-missing.txt`, { headers: auth });
+  check(
+    'control: a missing file at /file/raw is still 404 (never 500)',
+    missRaw.status === 404,
+    `status=${missRaw.status} body="${(await missRaw.text()).slice(0, 60)}"`
+  );
+
+  // ── 11. agent readFile reads through the primitive (F1) ──
+  // The tool contract must not move: every refusal is a STRING marker, and a
+  // link must be indistinguishable from a missing file.
+  let agentRead = '{}';
+  try {
+    agentRead = sh(`node -e '
+      const fs = require("fs");
+      const tools = require("/app/backend/dist/services/agent-tools.js");
+      const slug = process.argv[1];
+      const ws = process.argv[2];
+      fs.writeFileSync(ws + "/agent-canary-target.txt", "CANARY-TARGET-BYTES");
+      fs.rmSync(ws + "/agent-link.txt", { force: true });
+      fs.symlinkSync(ws + "/agent-canary-target.txt", ws + "/agent-link.txt");
+      const viaLink = tools.readFile(slug, "agent-link.txt");
+      const real = tools.readFile(slug, "brands-new/nested/deep/file.txt");
+      const missing = tools.readFile(slug, "definitely-missing.txt");
+      const created = tools.writeFile(slug, "agent-new/deep/again.ts", "export const y = 2;");
+      console.log(JSON.stringify({ viaLink, real, missing, created }));
+    ' ${slug} ${ws} 2>&1`).trim();
+  } catch (e) {
+    agentRead = JSON.stringify({ error: String((e && e.stdout) || (e && e.message) || e) });
+  }
+  let agentJson = {};
+  try { agentJson = JSON.parse(agentRead); } catch { agentJson = { parseError: agentRead.slice(0, 200) }; }
+  check(
+    'agent readFile refuses a planted link with the marker, reads the real file, writeFile still creates',
+    agentJson.viaLink === '[File not found: agent-link.txt]' &&
+      agentJson.real === 'created by the live proof' &&
+      agentJson.missing === '[File not found: definitely-missing.txt]' &&
+      sh(`cat ${ws}/agent-canary-target.txt`).trim() === 'CANARY-TARGET-BYTES' &&
+      sh(`cat ${ws}/agent-new/deep/again.ts 2>/dev/null || echo MISSING`).trim() === 'export const y = 2;',
+    `viaLink="${agentJson.viaLink}" real="${String(agentJson.real).slice(0, 40)}" missing="${agentJson.missing}" created=${JSON.stringify(agentJson.created)}`
+  );
+
+  // ── 12. the project index never walks nor chunks a planted link (F1) ──
+  sh(`rm -f ${ws}/index-link.md; ln -s /app/data/jwt.secret ${ws}/index-link.md`);
+  let idxRow = '{}';
+  try {
+    idxRow = sh(`node -e '
+      const fs = require("fs");
+      const pi = require("/app/backend/dist/services/project-index.js");
+      const slug = process.argv[1];
+      pi.retrieveProject(slug, "created by the live proof").then((r) => {
+        const idxFile = "/app/data/projects/" + slug + "/index.json";
+        const raw = fs.readFileSync(idxFile, "utf8");
+        const st = fs.statSync(idxFile);
+        const secret = fs.readFileSync("/app/data/jwt.secret", "utf8").trim();
+        console.log(JSON.stringify({
+          chunks: r.chunks.length, files: r.files,
+          hasLinkEntry: raw.includes("index-link.md"),
+          hasRealFile: raw.includes("brands-new/nested/deep/file.txt"),
+          hasSecret: raw.includes(secret),
+          mode: (st.mode & 0o777).toString(8),
+        }));
+      }).catch((e) => console.log(JSON.stringify({ error: String((e && e.message) || e) })));
+    ' ${slug} 2>&1`).trim();
+  } catch (e) {
+    idxRow = JSON.stringify({ error: String((e && e.stdout) || (e && e.message) || e) });
+  }
+  let idxJson = {};
+  try { idxJson = JSON.parse(idxRow); } catch { idxJson = { parseError: idxRow.slice(0, 200) }; }
+  check(
+    'the index skips the planted link, still indexes the real file, and index.json is 0600',
+    idxJson.error === undefined && idxJson.chunks > 0 && idxJson.files > 0 &&
+      idxJson.hasLinkEntry === false && idxJson.hasRealFile === true &&
+      idxJson.hasSecret === false && idxJson.mode === '600',
+    `files=${idxJson.files} chunks=${idxJson.chunks} linkEntry=${idxJson.hasLinkEntry} realFile=${idxJson.hasRealFile} secretLeak=${idxJson.hasSecret} mode=${idxJson.mode}`
+  );
+  sh(`rm -f ${ws}/index-link.md`);
+
 } finally {
   sh('rm -f /app/data/live-canary.txt /app/data/live-rename-canary.txt /app/data/.jwt.secret.proofbak');
   if (created) {

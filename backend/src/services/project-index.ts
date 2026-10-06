@@ -10,6 +10,10 @@
 import fs from 'fs';
 import path from 'path';
 import { safeWorkspaceDir, IGNORED_DIRS } from './project-context';
+import { readContainedFile } from './workspace-paths-core';
+
+/** Same convention as project-context/agent-tools: resolve locally. */
+const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || path.join(__dirname, '..', '..', 'data');
 const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
@@ -106,8 +110,8 @@ function loadIndex(slug: string): IndexData | null {
   return null;
 }
 
-function walkTextFiles(dir: string): { file: string; abs: string; size: number; mtimeMs: number }[] {
-  const out: { file: string; abs: string; size: number; mtimeMs: number }[] = [];
+function walkTextFiles(dir: string): { file: string; size: number; mtimeMs: number }[] {
+  const out: { file: string; size: number; mtimeMs: number }[] = [];
   const stack: { rel: string; depth: number }[] = [{ rel: '', depth: 0 }];
   let totalBytes = 0;
   while (stack.length > 0 && out.length < MAX_SCAN_FILES && totalBytes < MAX_TOTAL_BYTES) {
@@ -121,22 +125,27 @@ function walkTextFiles(dir: string): { file: string; abs: string; size: number; 
     for (const e of entries) {
       if (out.length >= MAX_SCAN_FILES || totalBytes >= MAX_TOTAL_BYTES) break;
       const child = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
+      // lstat, never `stat` and never the dirent type alone: the walk must not
+      // DESCEND through a link (a link to a directory would otherwise be walked
+      // and its target's files indexed) and must not measure the target's size.
+      // A link is skipped outright: never descended, never indexed.
+      const abs = path.join(dir, child);
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(abs);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
         if (IGNORED_DIRS.has(e.name)) continue;
         if (depth < MAX_SCAN_DEPTH) stack.push({ rel: child, depth: depth + 1 });
-      } else if (e.isFile()) {
-        const abs = path.join(dir, child);
-        let stat: fs.Stats;
-        try {
-          stat = fs.statSync(abs);
-        } catch {
-          continue;
-        }
-        if (stat.size > MAX_FILE_BYTES) continue;
+      } else if (st.isFile()) {
+        if (st.size > MAX_FILE_BYTES) continue;
         const ext = path.extname(e.name).toLowerCase();
         if (BINARY_EXTS.has(ext)) continue;
-        out.push({ file: child, abs, size: stat.size, mtimeMs: stat.mtimeMs });
-        totalBytes += stat.size;
+        out.push({ file: child, size: st.size, mtimeMs: st.mtimeMs });
+        totalBytes += st.size;
       }
     }
   }
@@ -162,10 +171,20 @@ function chunkText(text: string): IndexChunk[] {
   return chunks;
 }
 
-function chunkFile(abs: string): IndexChunk[] {
+function chunkFile(slug: string, rel: string): IndexChunk[] {
+  // The INDEXED bytes must come from the same containment primitive as every
+  // other workspace read: `fs.readFileSync(abs)` opens by NAME, so a file
+  // swapped for a link between the walk above and this read was chunked and
+  // persisted into index.json, where verbatim workspace text becomes
+  // retrievable into chat prompts. Refusals (link / directory / missing /
+  // traversal) simply produce no chunks, exactly like the old empty catch.
   try {
-    const content = fs.readFileSync(abs, 'utf8');
-    return chunkText(content);
+    const read = readContainedFile(WORKSPACES_ROOT, slug, rel, {
+      maxBytes: MAX_FILE_BYTES,
+      invalidMessage: 'Invalid path',
+      missingMessage: 'Path not found',
+    });
+    return chunkText(read.data.toString('utf8'));
   } catch {
     return [];
   }
@@ -215,7 +234,7 @@ function ensureIndex(slug: string): StatsCache | null {
 
   for (const f of files) {
     if (keep.has(f.file)) continue;
-    const chunks = chunkFile(f.abs);
+    const chunks = chunkFile(slug, f.file);
     if (chunks.length === 0) continue;
     keep.set(f.file, { file: f.file, mtimeMs: f.mtimeMs, size: f.size, chunks });
     rebuilt = true;
@@ -229,7 +248,17 @@ function ensureIndex(slug: string): StatsCache | null {
 
   fs.mkdirSync(path.dirname(indexFile(slug)), { recursive: true });
   try {
-    fs.writeFileSync(indexFile(slug), JSON.stringify(data), 'utf8');
+    // 0600, like every other file in the data dir: index.json holds verbatim
+    // chunks of workspace files and sits beside the signing secret, so it must
+    // not be the one world-readable object in there. The mode only applies to a
+    // fresh create, so an already-written index is re-stamped explicitly.
+    const f = indexFile(slug);
+    fs.writeFileSync(f, JSON.stringify(data), { encoding: 'utf8', mode: 0o600 });
+    try {
+      fs.chmodSync(f, 0o600);
+    } catch {
+      /* best-effort: a chmod failure must not drop the index */
+    }
   } catch {
     /* persist is best-effort */
   }

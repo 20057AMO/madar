@@ -36,6 +36,7 @@ const {
   linkFreeControls,
   renameContainedPath,
   readContainedFile,
+  openContainedForRead,
 } = await import('../src/services/workspace-paths-core.ts');
 
 let root = '';
@@ -789,5 +790,131 @@ describe('workspace-paths-core · link-free reads', () => {
       (e: any) => e?.statusCode === 400
     );
     assert.strictEqual(fs.readFileSync(path.join(outside, 'deep-target.txt'), 'utf8'), 'DEEP');
+  });
+});
+
+describe('workspace-paths-core · openContainedForRead (descriptor handle)', () => {
+  test('returns a verified fd with the TRUE size and the contained path', () => {
+    const text = 'from the descriptor';
+    writeContainedFile(root, SLUG, 'read/handle.txt', text);
+    const h = openContainedForRead(root, SLUG, 'read/handle.txt');
+    try {
+      const want = Buffer.byteLength(text);
+      assert.strictEqual(h.size, want, 'size comes from the verified fstat');
+      assert.strictEqual(fs.fstatSync(h.fd).size, want, 'the fd IS the inspected object');
+      assert.ok(h.path.startsWith(path.join(root, SLUG)), 'path stays inside the workspace');
+      const buf = Buffer.alloc(want);
+      assert.strictEqual(fs.readSync(h.fd, buf, 0, want, 0), want);
+      assert.strictEqual(buf.toString('utf8'), text);
+    } finally {
+      fs.closeSync(h.fd);
+    }
+  });
+
+  test('the bytes come from the DESCRIPTOR: a path swapped for a link after the open cannot redirect the stream', async (t) => {
+    // This is the whole argument behind /file/raw taking an fd instead of a
+    // name: the proof happened ONCE at open time, so swapping the name for a
+    // link afterwards must change nothing about what is streamed.
+    writeContainedFile(root, SLUG, 'read/swap.txt', 'ORIGINAL');
+    fs.writeFileSync(path.join(outside, 'swap-secret.txt'), 'HOST-SECRET', 'utf8');
+    const name = path.join(root, SLUG, 'read/swap.txt');
+    const h = openContainedForRead(root, SLUG, 'read/swap.txt');
+    let swapped = false;
+    try {
+      fs.unlinkSync(name);
+      // A 'file' link (junctions are directory-shaped on Windows); refused
+      // outright without the privilege to create one, which only skips the
+      // non-vacuity witness below.
+      fs.symlinkSync(path.join(outside, 'swap-secret.txt'), name, 'file');
+      swapped = fs.existsSync(name);
+    } catch {
+      swapped = false;
+    }
+    if (!swapped) t.diagnostic('platform refused the name swap — the fd read below still proves the source');
+    try {
+      // Exactly what streamWorkspaceFile does: hand the verified fd to a
+      // ReadStream. Node ignores the path argument entirely when fd is given.
+      const streamed = await new Promise<string>((resolve, reject) => {
+        const s = fs.createReadStream(name, { fd: h.fd, autoClose: false });
+        let out = '';
+        s.on('data', (c) => (out += String(c)));
+        s.on('end', () => resolve(out));
+        s.on('error', reject);
+      });
+      assert.strictEqual(streamed, 'ORIGINAL', 'the descriptor still yields the ORIGINAL inode bytes');
+      if (swapped) {
+        // Non-vacuity: the naive by-name read DOES follow the swap on every
+        // platform that can resolve a file link at all. A platform that
+        // refuses to resolve it says so instead of passing quietly.
+        let naive: string | null = null;
+        try {
+          naive = fs.readFileSync(name, 'utf8');
+        } catch {
+          naive = null;
+        }
+        if (naive === 'HOST-SECRET') {
+          assert.strictEqual(
+            fs.readFileSync(path.join(outside, 'swap-secret.txt'), 'utf8'),
+            'HOST-SECRET',
+            'witness: the name now points at the secret, the fd does not'
+          );
+        } else {
+          t.diagnostic('platform cannot resolve the planted file link — fd contract still asserted');
+        }
+      }
+    } finally {
+      try {
+        fs.closeSync(h.fd);
+      } catch {
+        /* autoClose may already have closed it */
+      }
+      fs.rmSync(name, { force: true });
+    }
+  });
+
+  test('a link, a directory, a missing file and traversal are refused before any fd escapes', () => {
+    fs.writeFileSync(path.join(outside, 'read-secret.txt'), 'TARGET-BYTES', 'utf8');
+    const linkName = 'read-handle-link.txt';
+    const linkPath = path.join(root, SLUG, linkName);
+    const planted = fs.existsSync(linkPath) ? 'ok' : plantLink(linkName, path.join(outside, 'read-secret.txt'));
+    if (planted === 'ok') {
+      assert.throws(
+        () => openContainedForRead(root, SLUG, linkName),
+        (e: any) => e?.statusCode === 400
+      );
+      // The refusal leaks nothing: the link was never followed and the target
+      // is untouched.
+      assert.strictEqual(fs.readFileSync(path.join(outside, 'read-secret.txt'), 'utf8'), 'TARGET-BYTES');
+    }
+    assert.throws(
+      () => openContainedForRead(root, SLUG, 'real-dir', { invalidMessage: 'Not a file' }),
+      (e: any) => e?.statusCode === 400 && e?.message === 'Not a file'
+    );
+    assert.throws(
+      () => openContainedForRead(root, SLUG, 'read/nope.txt', { missingMessage: 'Gone' }),
+      (e: any) => e?.statusCode === 404 && e?.message === 'Gone'
+    );
+    assert.throws(
+      () => openContainedForRead(root, SLUG, '../outside/secret.txt'),
+      (e: any) => e?.statusCode === 400
+    );
+  });
+
+  test('readContainedFile is the wrapper: same refusals, bounded copy, no fd left behind', () => {
+    writeContainedFile(root, SLUG, 'read/wrap.txt', 'a'.repeat(400));
+    const r = readContainedFile(root, SLUG, 'read/wrap.txt', { maxBytes: 100 });
+    assert.strictEqual(r.data.length, 100);
+    assert.strictEqual(r.size, 400);
+    assert.strictEqual(r.truncated, true);
+    // No fd is left behind: the descriptor count must be identical before and
+    // after a success and after a refusal (POSIX only — Windows has no
+    // /proc/self/fd to count against).
+    if (process.platform !== 'win32' && fs.existsSync('/proc/self/fd')) {
+      const count = () => fs.readdirSync('/proc/self/fd').length;
+      const before = count();
+      readContainedFile(root, SLUG, 'read/wrap.txt');
+      assert.throws(() => readContainedFile(root, SLUG, 'real-dir'), (e: any) => e?.statusCode === 400);
+      assert.strictEqual(count(), before, 'the read path leaks no descriptors');
+    }
   });
 });

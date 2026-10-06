@@ -2965,8 +2965,15 @@ app.get('/api/projects/:slug/file/raw', requireProjectAccess('viewer'), (req, re
     if (req.query.download === '1') {
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(rel))}"`);
     }
+    // The stream is ALREADY OPEN — it is a link-free verified descriptor, not
+    // a name waiting to be opened — so there is no 'open' event to wait for
+    // (verified on Node 22 and 24: a stream created with `fd` never emits it)
+    // and piping must start right now, or the response hangs forever.
+    // `res.on('close')` covers a client abort mid-download: destroying the
+    // stream closes the descriptor (autoClose), so no fd leaks either way.
     stream.on('error', () => res.destroy());
-    stream.on('open', () => stream.pipe(res));
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }

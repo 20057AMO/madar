@@ -766,10 +766,24 @@ function readRefusal(err: unknown, invalidMessage: string, missingMessage: strin
   }
 }
 
+export interface LinkFreeReadHandle {
+  /** The verified descriptor — read FROM THIS, never from the path again. */
+  fd: number;
+  /** Absolute, contained target path (lexical). */
+  path: string;
+  /** TRUE size of the opened object, taken from the verified `fstat`. */
+  size: number;
+}
+
 /**
- * Read `rel` out of a workspace through the link-free open.
+ * Open `rel` for reading and return a LINK-FREE descriptor, WITHOUT pulling any
+ * bytes into memory. This is the shared open behind `readContainedFile` and
+ * behind the `/file/raw` download stream: a caller that must STREAM a file
+ * cannot use the bounded `readContainedFile`, but it must not go back to
+ * `createReadStream(path)` either — that re-resolves the name and follows a
+ * link planted after the containment proof. The steps mirror
+ * `openContainedForWrite`, minus the mutation:
  *
- * The steps mirror `openContainedForWrite`, minus the mutation:
  *   1. `resolveContainedPath(..., {mustExist:true})` — slug, root, traversal,
  *      every component's link-ness, plus the caller's 404. Cheap; NOT the
  *      control, and it is what keeps the "missing workspace" contract intact.
@@ -777,7 +791,7 @@ function readRefusal(err: unknown, invalidMessage: string, missingMessage: strin
  *      is opened (a FIFO would block; a directory is not a file), and this is
  *      the identity step 4 compares against.
  *   3. `open` with `O_NOFOLLOW` — the kernel refuses a symlink leaf at open
- *      time, so a link planted after step 1 is ELOOP, never a read of its
+ *      time, so a link planted after step 1 is ELOOP, never an open of its
  *      target.
  *   4. `fstat` vs that pre-open `lstat` (dev/ino) — the opened object must BE
  *      the object that was inspected.
@@ -785,25 +799,22 @@ function readRefusal(err: unknown, invalidMessage: string, missingMessage: strin
  *      it really lives, the only step that also covers a swapped INTERMEDIATE
  *      directory.
  *
- * The bytes are copied out of the DESCRIPTOR at a fixed position, so the path
- * is never re-resolved after the proof, and a file that grows after step 2 can
- * only be reported as truncated. On Windows steps 3 and 5 degrade (no
- * O_NOFOLLOW, no /proc) while steps 2 and 4 still refuse a leaf link and a
- * swapped leaf — see `linkFreeControls()` for the honest matrix.
+ * The caller reads FROM the descriptor at a fixed position (or hands it to
+ * `fs.createReadStream(_, {fd})`, which reads from the same descriptor and
+ * never re-resolves the path), so the proof is never re-evaluated against a
+ * fresh name. On Windows steps 3 and 5 degrade (no O_NOFOLLOW, no /proc) while
+ * steps 2 and 4 still refuse a leaf link and a swapped leaf — see
+ * `linkFreeControls()` for the honest matrix. A failure at any step closes the
+ * descriptor before it escapes, so a refusal never leaks an fd.
  */
-export function readContainedFile(
+export function openContainedForRead(
   root: string,
   slug: unknown,
   rel: string,
   opts: LinkFreeReadOptions = {}
-): LinkFreeReadResult {
+): LinkFreeReadHandle {
   const invalidMessage = opts.invalidMessage || 'Invalid path';
   const missingMessage = opts.missingMessage || 'Path not found';
-  const requested =
-    typeof opts.maxBytes === 'number' && Number.isFinite(opts.maxBytes)
-      ? Math.floor(opts.maxBytes)
-      : DEFAULT_READ_MAX_BYTES;
-  const maxBytes = Math.min(Math.max(requested, 1), HARD_READ_MAX_BYTES);
 
   // (1) The cheap proof + the lexical target. A missing workspace still answers
   // with the 404 callers already rely on.
@@ -848,24 +859,61 @@ export function readContainedFile(
       throw new HttpError(400, invalidMessage);
     }
 
-    const size = opened.size;
+    return { fd, path: target, size: opened.size };
+  } catch (err) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
+    throw err;
+  }
+}
+
+/**
+ * Read `rel` out of a workspace through the link-free open.
+ *
+ * `openContainedForRead` performs steps 1–5 (the proof and the bound are one
+ * control set, not two implementations); this wrapper only copies at most
+ * `maxBytes` out of the verified descriptor at a fixed position and closes it,
+ * so the path is never re-resolved after the proof and a file that grows after
+ * step 2 can only be reported as truncated. Refusals answer the caller's
+ * `invalidMessage`/`missingMessage` as 400/403/404, never a raw errno, and the
+ * response reports the file's TRUE `size` plus `truncated`, so bounding never
+ * lies.
+ */
+export function readContainedFile(
+  root: string,
+  slug: unknown,
+  rel: string,
+  opts: LinkFreeReadOptions = {}
+): LinkFreeReadResult {
+  const requested =
+    typeof opts.maxBytes === 'number' && Number.isFinite(opts.maxBytes)
+      ? Math.floor(opts.maxBytes)
+      : DEFAULT_READ_MAX_BYTES;
+  const maxBytes = Math.min(Math.max(requested, 1), HARD_READ_MAX_BYTES);
+
+  const handle = openContainedForRead(root, slug, rel, opts);
+  try {
+    const size = handle.size;
     const want = Math.min(size, maxBytes);
     const data = Buffer.allocUnsafe(want);
     let off = 0;
     while (off < want) {
-      const n = fs.readSync(fd, data, off, want - off, off);
+      const n = fs.readSync(handle.fd, data, off, want - off, off);
       if (n <= 0) break;
       off += n;
     }
     return {
-      path: target,
+      path: handle.path,
       data: off === want ? data : data.subarray(0, off),
       size,
       truncated: size > off,
     };
   } finally {
     try {
-      fs.closeSync(fd);
+      fs.closeSync(handle.fd);
     } catch {
       /* already closed */
     }

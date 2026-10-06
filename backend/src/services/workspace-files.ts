@@ -10,7 +10,7 @@ import path from 'path';
 import { WORKSPACES_ROOT } from './docker-manager';
 import { IGNORED_DIRS, invalidateProjectContext } from './project-context';
 import { HttpError } from './project-slug-core';
-import { writeContainedFile, renameContainedPath, resolveContainedPath, resolveWorkspaceBase, readContainedFile } from './workspace-paths-core';
+import { writeContainedFile, renameContainedPath, resolveContainedPath, resolveWorkspaceBase, readContainedFile, openContainedForRead } from './workspace-paths-core';
 
 const MAX_PREVIEW_CHARS = 200 * 1024;
 
@@ -267,26 +267,43 @@ const MIME_BY_EXT: Record<string, string> = {
   '.tgz': 'application/gzip',
 };
 
-/** Stream a workspace file's raw bytes (images, binaries, downloads). */
+/**
+ * Stream a workspace file's raw bytes (images, binaries, downloads).
+ *
+ * The audit's F2: this used to `statSync(target)` + `createReadStream(target)`
+ * — both BY NAME, so a link planted after `resolveWorkspacePath`'s proof was
+ * followed and a host file was streamed to any authenticated viewer. The open
+ * is now descriptor-verified (`openContainedForRead`: lstat refusal →
+ * `O_NOFOLLOW` → `fstat` dev/ino identity → `/proc/self/fd` re-proof), and the
+ * bytes stream FROM THAT DESCRIPTOR — `createReadStream` is handed the `fd`, so
+ * the path is never re-resolved after the proof. It stays a stream (nothing is
+ * slurped into memory), `size` comes from the verified `fstat` so
+ * `Content-Length` stays honest, and a refused link answers the primitive's
+ * clean 400/403 instead of a raw errno. A missing file keeps its 404.
+ */
 export function streamWorkspaceFile(
   slug: string,
   rel: string
 ): { stream: fs.ReadStream; size: number; mime: string } {
-  const target = resolveWorkspacePath(slug, rel);
-  let stat: fs.Stats;
+  const handle = openContainedForRead(WORKSPACES_ROOT, slug, rel, {
+    invalidMessage: 'Invalid path',
+    missingMessage: 'File not found',
+  });
+  let stream: fs.ReadStream;
   try {
-    stat = fs.statSync(target);
-  } catch {
-    throw new HttpError(404, 'File not found');
+    // `fd` given → Node ignores the path argument entirely and reads from this
+    // descriptor; autoClose (the default) closes it on end/error/destroy.
+    stream = fs.createReadStream(handle.path, { fd: handle.fd });
+  } catch (err) {
+    try {
+      fs.closeSync(handle.fd);
+    } catch {
+      /* already closed */
+    }
+    throw err;
   }
-  if (stat.isDirectory()) throw new HttpError(400, 'Is a directory');
-
-  const ext = path.extname(target).toLowerCase();
-  return {
-    stream: fs.createReadStream(target),
-    size: stat.size,
-    mime: MIME_BY_EXT[ext] || 'application/octet-stream',
-  };
+  const ext = path.extname(handle.path).toLowerCase();
+  return { stream, size: handle.size, mime: MIME_BY_EXT[ext] || 'application/octet-stream' };
 }
 
 export function deleteWorkspacePath(slug: string, rel: string): { ok: boolean; type: 'file' | 'dir' | 'link' } {

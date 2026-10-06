@@ -5,7 +5,7 @@ import { execSync, type ExecSyncOptions } from 'child_process';
 /** Same convention as project-context/canvas/reviews: resolve locally. */
 const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 
-import { tryResolveContainedPath, writeContainedFile } from './workspace-paths-core';
+import { tryResolveContainedPath, writeContainedFile, readContainedFile } from './workspace-paths-core';
 
 const MAX_OUTPUT = 50000;
 const EXEC_TIMEOUT = 30000;
@@ -78,40 +78,33 @@ function safeWorkspaceDir(slug: string): string | null {
 }
 
 export function readFile(slug: string, rel: string): string {
-  const target = safePath(slug, rel);
-  if (!target || !fs.existsSync(target)) return `[File not found: ${rel}]`;
-  // Bound the READ, not just the response: a huge file must never be slurped
-  // into memory only to be sliced. Read at most the output budget.
-  let size = 0;
+  // The link-free open, not `existsSync` + `statSync` + `openSync(target)`.
+  // Those three are all BY NAME and all follow a symlink: the containment
+  // proof taken by `safePath` above is a claim about the past, and a file
+  // swapped for a link after it (an editor has root inside the project
+  // container with the workspace bind-mounted) was opened and read anyway —
+  // "bounded" only caps how MUCH of a host file leaked, not whether it did.
+  // `readContainedFile` refuses a link at `lstat`, again in the kernel at
+  // `open(O_NOFOLLOW)`, and proves the descriptor it reads from is the object
+  // it inspected, all inside the workspace root.
+  //
+  // The tool contract does not change: every refusal — missing, directory,
+  // link, traversal, unreadable — stays a STRING marker, never a throw, and
+  // the marker is the same one the old resolve-failure path produced.
+  let read: ReturnType<typeof readContainedFile>;
   try {
-    const st = fs.statSync(target);
-    if (st.isDirectory()) return `[File not found: ${rel}]`;
-    size = st.size;
+    read = readContainedFile(WORKSPACES_ROOT, slug, rel, {
+      maxBytes: MAX_FILE_READ,
+      invalidMessage: 'Invalid path',
+      missingMessage: 'Path not found',
+    });
   } catch {
     return `[File not found: ${rel}]`;
   }
-  const readSize = Math.min(size, MAX_FILE_READ);
-  let buf: Buffer;
-  if (readSize <= 0) {
-    buf = Buffer.alloc(0);
-  } else {
-    const fd = fs.openSync(target, 'r');
-    try {
-      buf = Buffer.alloc(readSize);
-      let off = 0;
-      while (off < readSize) {
-        const n = fs.readSync(fd, buf, off, readSize - off, off);
-        if (n <= 0) break;
-        off += n;
-      }
-      if (off < readSize) buf = buf.subarray(0, off);
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
+  const buf = read.data;
   if (buf.length > 0 && buf.subarray(0, Math.min(8192, buf.length)).includes(0)) return `[Binary file: ${rel}]`;
   let text = buf.toString('utf8');
-  if (size > buf.length) text = text.slice(0, MAX_FILE_READ) + '\n…(truncated)';
+  if (read.size > buf.length) text = text + '\n…(truncated)';
   return text;
 }
 
