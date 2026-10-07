@@ -3412,9 +3412,10 @@ iframe[data-kbd-focus] {
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
   cursor: crosshair;
-  touch-action: manipulation;
+  touch-action: none;
   backdrop-filter: blur(8px);
 }
+.cn-minimap:active { cursor: grabbing; }
 .cn-minimap:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;

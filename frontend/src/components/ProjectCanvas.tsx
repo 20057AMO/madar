@@ -322,6 +322,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [searchIndex, setSearchIndex] = useState(0);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const minimapPointerRef = useRef<number | null>(null);
   const [confirmDelSection, setConfirmDelSection] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   /** Cascade counter so rapid adds never stack new nodes on the viewport center. */
@@ -2726,9 +2727,30 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             type="button"
             aria-label={t('canvas.minimapNavigate')}
             title={t('canvas.minimapNavigate')}
-            onPointerDown={(event) => event.stopPropagation()}
             onKeyDown={(event) => event.stopPropagation()}
             onClick={navigateMinimap}
+            onPointerDown={(event: any) => {
+              event.stopPropagation();
+              if (event.button !== 0) return;
+              minimapPointerRef.current = event.pointerId;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              navigateMinimap(event);
+            }}
+            onPointerMove={(event: any) => {
+              if (minimapPointerRef.current !== event.pointerId) return;
+              event.stopPropagation();
+              navigateMinimap(event);
+            }}
+            onPointerUp={(event: any) => {
+              if (minimapPointerRef.current !== event.pointerId) return;
+              event.stopPropagation();
+              minimapPointerRef.current = null;
+            }}
+            onPointerCancel={(event: any) => {
+              if (minimapPointerRef.current !== event.pointerId) return;
+              event.stopPropagation();
+              minimapPointerRef.current = null;
+            }}
           >
             <svg viewBox={`0 0 ${MINIMAP_WIDTH} ${MINIMAP_HEIGHT}`} aria-hidden="true">
               {doc?.edges.map((edge) => {

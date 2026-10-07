@@ -235,7 +235,12 @@ test('canvas connect mode links the clicked target and persists the edge', async
     await expect(denseMinimap.locator('.cn-minimap-node')).toHaveCount(200);
     await expect(denseMinimap.locator('.cn-minimap-edge')).toHaveCount(400);
     const cameraBeforeMinimapNavigation = await page.locator('.cn-world').getAttribute('style');
-    await denseMinimap.click({ position: { x: 25, y: 30 } });
+    const denseMinimapBox = await denseMinimap.boundingBox();
+    expect(denseMinimapBox).not.toBeNull();
+    await page.mouse.move(denseMinimapBox!.x + 25, denseMinimapBox!.y + 30);
+    await page.mouse.down();
+    await page.mouse.move(denseMinimapBox!.x + 150, denseMinimapBox!.y + 80, { steps: 4 });
+    await page.mouse.up();
     await expect.poll(() => page.locator('.cn-world').getAttribute('style'))
       .not.toBe(cameraBeforeMinimapNavigation);
     await page.getByRole('button', { name: 'Toggle board minimap' }).click();
