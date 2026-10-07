@@ -58,7 +58,8 @@ test('canvas section creation works with a mouse click and persists', async ({ p
   }
 });
 
-test('canvas connect mode links the clicked target and persists the edge', async ({ page }) => {
+test('canvas connect mode links the clicked target and persists the edge', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
   const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
   const secret = readEnvValue('JWT_SECRET') ||
     execFileSync('docker', ['exec', container, 'cat', '/app/data/jwt.secret'], { encoding: 'utf8' }).trim();
@@ -70,7 +71,7 @@ test('canvas connect mode links the clicked target and persists the edge', async
     secret,
     { expiresIn: '10m' }
   );
-  const slug = `canvas-connect-${Date.now().toString(36)}`;
+  const slug = `canvas-connect-${Date.now().toString(36)}-${testInfo.retry}`;
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const created = await fetch(`${BASE}/api/projects`, {
     method: 'POST',
@@ -174,6 +175,56 @@ test('canvas connect mode links the clicked target and persists the edge', async
     await expect.poll(() => dragSource.evaluate((el) => (el as HTMLElement).style.left))
       .not.toBe(originalGeometry.left);
     await expect(dragSource).toHaveCSS('transform', 'none');
+
+    const readCanvas = async () => {
+      const response = await fetch(`${BASE}/api/projects/${slug}/canvas`, { headers });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    await expect.poll(async () => (await readCanvas()).nodes.find((node: { id: string }) => node.id === 'source')?.x)
+      .not.toBe(40);
+    const movedSource = (await readCanvas()).nodes.find((node: { id: string }) => node.id === 'source');
+    expect(movedSource.y).not.toBe(80);
+
+    await page.getByRole('button', { name: /Undo/ }).click();
+    await expect.poll(async () => {
+      const node = (await readCanvas()).nodes.find((item: { id: string }) => item.id === 'source');
+      return { x: node?.x, y: node?.y };
+    }).toEqual({ x: 40, y: 80 });
+    await page.getByRole('button', { name: /Redo/ }).click();
+    await expect.poll(async () => {
+      const node = (await readCanvas()).nodes.find((item: { id: string }) => item.id === 'source');
+      return { x: node?.x, y: node?.y };
+    }).toEqual({ x: movedSource.x, y: movedSource.y });
+
+    await dragSource.dblclick();
+    const editor = page.locator('.cn-editor[data-id="source"]');
+    await expect(editor).toBeFocused();
+    await expect(page.locator('.cn-node')).toHaveCount(200);
+    await editor.fill('Edited from the user journey');
+    await editor.press('Enter');
+    await expect.poll(async () =>
+      (await readCanvas()).nodes.find((node: { id: string }) => node.id === 'source')?.text
+    ).toBe('Edited from the user journey');
+
+    await page.reload();
+    await expect(page.locator('.cn-node[data-id="source"] .cn-text'))
+      .toHaveText('Edited from the user journey');
+    const resizedSource = page.locator('.cn-node[data-id="source"]');
+    await resizedSource.click();
+    const resizeHandle = resizedSource.locator('.cn-resize-handle');
+    const resizeBox = await resizeHandle.boundingBox();
+    expect(resizeBox).not.toBeNull();
+    const originalWidth = await resizedSource.evaluate((el) => (el as HTMLElement).style.width);
+    await page.mouse.move(resizeBox!.x + resizeBox!.width / 2, resizeBox!.y + resizeBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(resizeBox!.x + resizeBox!.width / 2 + 24, resizeBox!.y + resizeBox!.height / 2 + 20, { steps: 4 });
+    await page.mouse.up();
+    await expect.poll(() => resizedSource.evaluate((el) => (el as HTMLElement).style.width))
+      .not.toBe(originalWidth);
+    await expect.poll(async () =>
+      (await readCanvas()).nodes.find((node: { id: string }) => node.id === 'source')?.w
+    ).not.toBe(220);
 
     const canvasWrap = page.locator('.canvas-wrap');
     await page.getByRole('button', { name: 'Fullscreen' }).click();

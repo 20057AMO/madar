@@ -1928,8 +1928,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   // Double-click on empty canvas creates a note right under the cursor.
   const onRootDblClick = (e: any) => {
     if (readOnly) return;
-    const target = e.target as Element;
-    if (target.closest?.('.cn-node') || target.closest?.('.cn-edge')) return;
+    const eventTarget = e.target as Element;
+    const target = document.elementFromPoint(e.clientX, e.clientY) ?? eventTarget;
+    const node = target.closest?.('.cn-node') as HTMLElement | null;
+    if (node) {
+      const id = node.dataset.id;
+      if (id) startEdit(id);
+      return;
+    }
+    if (target.closest?.('.cn-edge') || eventTarget.closest?.('.cn-edge')) return;
     addNode('note', worldFromClient(e.clientX, e.clientY));
   };
 
@@ -2417,7 +2424,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 class={`cn-node ${n.type} c-${n.color} ${isSel ? 'cn-selected' : ''} ${connectFrom === n.id ? 'cn-connect-src' : ''} ${connectFrom && connectFrom !== n.id ? 'cn-connectable' : ''}`}
                 data-id={n.id}
                 style={`left: ${n.x}px; top: ${n.y}px; width: ${n.w}px; height: ${n.h}px;`}
-                onDblClick={() => { if (!readOnly) startEdit(n.id); }}
               >
                 {n.type === 'card' && !isEditing && (
                   <button
