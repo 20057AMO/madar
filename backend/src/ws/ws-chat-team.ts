@@ -36,12 +36,11 @@ import {
   getChannel,
   getMessages,
   getAllMessages,
-  setReadPosition,
   markMessageAsDelivered,
   markMessagesAsRead,
 } from '../services/chat-team-store';
 import { canAccessChannel, type ChatUser } from '../services/chat-team-access';
-import { BOT_USER_ID, BOT_USERNAME, type CanSendMode, type TeamChannel } from '../services/chat-team-core';
+import { BOT_USER_ID, BOT_USERNAME, isChannelId, type CanSendMode, type TeamChannel } from '../services/chat-team-core';
 
 const PRESENCE_TYPING_MS = 3000;
 
@@ -73,7 +72,22 @@ function send(ws: WebSocket, obj: unknown): void {
 function broadcastToChannel(channelId: string, payload: unknown): void {
   const set = channelSubscribers.get(channelId);
   if (!set) return;
-  for (const ws of set) send(ws, payload);
+  const channel = getChannel(channelId);
+  for (const ws of set) {
+    const client = clients.get(ws);
+    if (!client) {
+      set.delete(ws);
+      continue;
+    }
+    const user = refreshClientUser(client);
+    if (!channel || !user || canAccessChannel(user, channel) === 'none') {
+      removeChannelSubscription(client, channelId);
+      send(ws, { type: 'access_revoked', channelId });
+      continue;
+    }
+    send(ws, payload);
+  }
+  if (set.size === 0) channelSubscribers.delete(channelId);
 }
 
 /** Push a new chat message to every socket subscribed to the channel. */
@@ -113,7 +127,8 @@ export function broadcastChatBump(user: ChatUser, channel: TeamChannel, message:
   };
   for (const client of clients.values()) {
     if (client.user.id === user.id) continue;
-    if (canAccessChannel(client.user, channel) !== 'none') send(client.ws, payload);
+    const currentUser = refreshClientUser(client);
+    if (currentUser && canAccessChannel(currentUser, channel) !== 'none') send(client.ws, payload);
   }
 }
 
@@ -174,6 +189,35 @@ function removeClient(ws: WebSocket, client: Client): void {
   broadcastPresence();
 }
 
+function removeChannelSubscription(client: Client, channelId: string): void {
+  client.channels.delete(channelId);
+  client.typingAt.delete(channelId);
+  const subscribers = channelSubscribers.get(channelId);
+  subscribers?.delete(client.ws);
+  if (!subscribers?.size) channelSubscribers.delete(channelId);
+}
+
+function refreshClientUser(client: Client): ChatUser | null {
+  const current = getUserInfo(client.user.id);
+  if (!current) {
+    if (client.ws.readyState === WebSocket.OPEN) client.ws.close(1008, 'account unavailable');
+    return null;
+  }
+  client.user = { id: current.id, username: current.username, role: current.role };
+  return client.user;
+}
+
+function liveSubscribedChannel(client: Client, channelId: string): boolean {
+  const user = refreshClientUser(client);
+  const channel = getChannel(channelId);
+  if (!user || !channel || canAccessChannel(user, channel) === 'none') {
+    removeChannelSubscription(client, channelId);
+    send(client.ws, { type: 'access_revoked', channelId });
+    return false;
+  }
+  return true;
+}
+
 function addPresence(user: ChatUser): PresUser {
   const profile = getUserInfo(user.id);
   const entry: PresUser = {
@@ -220,13 +264,19 @@ export function handleChatTeamSocket(
         send(ws, { type: 'error', message: 'Invalid JSON payload' });
         return;
       }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+        send(ws, { type: 'error', message: 'Invalid JSON payload' });
+        return;
+      }
+      if (!refreshClientUser(client)) return;
 
 
     const channelId = typeof msg.channelId === 'string' ? msg.channelId : '';
 
-    switch (msg.type) {
+    try {
+      switch (msg.type) {
       case 'subscribe': {
-        if (!channelId || !/^[a-z0-9._:-]{1,72}$/.test(channelId)) {
+        if (!isChannelId(channelId)) {
           send(ws, { type: 'error', message: 'Invalid channel id' });
           return;
         }
@@ -255,14 +305,12 @@ export function handleChatTeamSocket(
         return;
       }
       case 'unsubscribe': {
-        client.channels.delete(channelId);
-        channelSubscribers.get(channelId)?.delete(ws);
-        if (!channelSubscribers.get(channelId)?.size) channelSubscribers.delete(channelId);
+        removeChannelSubscription(client, channelId);
         send(ws, { type: 'unsubscribed', channelId });
         return;
       }
       case 'message_delivered': {
-        if (!client.channels.has(channelId)) return;
+        if (!client.channels.has(channelId) || !liveSubscribedChannel(client, channelId)) return;
         if (typeof msg.msgId !== 'string' || !/^m-[a-z0-9-]+$/.test(msg.msgId)) {
           send(ws, { type: 'error', message: 'Invalid message id' });
           return;
@@ -291,7 +339,7 @@ export function handleChatTeamSocket(
         return;
       }
       case 'typing_start': {
-        if (!client.channels.has(channelId)) return;
+        if (!client.channels.has(channelId) || !liveSubscribedChannel(client, channelId)) return;
         // Debounced 3s per socket+channel: while a user types continuously the
         // client re-sends typing_start on every keypress — broadcast at most
         // once per PRESENCE_TYPING_MS so the channel isn't flooded with frames.
@@ -306,7 +354,7 @@ export function handleChatTeamSocket(
         return;
       }
       case 'typing_stop': {
-        if (!client.channels.has(channelId)) return;
+        if (!client.channels.has(channelId) || !liveSubscribedChannel(client, channelId)) return;
         // Broadcast immediately on arrival; clear the throttle so a NEW typing
         // burst starts fresh (only repeats within an ongoing burst are capped).
         client.typingAt.delete(channelId);
@@ -318,7 +366,7 @@ export function handleChatTeamSocket(
         return;
       }
       case 'read': {
-        if (!client.channels.has(channelId)) return;
+        if (!client.channels.has(channelId) || !liveSubscribedChannel(client, channelId)) return;
         if (typeof msg.msgId !== 'string' || !/^m-[a-z0-9-]+$/.test(msg.msgId)) {
           send(ws, { type: 'error', message: 'Invalid message id' });
           return;
@@ -331,7 +379,6 @@ export function handleChatTeamSocket(
           send(ws, { type: 'error', message: 'Message not found' });
           return;
         }
-        void setReadPosition(channelId, client.user.id, msg.msgId);
         if (changed.length > 0) {
           broadcastToChannel(channelId, {
             type: 'status_update',
@@ -353,6 +400,10 @@ export function handleChatTeamSocket(
       }
       default:
         send(ws, { type: 'error', message: 'Unknown frame type' });
+      }
+    } catch (err) {
+      console.error('[Madar] Team-chat WebSocket frame failed:', err instanceof Error ? err.message : err);
+      send(ws, { type: 'error', message: 'Chat operation failed' });
     }
   });
 

@@ -303,3 +303,48 @@ test('chat_bump preview: 80-char cap with whitespace folding, attachment ids nev
 
   sock.close();
 });
+
+test('an open project-channel socket loses access immediately after membership removal', async (t) => {
+  const rig = await setupProjectChannel(t);
+  if (!rig) return;
+  const viewer = await makeUser('revokeV', 'viewer');
+  const add = await api('POST', `/projects/${rig.slug}/members`, { userId: viewer.id, role: 'viewer' });
+  assert.strictEqual(add.status, 200, JSON.stringify(add.json));
+
+  const socket = openChatSocket(viewer.token, rig.channelId);
+  await socket.subscribed;
+  const removed = await api('DELETE', `/projects/${rig.slug}/members/${viewer.id}`);
+  assert.strictEqual(removed.status, 200, JSON.stringify(removed.json));
+
+  const sent = await api('POST', `${chatBase}/messages`, { channelId: rig.channelId, text: 'after access removal' });
+  assert.strictEqual(sent.status, 201, JSON.stringify(sent.json));
+  await socket.waitFrame((f) => f.type === 'access_revoked' && f.channelId === rig.channelId);
+  await sleep(300);
+  assert.ok(
+    !socket.frames.some((f) => f.type === 'message' && f.message?.id === sent.json.message.id),
+    'a socket whose project access was revoked must not receive the message'
+  );
+  assert.ok(
+    !socket.frames.some((f) => f.type === 'chat_bump' && f.channelId === rig.channelId),
+    'a socket whose project access was revoked must not receive a chat bump'
+  );
+
+  socket.send({ type: 'read', channelId: rig.channelId, msgId: sent.json.message.id });
+  await sleep(200);
+  assert.ok(!socket.frames.some((f) => f.type === 'read' && f.userId === viewer.id));
+  socket.close();
+});
+
+test('malformed null frame is rejected without breaking the socket', async (t) => {
+  const rig = await setupProjectChannel(t);
+  if (!rig) return;
+  const socket = openChatSocket(signTestToken());
+  await socket.opened;
+  socket.send(null);
+  const invalid = await socket.waitFrame((f) => f.type === 'error' && f.message === 'Invalid JSON payload');
+  assert.strictEqual(invalid.type, 'error');
+  socket.send({ type: 'subscribe', channelId: rig.channelId });
+  const subscribed = await socket.waitFrame((f) => f.type === 'subscribed' && f.channelId === rig.channelId);
+  assert.strictEqual(subscribed.channelId, rig.channelId);
+  socket.close();
+});

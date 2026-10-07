@@ -16,10 +16,12 @@ import { randomBytes } from 'crypto';
 import { withFileLockAsync } from './write-queue';
 import {
   DEFAULT_MSG_CAP,
+  MAX_ATTACHMENT_BYTES,
   isChannelId,
   isMessageId,
   pruneToCap,
   toggleReaction,
+  wouldExceedAttachmentQuota,
   type CanSendMode,
   type ChatAttachment,
   type ChannelMember,
@@ -119,9 +121,14 @@ export function getChannel(channelId: string): TeamChannel | null {
   return listChannels().find((c) => c.id === channelId) || null;
 }
 
-async function saveChannelsLocked(channels: TeamChannel[]): Promise<void> {
-  await withFileLockAsync('chat-channels', async () => {
-    writeChannelsRaw({ channels });
+async function updateChannels<T>(
+  update: (channels: TeamChannel[]) => { changed: boolean; result: T }
+): Promise<T> {
+  return withFileLockAsync('chat-channels', async () => {
+    const channels = readChannelsRaw().channels;
+    const { changed, result } = update(channels);
+    if (changed) writeChannelsRaw({ channels });
+    return result;
   });
 }
 
@@ -129,17 +136,20 @@ async function saveChannelsLocked(channels: TeamChannel[]): Promise<void> {
 export async function createChannel(
   channel: TeamChannel
 ): Promise<{ created: boolean; channel: TeamChannel }> {
-  let created = false;
-  const result = await withFileLockAsync(`channel:${channel.id}`, async () => {
-    const existing = getChannel(channel.id);
-    if (existing) return { created: false, channel: existing };
-    const all = readChannelsRaw().channels;
-    all.push(channel);
-    writeChannelsRaw({ channels: all });
-    return { created: true, channel };
+  return updateChannels<{ created: boolean; channel: TeamChannel }>((channels) => {
+    const existing = channels.find((c) => c.id === channel.id);
+    if (existing) return { changed: false, result: { created: false, channel: existing } };
+    if (
+      channel.kind === 'channel' &&
+      channels.some((c) =>
+        c.kind === 'channel' && (c.name || '').toLowerCase() === (channel.name || '').toLowerCase()
+      )
+    ) {
+      return { changed: false, result: { created: false, channel } };
+    }
+    channels.push(channel);
+    return { changed: true, result: { created: true, channel } };
   });
-  created = result.created;
-  return result;
 }
 
 /** Direct 1:1 channel — participants only, deterministic id. */
@@ -161,8 +171,7 @@ export async function ensureDirectChannel(
     members,
     createdAt: new Date().toISOString(),
   };
-  await createChannel(channel);
-  return channel;
+  return (await createChannel(channel)).channel;
 }
 
 /** Project auto-channel (idempotent) — tied to the project lifecycle. */
@@ -176,6 +185,7 @@ export async function ensureProjectChannel(
   if (existing) {
     if (ownerId && !existing.members.some((m) => m.userId === ownerId)) {
       await addChannelMember(id, ownerId, 'admin');
+      return getChannel(id) || existing;
     }
     return existing;
   }
@@ -188,33 +198,30 @@ export async function ensureProjectChannel(
     createdBy: ownerId,
     createdAt: new Date().toISOString(),
   };
-  await createChannel(channel);
-  return channel;
+  return (await createChannel(channel)).channel;
 }
 
 /** Add a member to a channel (project channels list members for UX only). */
 export async function addChannelMember(channelId: string, userId: string, role: ChannelMember['role']): Promise<void> {
-  await withFileLockAsync(`channel:${channelId}`, async () => {
-    const all = readChannelsRaw().channels;
-    const ch = all.find((c) => c.id === channelId);
-    if (!ch) return;
+  await updateChannels((channels) => {
+    const ch = channels.find((c) => c.id === channelId);
+    if (!ch) return { changed: false, result: undefined };
     const before = ch.members.length;
     if (!ch.members.some((m) => m.userId === userId)) {
       ch.members.push({ userId, role });
     }
-    if (ch.members.length !== before) writeChannelsRaw({ channels: all });
+    return { changed: ch.members.length !== before, result: undefined };
   });
 }
 
 /** Remove a member from a channel (project channels list members for UX only). */
 export async function removeChannelMember(channelId: string, userId: string): Promise<void> {
-  await withFileLockAsync(`channel:${channelId}`, async () => {
-    const all = readChannelsRaw().channels;
-    const ch = all.find((c) => c.id === channelId);
-    if (!ch) return;
+  await updateChannels((channels) => {
+    const ch = channels.find((c) => c.id === channelId);
+    if (!ch) return { changed: false, result: undefined };
     const before = ch.members.length;
     ch.members = ch.members.filter((m) => m.userId !== userId);
-    if (ch.members.length !== before) writeChannelsRaw({ channels: all });
+    return { changed: ch.members.length !== before, result: undefined };
   });
 }
 
@@ -222,14 +229,17 @@ export async function removeChannelMember(channelId: string, userId: string): Pr
  * live from checkProjectAccess). Used on ownership transfer to keep the old
  * owner's listed role honest. */
 export async function setChannelMemberRole(channelId: string, userId: string, role: ChannelMember['role']): Promise<void> {
-  await withFileLockAsync(`channel:${channelId}`, async () => {
-    const all = readChannelsRaw().channels;
-    const ch = all.find((c) => c.id === channelId);
-    if (!ch) return;
+  await updateChannels((channels) => {
+    const ch = channels.find((c) => c.id === channelId);
+    if (!ch) return { changed: false, result: undefined };
     const member = ch.members.find((m) => m.userId === userId);
-    if (member) member.role = role;
-    else ch.members.push({ userId, role });
-    writeChannelsRaw({ channels: all });
+    if (member) {
+      if (member.role === role) return { changed: false, result: undefined };
+      member.role = role;
+    } else {
+      ch.members.push({ userId, role });
+    }
+    return { changed: true, result: undefined };
   });
 }
 
@@ -240,45 +250,74 @@ export async function setChannelMemberRole(channelId: string, userId: string, ro
  */
 export async function setChannelCanSend(channelId: string, canSend: CanSendMode): Promise<TeamChannel | null> {
   if (!isChannelId(channelId)) return null;
-  let updated: TeamChannel | null = null;
-  await withFileLockAsync(`channel:${channelId}`, async () => {
-    const all = readChannelsRaw().channels;
-    const ch = all.find((c) => c.id === channelId);
-    if (!ch) return;
+  return updateChannels((channels) => {
+    const ch = channels.find((c) => c.id === channelId);
+    if (!ch) return { changed: false, result: null };
     ch.canSend = canSend;
-    writeChannelsRaw({ channels: all });
-    updated = { ...ch };
+    return { changed: true, result: { ...ch } };
   });
-  return updated;
 }
 
 /** Remove a deleted project's auto-channel + its messages + uploads. */
 export async function deleteChannel(channelId: string): Promise<void> {
   const cid = isChannelId(channelId) ? channelId : '';
-  let attIds: string[] = [];
-  await withFileLockAsync(`channel:${cid || 'x'}`, async () => {
-    const all = readChannelsRaw().channels;
-    const filtered = all.filter((c) => c.id !== cid);
-    if (filtered.length !== all.length) writeChannelsRaw({ channels: filtered });
-    if (cid) {
-      attIds = readMessagesRaw(cid).flatMap((m) => m.attachments?.map((a) => a.id) ?? []);
+  if (!cid) return;
+  await withFileLockAsync(`msgs:${cid}`, async () => {
+    const messages = readMessagesRaw(cid);
+    const attIds = new Set(messages.flatMap((m) => m.attachments?.map((a) => a.id) ?? []));
+    let uploadFiles: string[] = [];
+    try {
+      uploadFiles = fs.readdirSync(UPLOADS_DIR);
+    } catch (err) {
+      if (!(err instanceof Error) || !('code' in err) || err.code !== 'ENOENT') throw err;
+    }
+    for (const file of uploadFiles) {
+      if (!file.endsWith('.meta.json')) continue;
+      const raw = fs.readFileSync(path.join(UPLOADS_DIR, file), 'utf8');
+      let meta: unknown;
       try {
-        fs.rmSync(messagesFile(cid), { force: true });
-      } catch { /* missing */ }
+        meta = JSON.parse(raw);
+      } catch {
+        /* corrupt attachment metadata is not attributable to a channel */
+        continue;
+      }
+      if (
+        typeof meta === 'object' &&
+        meta !== null &&
+        'channelId' in meta &&
+        meta.channelId === cid &&
+        /^att-[a-z0-9-]+$/.test(file.slice(0, -10))
+      ) {
+        attIds.add(file.slice(0, -10));
+      }
     }
-    // Remove read positions for the channel.
-    const read = readReadMap();
-    if (read[cid]) {
-      delete read[cid];
-      writeReadMap(read);
+    await updateChannels((channels) => {
+      const filtered = channels.filter((c) => c.id !== cid);
+      const changed = filtered.length !== channels.length;
+      channels.splice(0, channels.length, ...filtered);
+      return { changed, result: undefined };
+    });
+    try {
+      fs.rmSync(messagesFile(cid), { force: true });
+    } catch {
+      /* missing */
     }
+    await withFileLockAsync('chat-read', async () => {
+      const read = readReadMap();
+      if (read[cid]) {
+        delete read[cid];
+        writeReadMap(read);
+      }
+    });
+    deleteAttachments([...attIds]);
   });
-  if (attIds.length > 0) deleteAttachments(attIds);
 }
 
 /** Append a message (persisted, pruning oldest beyond cap). */
-export async function appendMessage(channelId: string, message: TeamMessage): Promise<TeamMessage> {
+export async function appendMessage(channelId: string, message: TeamMessage): Promise<TeamMessage | null> {
+  let appended = false;
   await withFileLockAsync(`msgs:${channelId}`, async () => {
+    if (!getChannel(channelId)) return;
     const messages = readMessagesRaw(channelId);
     if (!messages.some((m) => m.id === message.id)) {
       messages.push(message);
@@ -288,21 +327,25 @@ export async function appendMessage(channelId: string, message: TeamMessage): Pr
       if (idx !== -1) messages[idx] = message;
     }
     const trimmed = pruneToCap(messages, DEFAULT_MSG_CAP);
-    // Only rewrite when pruning actually dropped something (write amplification).
+    writeMessagesRaw(channelId, trimmed);
     if (trimmed.length !== messages.length) {
-      writeMessagesRaw(channelId, trimmed);
-    } else {
-      writeMessagesRaw(channelId, messages);
+      const retainedAttachments = new Set(trimmed.flatMap((m) => m.attachments?.map((a) => a.id) ?? []));
+      const prunedAttachments = messages
+        .slice(0, messages.length - trimmed.length)
+        .flatMap((m) => m.attachments?.map((a) => a.id) ?? [])
+        .filter((id) => !retainedAttachments.has(id));
+      deleteAttachments([...new Set(prunedAttachments)]);
     }
-    // Reflect lastMessageAt on the channel row.
-    const channels = readChannelsRaw().channels;
-    const ch = channels.find((c) => c.id === channelId);
-    if (ch && ch.lastMessageAt !== message.createdAt) {
+    await updateChannels((channels) => {
+      const ch = channels.find((c) => c.id === channelId);
+      if (!ch) return { changed: false, result: undefined };
+      if (ch.lastMessageAt === message.createdAt) return { changed: false, result: undefined };
       ch.lastMessageAt = message.createdAt;
-      writeChannelsRaw({ channels });
-    }
+      return { changed: true, result: undefined };
+    });
+    appended = true;
   });
-  return message;
+  return appended ? message : null;
 }
 
 /** Paged read — newest first by default, page backwards with `before`. */
@@ -436,17 +479,28 @@ export async function deleteMessage(
     if (idx === -1) return;
     const target = messages[idx];
     const attachmentIds = target.attachments?.map((a) => a.id) ?? [];
-    writeMessagesRaw(channelId, messages.filter((_, i) => i !== idx));
-    // Resolve the primary pin — same raw channel write appendMessage uses
-    // under its msgs lock (no nested lock, no re-entrant deadlock).
-    const channels = readChannelsRaw().channels;
-    const ch = channels.find((c) => c.id === channelId);
-    if (ch && ch.pinnedMessageId === msgId) {
-      ch.pinnedMessageId = null;
-      writeChannelsRaw({ channels });
-    }
-    // F3: delete the bytes while the msgs lock is still held.
-    if (attachmentIds.length > 0) deleteAttachments(attachmentIds);
+    const remaining = messages.filter((_, i) => i !== idx);
+    writeMessagesRaw(channelId, remaining);
+    const retainedAttachments = new Set(remaining.flatMap((m) => m.attachments?.map((a) => a.id) ?? []));
+    const unusedAttachments = attachmentIds.filter((id) => !retainedAttachments.has(id));
+    await updateChannels((channels) => {
+      const ch = channels.find((c) => c.id === channelId);
+      if (!ch) return { changed: false, result: undefined };
+      let changed = false;
+      if (ch.pinnedMessageId === msgId) {
+        ch.pinnedMessageId = null;
+        changed = true;
+      }
+      if (idx === messages.length - 1) {
+        const lastMessageAt = remaining[remaining.length - 1]?.createdAt;
+        if (lastMessageAt) ch.lastMessageAt = lastMessageAt;
+        else delete ch.lastMessageAt;
+        changed = true;
+      }
+      return { changed, result: undefined };
+    });
+    // Attachment ids may be referenced by more than one message in a channel.
+    if (unusedAttachments.length > 0) deleteAttachments([...new Set(unusedAttachments)]);
     result = { deleted: true, attachmentIds };
   });
   return result;
@@ -513,6 +567,14 @@ export async function markMessagesAsRead(
       }
     }
     if (modified) writeMessagesRaw(channelId, messages);
+    await withFileLockAsync('chat-read', async () => {
+      const map = readReadMap();
+      if (!map[channelId]) map[channelId] = {};
+      if (map[channelId][userId] !== anchorMsgId) {
+        map[channelId][userId] = anchorMsgId || messages[upTo]?.id || '';
+        writeReadMap(map);
+      }
+    });
   });
   return anchorMissing ? null : changed;
 }
@@ -520,12 +582,15 @@ export async function markMessagesAsRead(
 /** Record the last read message id for a user in a channel. */
 export async function setReadPosition(channelId: string, userId: string, msgId: string): Promise<void> {
   if (!isChannelId(channelId) || !isMessageId(msgId)) return;
-  await withFileLockAsync('chat-read', async () => {
-    const map = readReadMap();
-    if (!map[channelId]) map[channelId] = {};
-    if (map[channelId][userId] === msgId) return;
-    map[channelId][userId] = msgId;
-    writeReadMap(map);
+  await withFileLockAsync(`msgs:${channelId}`, async () => {
+    if (!readMessagesRaw(channelId).some((m) => m.id === msgId)) return;
+    await withFileLockAsync('chat-read', async () => {
+      const map = readReadMap();
+      if (!map[channelId]) map[channelId] = {};
+      if (map[channelId][userId] === msgId) return;
+      map[channelId][userId] = msgId;
+      writeReadMap(map);
+    });
   });
 }
 
@@ -537,27 +602,22 @@ export function getReadPosition(channelId: string, userId: string): string | nul
  * Sets the pinned message for a channel.
  * If messageId is provided, it verifies the message exists in the channel before pinning.
  */
-export async function setPinnedMessage(channelId: string, messageId: string | null): Promise<void> {
-  if (!isChannelId(channelId)) return;
+export async function setPinnedMessage(channelId: string, messageId: string | null): Promise<boolean> {
+  if (!isChannelId(channelId)) return false;
   
-  if (messageId !== null && !isMessageId(messageId)) return;
-
-  // Verify existence if we are pinning a specific message
-  if (messageId !== null) {
-    const messages = readMessagesRaw(channelId);
-    if (!messages.some(m => m.id === messageId)) return;
-  }
-
-  await withFileLockAsync(`channel:${channelId}`, async () => {
-    const all = readChannelsRaw().channels;
-    const ch = all.find((c) => c.id === channelId);
-    if (!ch) return;
-    
-    if (ch.pinnedMessageId !== messageId) {
+  if (messageId !== null && !isMessageId(messageId)) return false;
+  let updated = false;
+  await withFileLockAsync(`msgs:${channelId}`, async () => {
+    if (messageId !== null && !readMessagesRaw(channelId).some((m) => m.id === messageId)) return;
+    updated = await updateChannels((channels) => {
+      const ch = channels.find((c) => c.id === channelId);
+      if (!ch) return { changed: false, result: false };
+      if (ch.pinnedMessageId === messageId) return { changed: false, result: true };
       ch.pinnedMessageId = messageId;
-      writeChannelsRaw({ channels: all });
-    }
+      return { changed: true, result: true };
+    });
   });
+  return updated;
 }
 
 /** Unread message id per channel for a user (id of the first unread). */
@@ -590,18 +650,67 @@ export function uploadDir(): string {
 
 /** Save an attachment's bytes under a fresh random id, plus a small meta file
  * (channelId/uploadedBy) so cross-channel reuse can be rejected later. */
-export function saveAttachment(buffer: Buffer, channelId: string, userId: string): { id: string; size: number } {
-  const id = genId('att');
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-  fs.writeFileSync(path.join(UPLOADS_DIR, id), buffer, { mode: 0o600 });
-  try {
-    fs.writeFileSync(
-      path.join(UPLOADS_DIR, `${id}.meta.json`),
-      JSON.stringify({ channelId, uploadedBy: userId, uploadedAt: new Date().toISOString(), size: buffer.length }),
-      { mode: 0o600 }
-    );
-  } catch { /* best-effort — without meta the download route 404s (fail-closed) */ }
-  return { id, size: buffer.length };
+export async function saveAttachment(
+  buffer: Buffer,
+  channelId: string,
+  userId: string
+): Promise<{ id: string; size: number } | 'channel-not-found' | 'quota'> {
+  return withFileLockAsync(`msgs:${channelId}`, async () => {
+    if (!getChannel(channelId)) return 'channel-not-found';
+    if (buffer.length > MAX_ATTACHMENT_BYTES) return 'quota';
+    let existingBytes = 0;
+    let uploadFiles: string[] = [];
+    try {
+      uploadFiles = fs.readdirSync(UPLOADS_DIR);
+    } catch (err) {
+      if (!(err instanceof Error) || !('code' in err) || err.code !== 'ENOENT') throw err;
+    }
+    for (const file of uploadFiles) {
+      if (!file.endsWith('.meta.json')) continue;
+      const raw = fs.readFileSync(path.join(UPLOADS_DIR, file), 'utf8');
+      let meta: unknown;
+      try {
+        meta = JSON.parse(raw);
+      } catch {
+        /* corrupt attachment metadata is not attributable to a channel */
+        continue;
+      }
+      if (
+        typeof meta === 'object' &&
+        meta !== null &&
+        'channelId' in meta &&
+        meta.channelId === channelId &&
+        'size' in meta &&
+        typeof meta.size === 'number' &&
+        Number.isFinite(meta.size) &&
+        meta.size > 0
+      ) {
+        existingBytes += meta.size;
+      }
+    }
+    if (wouldExceedAttachmentQuota(existingBytes, buffer.length)) return 'quota';
+
+    const id = genId('att');
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    const bytesPath = path.join(UPLOADS_DIR, id);
+    const metaPath = path.join(UPLOADS_DIR, `${id}.meta.json`);
+    fs.writeFileSync(bytesPath, buffer, { mode: 0o600, flag: 'wx' });
+    try {
+      fs.writeFileSync(
+        metaPath,
+        JSON.stringify({ channelId, uploadedBy: userId, uploadedAt: new Date().toISOString(), size: buffer.length }),
+        { mode: 0o600, flag: 'wx' }
+      );
+    } catch (err) {
+      try {
+        fs.rmSync(bytesPath, { force: true });
+      } catch {
+        /* preserve the metadata-write failure as the reported error */
+      }
+      throw err;
+    }
+    return { id, size: buffer.length };
+  });
 }
 
 /** Ownership metadata for an uploaded attachment — null when absent (legacy). */

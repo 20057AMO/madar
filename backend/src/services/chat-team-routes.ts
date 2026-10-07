@@ -35,7 +35,6 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_CHANNEL_ATTACHMENT_BYTES,
   channelAttachmentBytes,
-  wouldExceedAttachmentQuota,
   isChannelAdmin,
   type CanSendMode,
   type ChannelMember,
@@ -55,12 +54,11 @@ import {
   getMessages,
   getAllMessages,
   pinUnpinMessage,
-  setReadPosition,
+  markMessagesAsRead,
   getUnreadByChannel,
   saveAttachment,
   attachmentPath,
   getAttachmentMeta,
-  uploadDir,
   genId,
   getLastMessage,
   setPinnedMessage,
@@ -303,7 +301,9 @@ export function registerChatTeamRoutes(app: any): void {
     const messageId = typeof req.body?.messageId === 'string' ? req.body.messageId : null;
     if (messageId !== null && !isMessageId(messageId)) return res.status(400).json({ error: 'Invalid message id' });
 
-    await setPinnedMessage(cid, messageId);
+    if (!(await setPinnedMessage(cid, messageId))) {
+      return res.status(404).json({ error: getChannel(cid) ? 'Message not found' : 'Channel not found' });
+    }
     const updatedChannel = getChannel(cid) || channel;
     
     broadcastPinnedUpdate(cid, updatedChannel.pinnedMessageId || null);
@@ -489,7 +489,8 @@ export function registerChatTeamRoutes(app: any): void {
       { replyToExists, attachments }
     );
 
-    await appendMessage(channelId, message);
+    const appended = await appendMessage(channelId, message);
+    if (!appended) return res.status(404).json({ error: 'Channel not found' });
     const freshChannel = getChannel(channelId) || channel;
     broadcastChatMessage(freshChannel, message);
     // Side-by-side mini-broadcast: subscribers get the full `message` frame
@@ -621,13 +622,14 @@ export function registerChatTeamRoutes(app: any): void {
     if (canAccessChannel(user, channel) === 'none') return res.status(403).json({ error: 'Access denied' });
     const msgId = typeof req.body?.msgId === 'string' ? req.body.msgId : '';
     if (!isMessageId(msgId)) return res.status(400).json({ error: 'Invalid message id' });
-    await setReadPosition(cid, user.id, msgId);
+    const changed = await markMessagesAsRead(cid, user.id, msgId);
+    if (changed === null) return res.status(404).json({ error: 'Message not found' });
     res.json({ ok: true });
   });
 
   // ── Attachments ──────────────────────────────────────────────
   // Upload is scoped to a channel so access is checked before bytes land.
-  r.post('/upload', chatWriteLimiter, chatUpload.single('file'), (req: any, res) => {
+  r.post('/upload', chatWriteLimiter, chatUpload.single('file'), async (req: any, res) => {
     const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
     const channelId = typeof req.body?.channelId === 'string' ? req.body.channelId : '';
     if (!isChannelId(channelId)) return res.status(400).json({ error: 'Invalid channel id' });
@@ -646,22 +648,13 @@ export function registerChatTeamRoutes(app: any): void {
     if (buf.length > MAX_ATTACHMENT_BYTES) {
       return res.status(400).json({ error: 'File too large (max 10 MB)' });
     }
-    let existingBytes = 0;
-    try {
-      const uploadsDir = uploadDir();
-      for (const f of fs.readdirSync(uploadsDir)) {
-        if (!f.endsWith('.meta.json')) continue;
-        try {
-          const m = JSON.parse(fs.readFileSync(path.join(uploadsDir, f), 'utf8'));
-          if (m && m.channelId === channelId && typeof m.size === 'number') existingBytes += m.size;
-        } catch { /* corrupt meta — skip */ }
-      }
-    } catch { /* dir missing — 0 */ }
-    if (wouldExceedAttachmentQuota(existingBytes, buf.length)) {
+    const kind = detectImageExt(buf) ? 'image' : 'file';
+    const saved = await saveAttachment(buf, channelId, user.id);
+    if (saved === 'channel-not-found') return res.status(404).json({ error: 'Channel not found' });
+    if (saved === 'quota') {
       return res.status(400).json({ error: 'Channel attachment storage limit exceeded (500 MB)' });
     }
-    const kind = detectImageExt(buf) ? 'image' : 'file';
-    const { id, size } = saveAttachment(buf, channelId, user.id);
+    const { id, size } = saved;
     const name = String(req.file.originalname || 'file').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 255) || 'file';
     res.status(201).json({ attachment: { id, name, kind, size } });
   });

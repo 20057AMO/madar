@@ -390,20 +390,34 @@ test('read position drives unread counts', async () => {
   const ch = await makeChannel(uniqueId('unread'));
   const m1 = await sendChannelMessage(ch.id, 'first');
   const m2 = await sendChannelMessage(ch.id, 'second');
+  const reader = await makeUser('unread-reader', 'viewer');
+  const asReader = runAs(reader.token);
 
   const before = await api('GET', `${chatBase}/channels`);
   const row = before.json.channels.find((c: any) => c.id === ch.id);
   assert.strictEqual(row.unread, 2);
 
-  const mark = await api('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m1.id });
+  const mark = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m1.id });
   assert.strictEqual(mark.status, 200);
 
-  const after = await api('GET', `${chatBase}/channels`);
+  const after = await asReader('GET', `${chatBase}/channels`);
   const row2 = after.json.channels.find((c: any) => c.id === ch.id);
   assert.strictEqual(row2.unread, 1);
   assert.strictEqual(row2.firstUnreadId, m2.id);
 
-  const bad = await api('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: 'junk' });
+  const messages = await asReader('GET', `${chatBase}/channels/${ch.id}/messages`);
+  const readFirst = messages.json.messages.find((m: any) => m.id === m1.id);
+  const unreadSecond = messages.json.messages.find((m: any) => m.id === m2.id);
+  assert.ok(readFirst.readBy.includes(reader.id));
+  assert.strictEqual(readFirst.status, 'read');
+  assert.ok(!unreadSecond.readBy.includes(reader.id));
+
+  const unknown = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: 'm-notthere123' });
+  assert.strictEqual(unknown.status, 404, JSON.stringify(unknown.json));
+  const afterUnknown = await asReader('GET', `${chatBase}/channels`);
+  assert.strictEqual(afterUnknown.json.channels.find((c: any) => c.id === ch.id).unread, 1);
+
+  const bad = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: 'junk' });
   assert.strictEqual(bad.status, 400);
 });
 
@@ -726,9 +740,22 @@ test('H2: deleting a channel removes its attachments from disk', async (t) => {
   const attachment = upJson.attachment;
   await sendChannelMessage(ch.id, 'see image', { attachments: [{ id: attachment.id, name: attachment.name }] });
 
+  const orphanForm = new FormData();
+  orphanForm.append('channelId', ch.id);
+  orphanForm.append('file', new Blob([png], { type: 'image/png' }), 'unused.png');
+  const orphanUpload = await fetch(`${API_URL}/chat-team/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${signTestToken()}` },
+    body: orphanForm as any,
+  });
+  const orphanJson = await orphanUpload.json().catch(() => ({}));
+  assert.strictEqual(orphanUpload.status, 201, JSON.stringify(orphanJson));
+  const orphan = orphanJson.attachment;
+
   // Downloadable while the channel lives.
   const before = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
   assert.strictEqual(before.status, 200);
+  assert.strictEqual((await reqAuth('GET', `${chatBase}/uploads/${orphan.id}`)).status, 200);
 
   const del = await api('DELETE', `${chatBase}/channels/${ch.id}`);
   assert.strictEqual(del.status, 200, JSON.stringify(del.json));
@@ -737,6 +764,7 @@ test('H2: deleting a channel removes its attachments from disk', async (t) => {
   // (attachmentPath probes the disk — a leaked file would still be served).
   const after = await reqAuth('GET', `${chatBase}/uploads/${attachment.id}`);
   assert.strictEqual(after.status, 404);
+  assert.strictEqual((await reqAuth('GET', `${chatBase}/uploads/${orphan.id}`)).status, 404);
 
   // Disk level: assert against the running container's uploads dir.
   // Best-effort: needs the docker CLI on the host + the wsd-pro container.
@@ -745,6 +773,8 @@ test('H2: deleting a channel removes its attachments from disk', async (t) => {
     const entries = out.split(/\r?\n/).filter(Boolean);
     assert.ok(!entries.includes(attachment.id), `attachment bytes leaked on disk: ${entries.join(', ')}`);
     assert.ok(!entries.includes(`${attachment.id}.meta.json`), 'attachment meta leaked on disk');
+    assert.ok(!entries.includes(orphan.id), `unused upload bytes leaked on disk: ${entries.join(', ')}`);
+    assert.ok(!entries.includes(`${orphan.id}.meta.json`), 'unused upload meta leaked on disk');
   } catch (err) {
     // API 404 above already proves the leak is closed; the disk assertion is
     // an extra check that needs docker access from the test runner's host.
@@ -1048,6 +1078,8 @@ test('CS6v: primary-pin (PUT /channels/:id/pin) enforcement — non-creator edit
   const adminPin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: m.id });
   assert.strictEqual(adminPin.status, 200, JSON.stringify(adminPin.json));
   assert.strictEqual(adminPin.json.channel.pinnedMessageId, m.id);
+  const missingPin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: 'm-notthere123' });
+  assert.strictEqual(missingPin.status, 404, JSON.stringify(missingPin.json));
 
   // Unpin via the main route restores null (no dangling primary pin).
   const adminUnpin = await api('PUT', `${chatBase}/channels/${ch.id}/pin`, { messageId: null });
@@ -1074,6 +1106,19 @@ test('G2: primary-pin unpin via {pinned:false} shape restores pinnedMessageId nu
   const detail = await api('GET', `${chatBase}/channels/${ch.id}`);
   assert.strictEqual(detail.status, 200);
   assert.strictEqual(detail.json.channel.pinnedMessageId, null);
+});
+
+test('manual channel names stay unique under concurrent creation', async () => {
+  const name = uniqueId('parallel');
+  const attempts = await Promise.all([
+    api('POST', `${chatBase}/channels`, { name }),
+    api('POST', `${chatBase}/channels`, { name }),
+  ]);
+  assert.deepStrictEqual(attempts.map((r) => r.status).sort(), [201, 409]);
+  const created = attempts.find((r) => r.status === 201)!;
+  createdChannelIds.push(created.json.channel.id);
+  const listed = await api('GET', `${chatBase}/channels`);
+  assert.strictEqual(listed.json.channels.filter((c: any) => c.name === name).length, 1);
 });
 
 test('G1: system admin bypasses the admins-lock without creation or membership', async () => {

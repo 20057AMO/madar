@@ -891,6 +891,17 @@ export function Chat() {
       }
       return;
     }
+    if (ev.type === 'access_revoked') {
+      setChannels((prev) => prev.filter((c) => c.id !== ev.channelId));
+      if (ev.channelId === activeIdRef.current) {
+        switchChannel(null);
+        setActive(null);
+        setMessages([]);
+        setTyping([]);
+        setError(t2('لم تعد تملك صلاحية الوصول إلى هذه المحادثة', 'You no longer have access to this conversation'));
+      }
+      return;
+    }
     if (ev.type === 'message') {
       // Drop own message dupes (broadcast echo of the REST write).
       const cid = ev.channel.id;
@@ -1041,6 +1052,7 @@ export function Chat() {
     setViewerOnly(false);
     setActiveCanSend(known?.canSend === 'admins' ? 'admins' : 'everyone');
     setCanWrite(true);
+    setError('');
     setSettingsOpen(false);
     setSearchResults(null);
     setSearchQ('');
@@ -1098,6 +1110,14 @@ export function Chat() {
     const poll = () => {
       void listChatChannels().then(({ channels: chans }) => {
         if (!alive) return;
+        const currentId = activeIdRef.current;
+        if (currentId && !chans.some((c) => c.id === currentId)) {
+          switchChannel(null);
+          setActive(null);
+          setMessages([]);
+          setTyping([]);
+          setError(t2('لم تعد تملك صلاحية الوصول إلى هذه المحادثة', 'You no longer have access to this conversation'));
+        }
         setChannels(chans);
         chans.forEach((c) => { if ((c.unread || 0) === 0) unreadLocal.current.delete(c.id); });
       }).catch(() => {});

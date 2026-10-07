@@ -23,7 +23,8 @@ export type ChatSocketEvent =
   | { type: 'channel_update'; channel: { id: string; canSend: 'everyone' | 'admins' } }
   | { type: 'status_update'; messageId: string; newStatus: TeamChatMessage['status'] }
   | { type: 'message_updated'; channelId: string; message: TeamChatMessage }
-  | { type: 'message_deleted'; channelId: string; msgId: string };
+  | { type: 'message_deleted'; channelId: string; msgId: string }
+  | { type: 'access_revoked'; channelId: string };
 
 export interface TeamChatSocket {
   /** Subscribe a channel (fetch its recent history through the socket). */
@@ -137,6 +138,9 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
             break;
           case 'message_deleted':
             onEventRef.current({ type: 'message_deleted', channelId: msg.channelId, msgId: msg.msgId });
+            break;
+          case 'access_revoked':
+            onEventRef.current({ type: 'access_revoked', channelId: msg.channelId });
             break;
           default:
             break;

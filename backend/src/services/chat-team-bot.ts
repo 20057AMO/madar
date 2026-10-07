@@ -141,7 +141,8 @@ export function createTeamChatBot(deps: TeamChatBotDeps = {}): TeamChatBot {
         text,
         mentions: [],
       });
-      await appendMessage(channelId, message);
+      const appended = await appendMessage(channelId, message);
+      if (!appended) return;
       const fresh = getChannel(channelId);
       if (fresh) broadcastChatMessage(fresh, message);
       void opts;
