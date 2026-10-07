@@ -294,6 +294,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [saveState, setSaveState] = useState<'dirty' | 'saving' | 'saved'>('saved');
   const [savedAt, setSavedAt] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const fullscreenSavedViewRef = useRef<ViewState | null>(null);
+  const fullscreenFitViewRef = useRef<ViewState | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string } | null>(null);
   const [remoteUpdated, setRemoteUpdated] = useState(false);
   const [pushingNotes, setPushingNotes] = useState(false);
@@ -356,6 +358,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const nudgeAtRef = useRef(0);
   /** Live end-point of the connect rubber line (world coords). */
   const connectEndRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerFrameRef = useRef<number | null>(null);
+  const pendingPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const dragRef = useRef<null | {
     kind: 'node' | 'pan' | 'resize' | 'marquee';
     ids?: string[];
@@ -893,7 +897,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const closeCtxMenu = () => setCtxMenu(null);
 
   useEffect(() => {
-    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    const onFs = () => {
+      const entering = !!document.fullscreenElement;
+      setIsFullscreen(entering);
+      if (entering) {
+        fullscreenSavedViewRef.current = viewRef.current;
+        requestAnimationFrame(() => {
+          if (!document.fullscreenElement) return;
+          fitView();
+          fullscreenFitViewRef.current = viewRef.current;
+        });
+        return;
+      }
+      const saved = fullscreenSavedViewRef.current;
+      const fitted = fullscreenFitViewRef.current;
+      const current = viewRef.current;
+      if (saved && fitted && current.x === fitted.x && current.y === fitted.y && current.z === fitted.z) {
+        setViewState(saved);
+      }
+      fullscreenSavedViewRef.current = null;
+      fullscreenFitViewRef.current = null;
+    };
     document.addEventListener('fullscreenchange', onFs);
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
@@ -1056,8 +1080,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   const setViewState = (v: ViewState) => {
     viewRef.current = v;
+    writeCameraTransform(v);
     setView(v);
     persistView();
+  };
+
+  const writeCameraTransform = (v: ViewState) => {
+    const world = containerRef.current?.querySelector<HTMLElement>('.cn-world');
+    if (world) world.style.transform = `translate3d(${v.x}px, ${v.y}px, 0) scale(${v.z})`;
   };
 
   const resetZoom = () => {
@@ -1396,17 +1426,14 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
   };
 
-  const onPointerMove = (e: any) => {
-    // Broadcast our pointer position (world coords, throttled inside the
-    // hook) so open boards can render it as a live collaborator cursor.
+  const processPointerMove = (clientX: number, clientY: number) => {
+    const dr = dragRef.current;
     if (!readOnly) {
-      const w = worldFromClient(e.clientX, e.clientY);
+      const w = worldFromClient(clientX, clientY, dr?.rect);
       sendCursor(w.x, w.y);
     }
-    // Live rubber line while connecting: end at the cursor (imperative —
-    // no re-render per mousemove).
     if (connectFrom) {
-      const w = worldFromClient(e.clientX, e.clientY);
+      const w = worldFromClient(clientX, clientY);
       connectEndRef.current = w;
       const line = containerRef.current?.querySelector<SVGLineElement>('.cn-connect-line');
       if (line) {
@@ -1414,14 +1441,16 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         line.setAttribute('y2', String(w.y));
       }
     }
-    const dr = dragRef.current;
     if (!dr) return;
-    const dx = e.clientX - dr.cX;
-    const dy = e.clientY - dr.cY;
+    const dx = clientX - dr.cX;
+    const dy = clientY - dr.cY;
     if (dr.kind === 'pan') {
-      setViewState({ ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy });
+      const next = { ...viewRef.current, x: dr.startX + dx, y: dr.startY + dy };
+      viewRef.current = next;
+      // Avoid a component render per frame; endDrag commits this camera state.
+      writeCameraTransform(next);
     } else if (dr.kind === 'marquee') {
-      const w = worldFromClient(e.clientX, e.clientY, dr.rect);
+      const w = worldFromClient(clientX, clientY, dr.rect);
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       dr.moved = true;
       dr.endX = w.x;
@@ -1453,8 +1482,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       const z = viewRef.current.z;
       dr.moved = true;
-      // Patch every dragged node's DOM element directly — no full-board
-      // re-render (setDoc) on pointermove. Edges catch up on release.
       for (const id of dr.ids) {
         const sp = dr.startPos?.[id];
         const node = docRef.current?.nodes.find((n) => n.id === id);
@@ -1472,7 +1499,30 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
   };
 
-  const endDrag = (e: any) => {
+  // Coalesce pointer work to a visual frame; release flushes the final coordinates.
+  const flushPointerMove = () => {
+    const point = pendingPointerRef.current;
+    if (!point) return;
+    pendingPointerRef.current = null;
+    if (pointerFrameRef.current !== null) {
+      cancelAnimationFrame(pointerFrameRef.current);
+      pointerFrameRef.current = null;
+    }
+    processPointerMove(point.clientX, point.clientY);
+  };
+
+  const onPointerMove = (e: any) => {
+    pendingPointerRef.current = { clientX: e.clientX, clientY: e.clientY };
+    if (pointerFrameRef.current === null) {
+      pointerFrameRef.current = requestAnimationFrame(() => {
+        pointerFrameRef.current = null;
+        flushPointerMove();
+      });
+    }
+  };
+
+  const endDrag = (e: any, cancelled = false) => {
+    flushPointerMove();
     const dr = dragRef.current;
     dragRef.current = null;
     // Release from the element the capture was SET on (the canvas root), not
@@ -1484,8 +1534,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       /* already released */
     }
     if (!dr) return;
+    if (dr.kind === 'pan') {
+      setViewState(viewRef.current);
+      return;
+    }
     // Armed connect mode: a SIMPLE click (no drag) completes the edge.
-    if (dr.kind === 'node' && dr.connectDown && !dr.moved) {
+    if (!cancelled && dr.kind === 'node' && dr.connectDown && !dr.moved) {
       const target = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.cn-node') as HTMLElement | null;
       const targetId = target?.dataset?.id;
       if (targetId && connectFrom && targetId !== connectFrom) addEdge(connectFrom, targetId);
@@ -1550,6 +1604,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           : n
       ),
     };
+
+    useEffect(() => () => {
+      if (pointerFrameRef.current !== null) cancelAnimationFrame(pointerFrameRef.current);
+    }, []);
     docRef.current = next;
     setDoc(next);
     if (liveOpsRef.current) { queueOps(); flushOps(); setSaveState('saved'); }
@@ -2244,6 +2302,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
+        onPointerCancel={(e: any) => endDrag(e, true)}
         onDblClick={onRootDblClick}
         onContextMenu={(e: any) => {
           e.preventDefault();

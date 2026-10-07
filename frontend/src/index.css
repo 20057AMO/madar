@@ -2604,9 +2604,72 @@ iframe[data-kbd-focus] {
 }
 .canvas-root.cn-panning { cursor: grabbing; }
 .canvas-wrap.cn-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
   height: 100vh;
-  max-height: 100vh;
-  min-height: 100vh;
+  height: 100dvh;
+  max-height: none;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  gap: 10px;
+  padding: clamp(10px, 1.8vw, 24px);
+  background: var(--bg);
+}
+.cn-fullscreen .panel-title {
+  flex: 0 0 auto;
+  margin: 0 2px;
+  font-size: 0.96rem;
+}
+.cn-fullscreen .cn-toolbar {
+  position: relative;
+  z-index: 12;
+  flex: 0 0 auto;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(14px);
+}
+.cn-fullscreen .cn-sections-bar {
+  flex: 0 0 auto;
+  max-height: min(20vh, 140px);
+  overflow: auto;
+  margin: 0;
+}
+.cn-fullscreen .cn-selbar {
+  z-index: 12;
+}
+.cn-fullscreen .canvas-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+}
+.cn-fullscreen .cn-world {
+  will-change: transform;
+}
+.cn-fullscreen .cn-add-fab {
+  right: clamp(18px, 2.5vw, 34px);
+  bottom: clamp(18px, 2.5vw, 34px);
+}
+@media (max-width: 700px) {
+  .cn-fullscreen .cn-toolbar {
+    gap: 4px;
+    padding: 7px;
+  }
+  .cn-fullscreen .cn-tb-group {
+    padding-right: 4px;
+    margin-right: 0;
+  }
+  .cn-fullscreen .cn-save-state {
+    margin-inline-start: auto;
+  }
+  .cn-fullscreen .canvas-root {
+    border-radius: 11px;
+  }
 }
 
 .cn-ctx {

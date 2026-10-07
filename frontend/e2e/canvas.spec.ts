@@ -112,6 +112,33 @@ test('canvas connect mode links the clicked target and persists the edge', async
       const canvas = await response.json();
       return canvas.edges;
     }).toEqual([expect.objectContaining({ from: 'source', to: 'target' })]);
+
+    const canvasWrap = page.locator('.canvas-wrap');
+    await page.getByRole('button', { name: 'Fullscreen' }).click();
+    await expect(canvasWrap).toHaveClass(/cn-fullscreen/);
+    await expect(page.locator('.cn-zoom-btn')).not.toHaveText('100%');
+    const viewport = page.viewportSize();
+    const fullscreenBox = await canvasWrap.boundingBox();
+    const boardBox = await page.locator('.canvas-root').boundingBox();
+    expect(viewport).not.toBeNull();
+    expect(fullscreenBox?.height).toBeGreaterThanOrEqual((viewport?.height ?? 0) * 0.95);
+    expect(boardBox?.height).toBeGreaterThan(400);
+
+    const beforePan = await page.locator('.cn-world').evaluate((el) => (el as HTMLElement).style.transform);
+    const start = { x: (boardBox?.x ?? 0) + 32, y: (boardBox?.y ?? 0) + 32 };
+    await page.keyboard.down('Space');
+    await expect(page.locator('.canvas-root')).toHaveClass(/cn-panning/);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 80, start.y + 50, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up('Space');
+    await expect.poll(() =>
+      page.locator('.cn-world').evaluate((el) => (el as HTMLElement).style.transform)
+    ).not.toBe(beforePan);
+
+    await page.getByRole('button', { name: 'Exit fullscreen' }).click();
+    await expect(canvasWrap).not.toHaveClass(/cn-fullscreen/);
   } finally {
     await fetch(`${BASE}/api/projects/${slug}`, { method: 'DELETE', headers });
   }
