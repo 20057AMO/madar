@@ -568,6 +568,8 @@ export const en = {
     resetView: 'Reset view (Home)',
     fullscreen: 'Fullscreen',
     exitFullscreen: 'Exit fullscreen',
+    minimap: 'Toggle board minimap',
+    minimapNavigate: 'Board map — click to navigate',
     undo: 'Undo (Ctrl+Z)',
     redo: 'Redo (Ctrl+Shift+Z)',
     addSection: 'Add a section (swimlane)',

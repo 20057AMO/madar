@@ -32,6 +32,7 @@ import {
   Globe,
   Search,
   Keyboard,
+  Map as MapIcon,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -68,6 +69,9 @@ const MAX_TEXT = 2000;
 const MIN_Z = 0.2;
 const MAX_Z = 3;
 const CANVAS_OPS_BATCH_SIZE = 40;
+const MINIMAP_WIDTH = 180;
+const MINIMAP_HEIGHT = 116;
+const MINIMAP_PADDING = 12;
 /** Coarse step for arrow-key nudging (fine = 4px, with Shift = 20px). */
 const NUDGE_FINE = 4;
 const NUDGE_COARSE = 20;
@@ -316,6 +320,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [addSectionOpen, setAddSectionOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchIndex, setSearchIndex] = useState(0);
+  const [minimapOpen, setMinimapOpen] = useState(false);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [confirmDelSection, setConfirmDelSection] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   /** Cascade counter so rapid adds never stack new nodes on the viewport center. */
@@ -324,6 +330,17 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [view, setView] = useState<ViewState>({ x: 40, y: 40, z: 1 });
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setCanvasSize((previous) => previous.width === width && previous.height === height ? previous : { width, height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const docRef = useRef<ProjectCanvas | null>(null);
   const viewRef = useRef<ViewState>(view);
@@ -2066,6 +2083,48 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const activeSearchIndex = searchResults.length && searchIndex >= 0 ? searchIndex % searchResults.length : -1;
   const activeSearchId = activeSearchIndex >= 0 ? searchResults[activeSearchIndex]?.id ?? null : null;
   const searchMatchIds = new Set(searchResults.map((node) => node.id));
+  const minimapNodes = doc?.nodes ?? [];
+  const minimapExtent = minimapNodes.reduce(
+    (bounds, node) => ({
+      left: Math.min(bounds.left, node.x),
+      top: Math.min(bounds.top, node.y),
+      right: Math.max(bounds.right, node.x + node.w),
+      bottom: Math.max(bounds.bottom, node.y + node.h),
+    }),
+    { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }
+  );
+  const minimapBounds = minimapNodes.length
+    ? {
+      x: minimapExtent.left - MINIMAP_PADDING,
+      y: minimapExtent.top - MINIMAP_PADDING,
+      width: minimapExtent.right - minimapExtent.left + MINIMAP_PADDING * 2,
+      height: minimapExtent.bottom - minimapExtent.top + MINIMAP_PADDING * 2,
+    }
+    : null;
+  const minimapScale = minimapBounds
+    ? Math.min((MINIMAP_WIDTH - MINIMAP_PADDING * 2) / minimapBounds.width, (MINIMAP_HEIGHT - MINIMAP_PADDING * 2) / minimapBounds.height)
+    : 1;
+  const minimapOffset = minimapBounds
+    ? {
+      x: (MINIMAP_WIDTH - minimapBounds.width * minimapScale) / 2 - minimapBounds.x * minimapScale,
+      y: (MINIMAP_HEIGHT - minimapBounds.height * minimapScale) / 2 - minimapBounds.y * minimapScale,
+    }
+    : { x: 0, y: 0 };
+  const minimapNodeById = minimapOpen
+    ? new Map(minimapNodes.map((node) => [node.id, node] as const))
+    : null;
+  const navigateMinimap = (event: MouseEvent) => {
+    if (!minimapBounds || !minimapScale || !canvasSize.width || !canvasSize.height) return;
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const worldX = ((event.clientX - rect.left) / rect.width * MINIMAP_WIDTH - minimapOffset.x) / minimapScale;
+    const worldY = ((event.clientY - rect.top) / rect.height * MINIMAP_HEIGHT - minimapOffset.y) / minimapScale;
+    const current = viewRef.current;
+    setViewState({
+      ...current,
+      x: canvasSize.width / 2 - worldX * current.z,
+      y: canvasSize.height / 2 - worldY * current.z,
+    });
+  };
   const navigateSearch = (direction: number) => {
     if (!searchResults.length) return;
     const nextIndex = activeSearchIndex < 0
@@ -2118,6 +2177,11 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           <button class="cn-tb-btn" title={isFullscreen ? t('canvas.exitFullscreen') : t('canvas.fullscreen')} aria-label={isFullscreen ? t('canvas.exitFullscreen') : t('canvas.fullscreen')} onClick={toggleFullscreen}>
             {isFullscreen ? <Minimize2 width={15} height={15} /> : <Maximize2 width={15} height={15} />}
           </button>
+          {minimapNodes.length >= 3 && (
+            <button class={`cn-tb-btn ${minimapOpen ? 'cn-active' : ''}`} title={t('canvas.minimap')} aria-label={t('canvas.minimap')} aria-pressed={minimapOpen} onClick={() => setMinimapOpen((open) => !open)}>
+              <MapIcon width={15} height={15} />
+            </button>
+          )}
           <button class="cn-tb-btn" title={t('canvas.exportPng')} aria-label={t('canvas.exportPng')} onClick={exportPng}>
             <ImageDown width={15} height={15} />
           </button>
@@ -2655,6 +2719,55 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           </div>
         ))}
         </div>
+
+        {minimapOpen && minimapBounds && (
+          <button
+            class="cn-minimap"
+            type="button"
+            aria-label={t('canvas.minimapNavigate')}
+            title={t('canvas.minimapNavigate')}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onClick={navigateMinimap}
+          >
+            <svg viewBox={`0 0 ${MINIMAP_WIDTH} ${MINIMAP_HEIGHT}`} aria-hidden="true">
+              {doc?.edges.map((edge) => {
+                const from = minimapNodeById?.get(edge.from);
+                const to = minimapNodeById?.get(edge.to);
+                if (!from || !to) return null;
+                return (
+                  <line
+                    key={edge.id}
+                    x1={(from.x + from.w / 2) * minimapScale + minimapOffset.x}
+                    y1={(from.y + from.h / 2) * minimapScale + minimapOffset.y}
+                    x2={(to.x + to.w / 2) * minimapScale + minimapOffset.x}
+                    y2={(to.y + to.h / 2) * minimapScale + minimapOffset.y}
+                    class="cn-minimap-edge"
+                  />
+                );
+              })}
+              {minimapNodes.map((node) => (
+                <rect
+                  key={node.id}
+                  x={node.x * minimapScale + minimapOffset.x}
+                  y={node.y * minimapScale + minimapOffset.y}
+                  width={Math.max(node.w * minimapScale, 2.5)}
+                  height={Math.max(node.h * minimapScale, 2.5)}
+                  class={`cn-minimap-node c-${node.color}`}
+                />
+              ))}
+              {canvasSize.width > 0 && canvasSize.height > 0 && (
+                <rect
+                  x={-view.x / view.z * minimapScale + minimapOffset.x}
+                  y={-view.y / view.z * minimapScale + minimapOffset.y}
+                  width={canvasSize.width / view.z * minimapScale}
+                  height={canvasSize.height / view.z * minimapScale}
+                  class="cn-minimap-viewport"
+                />
+              )}
+            </svg>
+          </button>
+        )}
 
         {loaded && doc && doc.nodes.length === 0 && (
           <div

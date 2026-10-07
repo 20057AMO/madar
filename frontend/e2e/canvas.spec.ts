@@ -60,6 +60,18 @@ test('canvas section creation works with a mouse click and persists', async ({ p
     await page.getByRole('heading', { name: /Planning canvas/ }).waitFor({ state: 'visible' });
     const sections = page.getByRole('group', { name: 'Board sections' });
     await expect(sections).toBeVisible();
+    const minimapToggle = page.getByRole('button', { name: 'Toggle board minimap' });
+    await expect(minimapToggle).toBeVisible();
+    await minimapToggle.click();
+    const minimap = page.getByRole('button', { name: 'Board map — click to navigate' });
+    await expect(minimap).toBeVisible();
+    await expect(minimap.locator('.cn-minimap-node')).toHaveCount(3);
+    await expect(minimap.locator('.cn-minimap-edge')).toHaveCount(0);
+    const initialCamera = await page.locator('.cn-world').getAttribute('style');
+    await minimap.click({ position: { x: 25, y: 30 } });
+    await expect.poll(() => page.locator('.cn-world').getAttribute('style')).not.toBe(initialCamera);
+    await minimapToggle.click();
+    await expect(minimap).toHaveCount(0);
     await page.getByRole('button', { name: 'Canvas shortcuts' }).click();
     const shortcuts = page.getByRole('group', { name: 'Canvas shortcuts' });
     await expect(shortcuts.getByText('Find nodes')).toBeVisible();
@@ -218,6 +230,15 @@ test('canvas connect mode links the clicked target and persists the edge', async
     await page.reload();
     await expect(page.locator('.cn-node')).toHaveCount(200);
     await expect(page.locator('.cn-edge')).toHaveCount(400);
+    await page.getByRole('button', { name: 'Toggle board minimap' }).click();
+    const denseMinimap = page.getByRole('button', { name: 'Board map — click to navigate' });
+    await expect(denseMinimap.locator('.cn-minimap-node')).toHaveCount(200);
+    await expect(denseMinimap.locator('.cn-minimap-edge')).toHaveCount(400);
+    const cameraBeforeMinimapNavigation = await page.locator('.cn-world').getAttribute('style');
+    await denseMinimap.click({ position: { x: 25, y: 30 } });
+    await expect.poll(() => page.locator('.cn-world').getAttribute('style'))
+      .not.toBe(cameraBeforeMinimapNavigation);
+    await page.getByRole('button', { name: 'Toggle board minimap' }).click();
     await page.getByRole('button', { name: /Reset view/ }).click();
 
     const boardSearch = page.getByRole('searchbox', { name: 'Find nodes' });

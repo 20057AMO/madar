@@ -568,6 +568,8 @@ export const ar: Dict = {
     resetView: 'إعادة ضبط العرض (Home)',
     fullscreen: 'ملء الشاشة',
     exitFullscreen: 'الخروج من ملء الشاشة',
+    minimap: 'إظهار أو إخفاء خريطة اللوحة',
+    minimapNavigate: 'خريطة اللوحة — انقر للانتقال',
     undo: 'تراجع (Ctrl+Z)',
     redo: 'إعادة (Ctrl+Shift+Z)',
     addSection: 'إضافة قسم (ممر أفقي)',

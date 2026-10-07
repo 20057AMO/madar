@@ -3398,6 +3398,51 @@ iframe[data-kbd-focus] {
 }
 
 .cn-world { position: absolute; inset: 0; transform-origin: 0 0; }
+.cn-minimap {
+  position: absolute;
+  inset-inline-start: 14px;
+  bottom: 14px;
+  z-index: 8;
+  width: 180px;
+  height: 116px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+  cursor: crosshair;
+  touch-action: manipulation;
+  backdrop-filter: blur(8px);
+}
+.cn-minimap:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cn-minimap svg { display: block; width: 100%; height: 100%; }
+.cn-minimap-edge {
+  stroke: color-mix(in srgb, var(--text-2) 55%, transparent);
+  stroke-width: 1.5;
+}
+.cn-minimap-node { stroke-width: 1; }
+.cn-minimap-node.c-yellow { fill: #9c7a38; stroke: #d4aa55; }
+.cn-minimap-node.c-blue { fill: #42649c; stroke: #78a5ee; }
+.cn-minimap-node.c-red { fill: #8e4650; stroke: #ce727d; }
+.cn-minimap-node.c-green { fill: #3d7952; stroke: #68ba81; }
+.cn-minimap-viewport {
+  fill: color-mix(in srgb, var(--blue) 10%, transparent);
+  stroke: var(--blue);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+@media (max-width: 700px) {
+  .cn-minimap {
+    inset-inline-start: 8px;
+    bottom: 8px;
+    width: 144px;
+    height: 92px;
+  }
+}
 .cn-svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .cn-edge {
   stroke: var(--text-3);
