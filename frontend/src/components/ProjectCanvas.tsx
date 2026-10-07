@@ -2027,7 +2027,9 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   if (e.key === 'Enter') addSection(e.currentTarget.value);
                   if (e.key === 'Escape') setAddSectionOpen(false);
                 }}
-                onBlur={() => setAddSectionOpen(false)}
+                onBlur={(e: any) => {
+                  if (!e.currentTarget.parentElement?.contains(e.relatedTarget)) setAddSectionOpen(false);
+                }}
               />
               <button class="cn-section-ok" aria-label={t('canvas.sectionCreate')} onClick={(e) => {
                 const inp = (e.currentTarget.parentElement as HTMLElement).querySelector('.cn-section-input') as HTMLInputElement;
