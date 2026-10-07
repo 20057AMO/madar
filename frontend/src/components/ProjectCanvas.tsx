@@ -1486,7 +1486,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     if (!dr) return;
     // Armed connect mode: a SIMPLE click (no drag) completes the edge.
     if (dr.kind === 'node' && dr.connectDown && !dr.moved) {
-      const target = (e.target as Element)?.closest?.('.cn-node') as HTMLElement | null;
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.cn-node') as HTMLElement | null;
       const targetId = target?.dataset?.id;
       if (targetId && connectFrom && targetId !== connectFrom) addEdge(connectFrom, targetId);
       setConnectFrom(null);
