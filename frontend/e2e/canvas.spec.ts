@@ -41,7 +41,11 @@ test('canvas section creation works with a mouse click and persists', async ({ p
       headers,
       body: JSON.stringify({
         version: 1,
-        nodes: [{ id: 'loose-note', type: 'note', text: 'Loose note', x: 40, y: 80, w: 220, h: 100, color: 'yellow' }],
+        nodes: [
+          { id: 'loose-note', type: 'note', text: 'Loose note', x: 40, y: 80, w: 220, h: 100, color: 'yellow' },
+          { id: 'match-one', type: 'note', text: 'Needle alpha', x: 320, y: 80, w: 220, h: 100, color: 'blue' },
+          { id: 'match-two', type: 'note', text: 'Needle beta', x: 600, y: 80, w: 220, h: 100, color: 'green' },
+        ],
         edges: [],
       }),
     });
@@ -56,23 +60,66 @@ test('canvas section creation works with a mouse click and persists', async ({ p
     await page.getByRole('heading', { name: /Planning canvas/ }).waitFor({ state: 'visible' });
     const sections = page.getByRole('group', { name: 'Board sections' });
     await expect(sections).toBeVisible();
-    await expect(sections.getByText('1 unassigned')).toBeVisible();
+    await expect(sections.getByText('3 unassigned')).toBeVisible();
     await sections.getByRole('button', { name: 'Add your first section' }).click();
     await page.getByRole('textbox', { name: 'New section name' }).fill('Section from user test');
     await page.getByRole('button', { name: 'Create section' }).click();
 
     await expect(page.getByText('Section from user test', { exact: true })).toBeVisible();
     await expect(sections.locator('.cn-section-count')).toHaveText('0');
-    await expect(sections.getByText('1 unassigned')).toBeVisible();
+    await expect(sections.getByText('3 unassigned')).toBeVisible();
     await expect.poll(async () => {
       const response = await fetch(`${BASE}/api/projects/${slug}/canvas`, { headers });
       const canvas = await response.json();
       return canvas.sections?.map((section: { name: string }) => section.name) ?? [];
     }).toContain('Section from user test');
 
+    await page.locator('.cn-node[data-id="match-one"]').click({ button: 'right' });
+    await page.locator('.cn-ctx-select').selectOption({ label: 'Section from user test' });
+    await expect(sections.locator('.cn-section-count')).toHaveText('1');
+    await expect(sections.getByText('2 unassigned')).toBeVisible();
+    await sections.getByRole('button', { name: 'Collapse section' }).click();
+    await expect(page.locator('.cn-node[data-id="match-one"]')).toHaveCount(0);
+
+    const search = page.getByRole('searchbox', { name: 'Find nodes' });
+    await page.keyboard.press('Control+f');
+    await expect(search).toBeFocused();
+    await search.fill('needle');
+    await expect(sections.getByText('2 matches')).toBeVisible();
+    await expect(page.locator('.cn-node.cn-search-match')).toHaveCount(1);
+    await expect(page.locator('.cn-node.cn-search-current')).toHaveCount(0);
+    await search.press('Enter');
+    await expect(page.locator('.cn-node.cn-search-current')).toHaveAttribute('data-id', 'match-one');
+    await expect(page.locator('.cn-node[data-id="match-one"]')).toBeVisible();
+    await expect(page.locator('.cn-node.cn-search-match')).toHaveCount(2);
+    await expect(sections.getByRole('button', { name: 'Collapse section' })).toBeVisible();
+    await expect(sections.getByText('1 of 2')).toBeVisible();
+    await search.press('Enter');
+    await expect(page.locator('.cn-node.cn-search-current')).toHaveAttribute('data-id', 'match-two');
+    await search.press('Shift+Enter');
+    await expect(page.locator('.cn-node.cn-search-current')).toHaveAttribute('data-id', 'match-one');
+
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(sections).toBeVisible();
     await expect(sections.getByText('Section from user test', { exact: true })).toBeVisible();
+    await expect(search).toBeVisible();
+    const mobileSearchWidth = await page.locator('.cn-board-search').evaluate((element) => element.getBoundingClientRect().width);
+    expect(mobileSearchWidth).toBeGreaterThan(250);
+    expect(mobileSearchWidth).toBeLessThanOrEqual(390);
+    await search.press('Escape');
+    await expect(search).toHaveValue('');
+    await expect(page.locator('.cn-node.cn-search-match')).toHaveCount(0);
+    await expect.poll(async () => {
+      const response = await fetch(`${BASE}/api/projects/${slug}/canvas`, { headers });
+      const canvas = await response.json();
+      return {
+        nodes: canvas.nodes.map((node: { id: string }) => node.id).sort(),
+        section: canvas.nodes.find((node: { id: string }) => node.id === 'match-one')?.section,
+      };
+    }).toEqual({
+      nodes: ['loose-note', 'match-one', 'match-two'],
+      section: expect.any(String),
+    });
   } finally {
     await fetch(`${BASE}/api/projects/${slug}`, { method: 'DELETE', headers });
   }
@@ -166,6 +213,16 @@ test('canvas connect mode links the clicked target and persists the edge', async
     await page.reload();
     await expect(page.locator('.cn-node')).toHaveCount(200);
     await expect(page.locator('.cn-edge')).toHaveCount(400);
+    await page.getByRole('button', { name: /Reset view/ }).click();
+
+    const boardSearch = page.getByRole('searchbox', { name: 'Find nodes' });
+    await boardSearch.fill('Stress node 177');
+    await expect(page.locator('.cn-node.cn-search-match')).toHaveCount(1);
+    await boardSearch.press('Enter');
+    await expect(page.locator('.cn-node.cn-search-current')).toHaveAttribute('data-id', 'node-177');
+    await expect(page.locator('.cn-node')).toHaveCount(200);
+    await expect(page.locator('.cn-edge')).toHaveCount(400);
+    await boardSearch.press('Escape');
     await page.getByRole('button', { name: /Reset view/ }).click();
 
     const dragSource = page.locator('.cn-node[data-id="source"]');

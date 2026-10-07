@@ -21,6 +21,7 @@ import {
   Rows3,
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
   X,
   Pencil,
   ClipboardPaste,
@@ -29,6 +30,7 @@ import {
   ImageDown,
   ClipboardList,
   Globe,
+  Search,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -311,7 +313,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [addSectionOpen, setAddSectionOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchIndex, setSearchIndex] = useState(0);
   const [confirmDelSection, setConfirmDelSection] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   /** Cascade counter so rapid adds never stack new nodes on the viewport center. */
   const addSeqRef = useRef(0);
 
@@ -1268,10 +1273,15 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      // Never fire board shortcuts behind a modal (ConfirmModal etc.).
       if (document.querySelector('.modal-overlay')) return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       const meta = e.ctrlKey || e.metaKey;
+      if (meta && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
       if (meta && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')) {
         e.preventDefault();
         if ((e.key === 'y' || e.key === 'Y') || e.shiftKey) redo();
@@ -2048,6 +2058,32 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       unassignedCount++;
     }
   }
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const searchResults = normalizedSearch
+    ? (doc?.nodes ?? []).filter((node) => node.text.toLocaleLowerCase().includes(normalizedSearch))
+    : [];
+  const activeSearchIndex = searchResults.length && searchIndex >= 0 ? searchIndex % searchResults.length : -1;
+  const activeSearchId = activeSearchIndex >= 0 ? searchResults[activeSearchIndex]?.id ?? null : null;
+  const searchMatchIds = new Set(searchResults.map((node) => node.id));
+  const navigateSearch = (direction: number) => {
+    if (!searchResults.length) return;
+    const nextIndex = activeSearchIndex < 0
+      ? direction > 0 ? 0 : searchResults.length - 1
+      : (activeSearchIndex + direction + searchResults.length) % searchResults.length;
+    const node = searchResults[nextIndex];
+    if (node.section) {
+      setCollapsedSections((previous) => {
+        if (!previous.has(node.section!)) return previous;
+        const next = new Set(previous);
+        next.delete(node.section!);
+        return next;
+      });
+    }
+    setSearchIndex(nextIndex);
+    setSelNodes([node.id]);
+    setSelEdge(null);
+    fitView([node.id]);
+  };
 
   return (
     <div class={`canvas-wrap ${isFullscreen ? 'cn-fullscreen' : ''}`} ref={wrapRef}>
@@ -2222,6 +2258,52 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   <Plus width={14} height={14} />
                 </button>
               </span>
+            )}
+          </div>
+          <div class="cn-board-search" role="group" aria-label={t('canvas.searchNodes')}>
+            <Search width={14} height={14} aria-hidden="true" />
+            <input
+              ref={searchInputRef}
+              class="cn-board-search-input"
+              type="search"
+              dir="auto"
+              value={searchQuery}
+              placeholder={t('canvas.searchPlaceholder')}
+              aria-label={t('canvas.searchNodes')}
+              onInput={(event: any) => {
+                setSearchQuery(event.currentTarget.value);
+                setSearchIndex(-1);
+              }}
+              onKeyDown={(event: any) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  navigateSearch(event.shiftKey ? -1 : 1);
+                } else if (event.key === 'Escape' && searchQuery) {
+                  event.preventDefault();
+                  setSearchQuery('');
+                  setSearchIndex(-1);
+                }
+              }}
+            />
+            {searchQuery && (
+              <>
+                <span class="cn-search-count" aria-live="polite">
+                  {searchResults.length
+                    ? activeSearchIndex < 0
+                      ? t('canvas.searchResultCount', { count: searchResults.length })
+                      : t('canvas.searchPosition', { current: activeSearchIndex + 1, total: searchResults.length })
+                    : t('canvas.searchNoResults')}
+                </span>
+                <button class="cn-search-nav" type="button" aria-label={t('canvas.searchPrevious')} title={t('canvas.searchPrevious')} disabled={!searchResults.length} onClick={() => navigateSearch(-1)}>
+                  <ChevronLeft width={14} height={14} />
+                </button>
+                <button class="cn-search-nav" type="button" aria-label={t('canvas.searchNext')} title={t('canvas.searchNext')} disabled={!searchResults.length} onClick={() => navigateSearch(1)}>
+                  <ChevronRight width={14} height={14} />
+                </button>
+                <button class="cn-search-clear" type="button" aria-label={t('canvas.searchClear')} title={t('canvas.searchClear')} onClick={() => { setSearchQuery(''); setSearchIndex(-1); }}>
+                  <X width={13} height={13} />
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -2449,7 +2531,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             return (
               <div
                 key={n.id}
-                class={`cn-node ${n.type} c-${n.color} ${isSel ? 'cn-selected' : ''} ${connectFrom === n.id ? 'cn-connect-src' : ''} ${connectFrom && connectFrom !== n.id ? 'cn-connectable' : ''}`}
+                class={`cn-node ${n.type} c-${n.color} ${isSel ? 'cn-selected' : ''} ${searchMatchIds.has(n.id) ? 'cn-search-match' : ''} ${activeSearchId === n.id ? 'cn-search-current' : ''} ${connectFrom === n.id ? 'cn-connect-src' : ''} ${connectFrom && connectFrom !== n.id ? 'cn-connectable' : ''}`}
                 data-id={n.id}
                 style={`left: ${n.x}px; top: ${n.y}px; width: ${n.w}px; height: ${n.h}px;`}
               >
