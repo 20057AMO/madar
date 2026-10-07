@@ -246,6 +246,10 @@ test('canvas access control: member viewer read-only, editor writes, non-member 
 
 test('canvasEditedAt is exposed on the project list after a save', async () => {
   const slug = await createTestProject('canvas-list');
+  const initial = await reqAuth('GET', '/projects');
+  const initialList = (await initial.json()).projects as any[];
+  assert.strictEqual(initialList.find((x) => x.slug === slug)?.canvasEditedAt, null, 'prime cache with the empty canvas');
+
   const { status } = await api('PUT', `/projects/${slug}/canvas`, canvasDoc([node('n', 'recent')]));
   assert.strictEqual(status, 200);
   const res = await reqAuth('GET', '/projects');
@@ -253,6 +257,15 @@ test('canvasEditedAt is exposed on the project list after a save', async () => {
   const p = list.find((x) => x.slug === slug);
   assert.ok(p, 'created project listed');
   assert.ok(p.canvasEditedAt, 'canvasEditedAt populated after a save');
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const ops = await api('POST', `/projects/${slug}/canvas/ops`, {
+    ops: [{ op: 'node-add', node: node('n2', 'live update') }],
+  });
+  assert.strictEqual(ops.status, 200);
+  const afterOps = await reqAuth('GET', '/projects');
+  const opsProject = ((await afterOps.json()).projects as any[]).find((x) => x.slug === slug);
+  assert.strictEqual(opsProject?.canvasEditedAt, ops.json.updatedAt, 'ops writes invalidate the project-list cache');
 });
 
 test('canvas summary is injected into the AI chat context (server-side)', async () => {

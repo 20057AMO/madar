@@ -17,6 +17,8 @@
  *  - Atomic swap: the full value is built first and only then cached —
  *    partial data is never observable. A rejected build is never cached and
  *    the next call retries.
+ *  - Generation guard: a build started before invalidate() cannot repopulate
+ *    the cache afterward; the next generation gets its own singleflight.
  */
 
 export const PROJECTS_CACHE_DEFAULT_TTL_MS = 3_000;
@@ -46,24 +48,28 @@ export function createProjectsCache<T>(
     opts?.ttlMs ?? (Number(process.env.WSD_PROJECTS_LIST_TTL_MS) || PROJECTS_CACHE_DEFAULT_TTL_MS)
   );
   let cache: { at: number; data: T } | null = null;
-  let inflight: Promise<T> | null = null;
+  let generation = 0;
+  let inflight: { generation: number; promise: Promise<T> } | null = null;
 
   return {
     get(): Promise<T> {
       if (!inflight && cache && Date.now() - cache.at < ttlMs) return Promise.resolve(cache.data);
-      if (inflight) return inflight;
-      inflight = builder()
+      if (inflight?.generation === generation) return inflight.promise;
+      const buildGeneration = generation;
+      const promise = builder()
         .then((data) => {
           // Swap only after the FULL value resolved — never partial data.
-          cache = { at: Date.now(), data };
+          if (generation === buildGeneration) cache = { at: Date.now(), data };
           return data;
         })
         .finally(() => {
-          inflight = null;
+          if (inflight?.promise === promise) inflight = null;
         });
-      return inflight;
+      inflight = { generation: buildGeneration, promise };
+      return promise;
     },
     invalidate(): void {
+      generation += 1;
       cache = null;
     },
     debug(): { cacheAt: number | null; ttlMs: number } {

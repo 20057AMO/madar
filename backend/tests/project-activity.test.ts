@@ -139,6 +139,15 @@ describe('Project activity feed', () => {
     assert.ok(canvasEntry, 'canvas_saved recorded');
     assert.strictEqual(canvasEntry.details?.nodes, 2);
     assert.strictEqual(canvasEntry.details?.edges, 1);
+
+    const ops = await reqAuth('POST', `/projects/${slug}/canvas/ops`, {
+      ops: [{ op: 'node-add', node: { id: 'n-3', type: 'note', text: 'Ship', x: 0, y: 0, w: 220, h: 100, color: 'yellow' } }],
+    });
+    assert.strictEqual(ops.status, 200, `canvas ops: ${ops.status}`);
+    const opsEntry = await byAction('canvas_saved');
+    assert.ok(opsEntry, 'canvas ops save recorded');
+    assert.strictEqual(opsEntry.details?.nodes, 3);
+    assert.strictEqual(opsEntry.details?.edges, 1);
   });
 
   test('snapshot automation records snapshot_config / snapshot_captured / snapshot_deleted', async () => {

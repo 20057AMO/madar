@@ -78,7 +78,7 @@ export function Planner() {
             value={query}
             onInput={(e: any) => setQuery(e.currentTarget.value)}
           />
-          <select class="modern-input chat-sel" value={sort} onChange={(e: any) => setSort(e.currentTarget.value as 'recent' | 'alpha')}>
+          <select aria-label={t2('ترتيب المشاريع', 'Sort order')} class="modern-input chat-sel" value={sort} onChange={(e: any) => setSort(e.currentTarget.value as 'recent' | 'alpha')}>
             <option value="recent">{t2('الأحدث تعديلاً', 'Recently edited')}</option>
             <option value="alpha">{t2('الاسم (أ–ي)', 'Name (A–Z)')}</option>
           </select>

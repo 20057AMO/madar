@@ -1752,6 +1752,7 @@ app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req: any,
         edges: Array.isArray(doc?.edges) ? doc.edges.length : 0,
       },
     });
+    invalidateProjectsCache();
     // Live-sync nudge: every open board for this project refetches (debounced
     // on the client). Covers all writers — user edits, agent aggregation and
     // snapshot imports all funnel through this route.
@@ -1772,9 +1773,17 @@ app.put('/api/projects/:slug/canvas', requireProjectAccess('editor'), (req: any,
 // moves without overwriting (a full PUT would still exist for agents/imports).
 app.post('/api/projects/:slug/canvas/ops', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
   try {
-    const ops = canvas.applyCanvasOps(req.params.slug, req.body?.ops);
+    const doc = canvas.applyCanvasOps(req.params.slug, req.body?.ops);
     recordAudit('canvas-save', true, req.ip);
-    res.json({ ok: true, updatedAt: (ops as any)?.updatedAt ?? null });
+    recordActivity(req.params.slug, 'canvas_saved', {
+      userId: req.user?.id,
+      details: {
+        nodes: doc.nodes.length,
+        edges: doc.edges.length,
+      },
+    });
+    invalidateProjectsCache();
+    res.json({ ok: true, updatedAt: doc.updatedAt });
     notifyCanvasOps(req.params.slug, req.body.ops, req.user?.id);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -3249,7 +3258,6 @@ startAttachmentGcSweep();
 // host bind source for project containers and reports a broken mount instead of
 // letting every project file land in a directory nobody can see.
 startWorkspaceMountAudit();
-
 
 
 

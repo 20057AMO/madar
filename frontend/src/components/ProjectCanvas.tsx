@@ -64,6 +64,7 @@ const MAX_EDGES = 400;
 const MAX_TEXT = 2000;
 const MIN_Z = 0.2;
 const MAX_Z = 3;
+const CANVAS_OPS_BATCH_SIZE = 40;
 /** Coarse step for arrow-key nudging (fine = 4px, with Shift = 20px). */
 const NUDGE_FINE = 4;
 const NUDGE_COARSE = 20;
@@ -340,7 +341,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const syncAliveRef = useRef(false);
   /** Our own user id (JWT claim) — drops self-echoed op batches. */
   const authUserIdRef = useRef<string>('');
-  /** Live-sync: true once at least one POST /canvas/ops round-trip succeeded.
+  /** Live-sync: true once a server document is available as the differential base.
    *  Kept as a ref (not state) so drag/undo handlers always read the CURRENT
    *  transport instead of a stale closure value. */
   const liveOpsRef = useRef(false);
@@ -389,6 +390,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         const d = await getProjectCanvas(slug);
         if (cancelled) return;
         docRef.current = d;
+        baseDocRef.current = JSON.stringify(d);
+        liveOpsRef.current = true;
         setDoc(d);
         setLoadError(null);
       } catch (err: any) {
@@ -463,6 +466,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     try {
       const merged = applyRemoteOps(cur, ops);
       docRef.current = merged;
+      const base = baseDocRef.current ? (JSON.parse(baseDocRef.current) as ProjectCanvas) : cur;
+      baseDocRef.current = JSON.stringify(applyRemoteOps(base, ops));
       setDoc(merged);
       setRemoteUpdated(false);
     } finally {
@@ -504,19 +509,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   /** Serialize POST /canvas/ops: one batch in flight, order preserved. */
   const flushOps = () => {
     if (opsSendingRef.current) return;
-    const batch = opsQueueRef.current;
+    const batch = opsQueueRef.current.splice(0, CANVAS_OPS_BATCH_SIZE);
     if (!batch.length) return;
-    opsQueueRef.current = [];
     opsSendingRef.current = true;
     sendProjectCanvasOps(slugRef.current, batch)
       .then(() => {
         opsSendingRef.current = false;
-        // First successful round-trip switches the board onto the
-        // differential sync path (both state + ref, so drag/undo handlers
-        // and flushSave always read the CURRENT transport, not a stale one).
-        if (!liveOpsRef.current) {
-          liveOpsRef.current = true;
-        }
         setSaveError(null);
         // Edits made while this batch was in flight go out next.
         if (opsQueueRef.current.length) flushOps();
@@ -546,7 +544,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     baseDocRef.current = JSON.stringify(cur);
     if (ops.length) {
       opsQueueRef.current = [...opsQueueRef.current, ...ops];
-      if (opsQueueRef.current.length > 400) opsQueueRef.current = opsQueueRef.current.slice(-400);
     }
   };
 

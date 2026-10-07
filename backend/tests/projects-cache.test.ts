@@ -91,6 +91,30 @@ describe('createProjectsCache (TTL + singleflight)', () => {
     assert.strictEqual(calls, 2, 'invalidate forces a rebuild');
   });
 
+  test('invalidation during a build prevents its stale result from repopulating the cache', async () => {
+    let calls = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const cache = createProjectsCache(async () => {
+      const version = ++calls;
+      if (calls === 1) await firstGate;
+      return { version };
+    }, { ttlMs: 500 });
+
+    const staleBuild = cache.get();
+    cache.invalidate();
+    const freshBuild = cache.get();
+    assert.strictEqual(calls, 2, 'a new build starts for the invalidated generation');
+
+    releaseFirst();
+    assert.deepStrictEqual(await staleBuild, { version: 1 });
+    assert.deepStrictEqual(await freshBuild, { version: 2 });
+    assert.deepStrictEqual(await cache.get(), { version: 2 });
+    assert.strictEqual(calls, 2, 'the invalidated build did not overwrite the fresh cache');
+  });
+
   test('never serves partial data: cache is empty while the build is in flight', async () => {
     let calls = 0;
     const cache = createProjectsCache(async () => {

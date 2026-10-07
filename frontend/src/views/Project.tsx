@@ -779,7 +779,7 @@ export function Project({ params }: { params: { slug: string } }) {
         {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}
         {tab === 'activity' && <ActivityPanel slug={slug} readOnly={readOnly} />}
         {tab === 'snapshots' && <SnapshotsPanel slug={slug} />}
-        {tab === 'canvas' && <ProjectCanvas slug={slug} readOnly={readOnly} />}
+        {tab === 'canvas' && <ProjectCanvas key={slug} slug={slug} readOnly={readOnly} />}
         {tab === 'agents' && <AgentRunPanel slug={slug} readOnly={readOnly} />}
       </div>
 
