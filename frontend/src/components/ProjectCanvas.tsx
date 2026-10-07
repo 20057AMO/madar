@@ -33,6 +33,9 @@ import {
   Search,
   Keyboard,
   Map as MapIcon,
+  TextAlignStart,
+  TextAlignCenter,
+  TextAlignEnd,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -69,6 +72,7 @@ const MAX_TEXT = 2000;
 const MIN_Z = 0.2;
 const MAX_Z = 3;
 const CANVAS_OPS_BATCH_SIZE = 40;
+const CANVAS_FONT_SIZES = [13, 14, 16, 20, 24, 32];
 const MINIMAP_WIDTH = 180;
 const MINIMAP_HEIGHT = 116;
 const MINIMAP_PADDING = 12;
@@ -146,6 +150,8 @@ function diffDocs(prev: ProjectCanvas, next: ProjectCanvas): CanvasOp[] {
     if (before.color !== n.color) patch.color = n.color;
     if (before.done !== n.done) patch.done = n.done;
     if (before.section !== n.section) patch.section = n.section ?? null;
+    if (before.fontSize !== n.fontSize) patch.fontSize = n.fontSize;
+    if (before.textAlign !== n.textAlign) patch.textAlign = n.textAlign;
     if (Object.keys(patch).length) ops.push({ op: 'node-patch', id: n.id, patch });
   }
   for (const e of next.edges) {
@@ -274,6 +280,8 @@ function sanitizeClipboardPayload(nodes: unknown, edges: unknown): { nodes: Canv
       color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
       done: r.done === true,
       ...(typeof r.section === 'string' && /^[a-zA-Z0-9_-]{1,48}$/.test(r.section) ? { section: r.section } : {}),
+      ...(typeof r.fontSize === 'number' && Number.isFinite(r.fontSize) ? { fontSize: clamp(Math.round(r.fontSize), 10, 36) } : {}),
+      ...(r.textAlign === 'left' || r.textAlign === 'center' || r.textAlign === 'right' ? { textAlign: r.textAlign } : {}),
     });
   }
   const ids = new Set(clean.map((n) => n.id));
@@ -1917,27 +1925,34 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       ctx.fill();
 
       ctx.fillStyle = '#e8e9ea';
-      const FONT = '13px "Inter", system-ui, sans-serif';
+      const fontSize = n.fontSize ?? 13;
+      const FONT = `${fontSize}px "Inter", system-ui, sans-serif`;
       ctx.font = FONT;
-      const maxPx = n.w - 20;
+      const isDoneCard = n.type === 'card' && n.done;
+      const textLeft = x + 10 + (isDoneCard ? 18 : 0);
+      const textRight = x + n.w - 10;
+      const maxPx = textRight - textLeft;
       const lines = wrapExportTextPx(n.text || '', maxPx, FONT);
-      const lineH = 17;
-      const startY = y + 14;
+      const lineH = fontSize * 1.4;
+      const startY = y + Math.max(fontSize + 2, 14);
+      const textAlign = n.textAlign ?? (document.documentElement.dir === 'rtl' ? 'right' : 'left');
+      ctx.textAlign = textAlign;
+      const textX = textAlign === 'center' ? (textLeft + textRight) / 2 : textAlign === 'right' ? textRight : textLeft;
       lines.forEach((line, li) => {
         const ty = startY + li * lineH;
         if (ty > y + n.h - 4) return;
-        if (n.type === 'card' && li === 0 && n.done) {
+        if (isDoneCard && li === 0) {
           ctx.fillStyle = '#3fb950';
+          ctx.textAlign = 'left';
           ctx.fillText('✓', x + 10, ty);
           ctx.fillStyle = '#e8e9ea';
-          ctx.fillText(line, x + 26, ty);
-        } else {
-          ctx.fillText(line, x + 10, ty);
+          ctx.textAlign = textAlign;
         }
+        ctx.fillText(line, textX, ty);
       });
       if (!lines.length) {
         ctx.fillStyle = 'rgba(232, 233, 234, 0.4)';
-        ctx.fillText('…', x + 10, startY);
+        ctx.fillText('…', textX, startY);
       }
     }
 
@@ -2084,6 +2099,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const activeSearchIndex = searchResults.length && searchIndex >= 0 ? searchIndex % searchResults.length : -1;
   const activeSearchId = activeSearchIndex >= 0 ? searchResults[activeSearchIndex]?.id ?? null : null;
   const searchMatchIds = new Set(searchResults.map((node) => node.id));
+  const selectedTextAlign = selected?.textAlign ?? (document.documentElement.dir === 'rtl' ? 'right' : 'left');
   const minimapNodes = doc?.nodes ?? [];
   const minimapExtent = minimapNodes.reduce(
     (bounds, node) => ({
@@ -2402,6 +2418,37 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       {/* Selection toolbar (active while a node is selected) */}
       {selected && !readOnly && (
         <div class="cn-selbar">
+          <select
+            class="cn-format-select"
+            aria-label={t('canvas.fontSize')}
+            title={t('canvas.fontSize')}
+            value={selected.fontSize ?? 13}
+            onPointerDown={(e: any) => e.stopPropagation()}
+            onClick={(e: any) => e.stopPropagation()}
+            onChange={(e: any) => patchNode(selected.id, { fontSize: Number(e.currentTarget.value) })}
+          >
+            {CANVAS_FONT_SIZES.map((size) => <option key={size} value={size}>{size}px</option>)}
+          </select>
+          <div class="cn-text-align" role="group" aria-label={t('canvas.textAlignment')}>
+            {([
+              { align: 'left', Icon: TextAlignStart, label: t('canvas.alignLeft') },
+              { align: 'center', Icon: TextAlignCenter, label: t('canvas.alignCenter') },
+              { align: 'right', Icon: TextAlignEnd, label: t('canvas.alignRight') },
+            ] as const).map(({ align, Icon, label }) => (
+              <button
+                key={align}
+                class={`cn-align-btn ${selectedTextAlign === align ? 'active' : ''}`}
+                type="button"
+                aria-label={label}
+                title={label}
+                aria-pressed={selectedTextAlign === align}
+                onClick={() => patchNode(selected.id, { textAlign: align })}
+              >
+                <Icon width={14} height={14} />
+              </button>
+            ))}
+          </div>
+          <span class="cn-sel-sep" />
           {COLORS.map((c) => (
             <button
               key={c}
@@ -2623,7 +2670,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 key={n.id}
                 class={`cn-node ${n.type} c-${n.color} ${isSel ? 'cn-selected' : ''} ${searchMatchIds.has(n.id) ? 'cn-search-match' : ''} ${activeSearchId === n.id ? 'cn-search-current' : ''} ${connectFrom === n.id ? 'cn-connect-src' : ''} ${connectFrom && connectFrom !== n.id ? 'cn-connectable' : ''}`}
                 data-id={n.id}
-                style={`left: ${n.x}px; top: ${n.y}px; width: ${n.w}px; height: ${n.h}px;`}
+                style={`left: ${n.x}px; top: ${n.y}px; width: ${n.w}px; height: ${n.h}px; font-size: ${n.fontSize ?? 13}px; text-align: ${n.textAlign ?? 'start'};`}
               >
                 {n.type === 'card' && !isEditing && (
                   <button

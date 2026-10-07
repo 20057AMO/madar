@@ -7,7 +7,7 @@ import type { CanvasNode, ProjectCanvas } from '../src/services/project-canvas.t
 
 /**
  * Project canvas (visual planning): fresh empty doc, PUT/GET roundtrip with
- * positions/colors/done preserved, junk normalization + numeric clamps,
+ * positions/colors/text formatting/done preserved, junk normalization + numeric clamps,
  * payload 400s (missing arrays / over caps / non-object), access control
  * (member viewer read-only, editor writes, non-member viewer 403), canvasEditedAt on
  * the project list, and the pure context formatter.
@@ -83,8 +83,8 @@ test('save canvas: valid document roundtrips, positions/colors/done preserved, u
   const slug = await createTestProject('canvas-roundtrip');
   const doc = canvasDoc(
     [
-      node('note-1', 'Sticky note text'),
-      node('card-1', 'Task card', { type: 'card', done: true, color: 'blue', x: 400, y: 300, w: 280, h: 160 }),
+      node('note-1', 'Sticky note text', { fontSize: 20, textAlign: 'center' }),
+      node('card-1', 'Task card', { type: 'card', done: true, color: 'blue', x: 400, y: 300, w: 280, h: 160, fontSize: 24, textAlign: 'right' }),
     ],
     [edge('e-1', 'note-1', 'card-1')]
   );
@@ -101,6 +101,10 @@ test('save canvas: valid document roundtrips, positions/colors/done preserved, u
   assert.strictEqual(got.json.nodes[1].color, 'blue');
   assert.strictEqual(got.json.nodes[1].x, 400);
   assert.strictEqual(got.json.nodes[1].y, 300);
+  assert.strictEqual(got.json.nodes[0].fontSize, 20);
+  assert.strictEqual(got.json.nodes[0].textAlign, 'center');
+  assert.strictEqual(got.json.nodes[1].fontSize, 24);
+  assert.strictEqual(got.json.nodes[1].textAlign, 'right');
   assert.strictEqual(got.json.edges[0].from, 'note-1');
   assert.strictEqual(got.json.edges[0].to, 'card-1');
   assert.strictEqual(got.json.updatedAt, json.updatedAt);
@@ -115,7 +119,7 @@ test('canvas normalization: junk rows dropped, bad edges removed, numeric clamps
       { id: '', text: '', x: 'inf', y: null, w: 3, h: 99999, color: 'purple', type: null },
       42,
       null,
-      { id: 'note-2', text: 'ok', x: 0, y: 0, w: 50, h: 30, color: 'green', type: 'card', done: true },
+      { id: 'note-2', text: 'ok', x: 0, y: 0, w: 50, h: 30, color: 'green', type: 'card', done: true, fontSize: 99, textAlign: 'diagonal' },
     ],
     edges: [
       edge('e-1', 'note-1', 'note-2'),
@@ -135,6 +139,8 @@ test('canvas normalization: junk rows dropped, bad edges removed, numeric clamps
   assert.strictEqual(n2.h, 40, 'small height floored');
   assert.strictEqual(n2.color, 'green');
   assert.strictEqual(n2.type, 'card');
+  assert.strictEqual(n2.fontSize, 36, 'font size capped at the supported maximum');
+  assert.strictEqual(n2.textAlign, undefined, 'invalid text alignment is omitted');
   const n1 = json.nodes.find((n: any) => n.id === 'note-1');
   assert.strictEqual(n1.x, 40, 'position preserved');
   const junk = json.nodes.find((n: any) => n.id !== 'note-1' && n.id !== 'note-2');
@@ -457,7 +463,7 @@ test('canvas ops: differential batch applies, broadcasts, is idempotent and caps
       ops: [
         { op: 'node-add', node: node('op-a', 'Alpha') },
         { op: 'node-add', node: node('op-b', 'Beta') },
-        { op: 'node-patch', id: 'op-a', patch: { x: 123, y: 45 } },
+        { op: 'node-patch', id: 'op-a', patch: { x: 123, y: 45, fontSize: 20, textAlign: 'center' } },
         { op: 'edge-add', edge: { id: 'op-e1', from: 'op-a', to: 'op-b' } },
       ],
     });
@@ -467,6 +473,8 @@ test('canvas ops: differential batch applies, broadcasts, is idempotent and caps
     assert.strictEqual(doc.nodes.length, 2, 'both nodes added');
     const a = doc.nodes.find((n: CanvasNode) => n.id === 'op-a');
     assert.strictEqual(a.x, 123, 'patch applied');
+    assert.strictEqual(a.fontSize, 20, 'font size patch applied');
+    assert.strictEqual(a.textAlign, 'center', 'text alignment patch applied');
     assert.strictEqual(doc.edges.length, 1, 'edge added');
 
     // 2) idempotent resend: same node-add + unknown-id patch + unknown kind

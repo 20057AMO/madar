@@ -28,6 +28,7 @@ const CANVAS_MIRROR_FILE = 'WSD_CANVAS.md';
 
 export type CanvasNodeType = 'note' | 'card';
 export type CanvasColor = 'yellow' | 'blue' | 'red' | 'green';
+export type CanvasTextAlign = 'left' | 'center' | 'right';
 
 export interface CanvasNode {
   id: string;
@@ -41,6 +42,8 @@ export interface CanvasNode {
   done?: boolean;
   /** Optional swimlane/section id this node belongs to. */
   section?: string;
+  fontSize?: number;
+  textAlign?: CanvasTextAlign;
 }
 
 export interface CanvasEdge {
@@ -85,6 +88,8 @@ export interface CanvasNodePatch {
   done?: boolean;
   /** null clears the section; a string assigns it. */
   section?: string | null;
+  fontSize?: number;
+  textAlign?: CanvasTextAlign;
 }
 
 export type CanvasOp =
@@ -123,6 +128,11 @@ function clampNum(v: unknown, floor: number, ceil: number, dflt: number): number
   return Math.max(floor, Math.min(ceil, n));
 }
 
+function normalizeFontSize(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.round(Math.max(10, Math.min(36, value)));
+}
+
 function nodeId(raw: unknown, fallback: string): string {
   return typeof raw === 'string' && /^[a-zA-Z0-9_-]{1,48}$/.test(raw) ? raw : fallback;
 }
@@ -146,6 +156,7 @@ function normalizeNode(raw: unknown): CanvasNode | null {
   const r = raw as Record<string, unknown>;
   const type: CanvasNodeType = r.type === 'card' ? 'card' : 'note';
   const section = typeof r.section === 'string' && /^[a-zA-Z0-9_-]{1,48}$/.test(r.section) ? r.section : undefined;
+  const fontSize = normalizeFontSize(r.fontSize);
   return {
     id: nodeId(r.id, freshId('n')),
     type,
@@ -157,6 +168,8 @@ function normalizeNode(raw: unknown): CanvasNode | null {
     color: COLORS.includes(r.color as CanvasColor) ? (r.color as CanvasColor) : 'yellow',
     done: r.done === true,
     section,
+    ...(fontSize !== undefined ? { fontSize } : {}),
+    ...(r.textAlign === 'left' || r.textAlign === 'center' || r.textAlign === 'right' ? { textAlign: r.textAlign } : {}),
   };
 }
 
@@ -328,6 +341,9 @@ export function applyCanvasOps(slug: unknown, rawOps: unknown): ProjectCanvas {
           if (p.h !== undefined) target.h = clampNum(p.h, 40, 900, target.h);
           if (p.color !== undefined && COLORS.includes(p.color as CanvasColor)) target.color = p.color as CanvasColor;
           if (p.done !== undefined) target.done = p.done === true;
+          const fontSize = normalizeFontSize(p.fontSize);
+          if (fontSize !== undefined) target.fontSize = fontSize;
+          if (p.textAlign === 'left' || p.textAlign === 'center' || p.textAlign === 'right') target.textAlign = p.textAlign;
           if (p.section !== undefined) {
             if (p.section === null) {
               delete target.section;

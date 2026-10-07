@@ -722,6 +722,7 @@ export const deleteReviewComment = (slug: string, threadId: string, commentId: s
 // ── Project canvas (visual planning) ────────────────────────────────────
 export type CanvasNodeType = 'note' | 'card';
 export type CanvasColor = 'yellow' | 'blue' | 'red' | 'green';
+export type CanvasTextAlign = 'left' | 'center' | 'right';
 export interface CanvasNode {
   id: string;
   type: CanvasNodeType;
@@ -733,6 +734,8 @@ export interface CanvasNode {
   color: CanvasColor;
   done?: boolean;
   section?: string;
+  fontSize?: number;
+  textAlign?: CanvasTextAlign;
 }
 export interface CanvasEdge {
   id: string;
