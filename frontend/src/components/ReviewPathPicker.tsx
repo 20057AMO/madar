@@ -265,7 +265,11 @@ export function ReviewPathPicker({
         class="btn-ghost sm"
         aria-label="Browse workspace files"
         aria-expanded={open}
-        aria-haspopup="listbox"
+        // No aria-haspopup: its enumerated values are menu/listbox/tree/grid/
+        // dialog/true only ("list" is invalid and per spec read as false), and
+        // this popup is none of those — it is a disclosure over a plain list of
+        // buttons. aria-expanded + aria-controls already carry the state and the
+        // target; claiming "menu" would promise menuitem semantics we do not use.
         aria-controls="review-path-picker-list"
         onClick={() => setOpen((o) => !o)}
         title="Browse workspace files"
@@ -277,7 +281,12 @@ export function ReviewPathPicker({
       {open && (
         <div
           id="review-path-picker-list"
-          role="listbox"
+          // Plain list semantics, NOT listbox: the popup owns <ul role="list">
+          // rows of real <button>s (roving arrows + Enter below). A listbox
+          // would demand option/aria-selected/aria-activedescendant children it
+          // never renders, so a screen reader heard an EMPTY listbox. `group`
+          // is the naming container for the popup itself.
+          role="group"
           aria-label="Browse workspace files"
           ref={popRef}
           onKeyDown={onKeyDown}

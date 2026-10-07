@@ -1879,6 +1879,25 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   // the row that took its place (the trigger button unmounts with its row).
   const pendingRowFocusRef = useRef<number | null>(null);
   const [listMsg, setListMsg] = useState('');
+  // aria-live only announces a node whose content CHANGED, so a second delete
+  // that yields the SAME sentence announced nothing (0 DOM mutations). Clear
+  // first, then set the message on the next macrotask — two renders, two
+  // announcements. A macrotask (setTimeout), not queueMicrotask: React/Preact
+  // batch those into one render, so the clear never reaches the DOM. Not rAF
+  // either: it never fires in a background tab, so the announcement would be
+  // lost there.
+  const listMsgTimerRef = useRef<number | null>(null);
+  const announceListMsg = (m: string) => {
+    if (listMsgTimerRef.current !== null) window.clearTimeout(listMsgTimerRef.current);
+    setListMsg('');
+    listMsgTimerRef.current = window.setTimeout(() => {
+      listMsgTimerRef.current = null;
+      setListMsg(m);
+    }, 60);
+  };
+  useEffect(() => () => {
+    if (listMsgTimerRef.current !== null) window.clearTimeout(listMsgTimerRef.current);
+  }, []);
 
   // Live mirrors for the window keydown handler — the effect's [preview] deps
   // would otherwise read stale state and either skip the unsaved-changes
@@ -2143,7 +2162,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
         setFileMsg(null);
       }
       pendingRowFocusRef.current = target.index;
-      setListMsg(
+      announceListMsg(
         res.type === 'link' ? t('files.removedLink') : res.type === 'dir' ? t('files.removedDir') : t('files.removedFile')
       );
       load(cwd);
@@ -2254,7 +2273,16 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
 
       <div class="sr-only" role="status" aria-live="polite">{listMsg}</div>
 
-      <div class="file-list" aria-busy={loading} ref={fileListRef} tabIndex={-1}>
+      {/* List semantics: role="list" only while rows exist, so the loading /
+          empty status blocks are NEVER list children (only .file-row elements
+          are listitems) and an empty workspace never ships a childless list. */}
+      <div
+        class="file-list"
+        role={entries.length > 0 ? 'list' : undefined}
+        aria-busy={loading}
+        ref={fileListRef}
+        tabIndex={-1}
+      >
         {loading && entries.length === 0 && (
           <div class="panel-muted" role="status">{t('files.loadingFiles')}</div>
         )}
@@ -2306,7 +2334,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
             }
           })();
           return (
-            <div class="file-row" key={e.path}>
+            <div class="file-row" role="listitem" key={e.path}>
               {nameCell}
               <span
                 class="file-size"
@@ -2328,7 +2356,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
               <div class="file-actions">
                 {e.type === 'file' && (
                   <>
-                    <button class="btn-ghost sm" onClick={() => openFile(e.path)}>{t('files.view')}</button>
+                    <button class="btn-ghost sm" aria-label={t('files.viewAria', { name: e.path })} onClick={() => openFile(e.path)}>{t('files.view')}</button>
                     <button class="btn-ghost sm" onClick={() => downloadFile(e.path)} title={t('files.downloadFile')} aria-label={t('files.downloadAria', { name: e.path })}>
                       <Download width={12} height={12} class="icon" />
                     </button>
@@ -2348,13 +2376,15 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
                   />
                 ) : (
                   !readOnly && (
-                    <button class="btn-ghost sm" onClick={() => startRename(e.path)}>{t('files.rename')}</button>
+                    <button class="btn-ghost sm" aria-label={t('files.renameBtnAria', { name: e.path })} onClick={() => startRename(e.path)}>{t('files.rename')}</button>
                   )
                 ))}
                 {!readOnly && (
                   // A link row has no focusable name, so its Delete button is the
-                  // row's focus-restore anchor (see the [entries] effect).
-                  <button class="btn-danger sm" data-file-row={e.type === 'link' ? e.path : undefined} onClick={() => remove(e.path)}>{t('files.delete')}</button>
+                  // row's focus-restore anchor (see the [entries] effect). The
+                  // aria-label names the target: a link row's ONLY control must
+                  // say which entry it destroys.
+                  <button class="btn-danger sm" aria-label={t('files.deleteBtnAria', { name: e.path })} data-file-row={e.type === 'link' ? e.path : undefined} onClick={() => remove(e.path)}>{t('files.delete')}</button>
                 )}
               </div>
             </div>
@@ -2425,6 +2455,7 @@ function FilesPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
             ) : editContent !== null && !preview.truncated ? (
               <textarea
                 class="file-editor mono scrollbar"
+                aria-label={t('files.editorAria', { name: previewName })}
                 value={editContent}
                 readOnly={readOnly}
                 onInput={(e: any) => setEditContent(e.target.value)}

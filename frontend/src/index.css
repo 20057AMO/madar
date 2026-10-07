@@ -1635,7 +1635,7 @@ textarea.agent-prompt-input {
 .ov-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ov-pending {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.72rem; color: var(--amber, #eab308); font-weight: 500;
+  font-size: 0.72rem; color: var(--yellow); font-weight: 500;
 }
 .ov-pending .icon { width: 13px; height: 13px; }
 /* stat card */

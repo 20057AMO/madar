@@ -421,7 +421,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           <span class="brand-tag">Developers Environment</span>
         </div>
       </div>
-      <nav class="sidebar-nav" onClick={onClose}>
+      <nav class="sidebar-nav" aria-label={t('misc.a11ySidebarNav')} onClick={onClose}>
         <div class="nav-group-label">{t('nav.groupWorkspace')}</div>
         <NavButton href="/" label={t('nav.dashboard')} icon={LayoutDashboard} />
         <NavButton href="/projects" label={t('nav.projects')} icon={FolderOpen} />
