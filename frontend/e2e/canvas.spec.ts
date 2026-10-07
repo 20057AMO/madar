@@ -113,6 +113,68 @@ test('canvas connect mode links the clicked target and persists the edge', async
       return canvas.edges;
     }).toEqual([expect.objectContaining({ from: 'source', to: 'target' })]);
 
+    const stressNodes = [
+      { id: 'source', type: 'note', text: 'Source', x: 40, y: 80, w: 220, h: 100, color: 'yellow' },
+      { id: 'target', type: 'note', text: 'Target', x: 420, y: 80, w: 220, h: 100, color: 'blue' },
+      ...Array.from({ length: 198 }, (_, i) => ({
+        id: `node-${i}`,
+        type: 'note',
+        text: `Stress node ${i}`,
+        x: 40 + (i % 10) * 260,
+        y: 260 + Math.floor(i / 10) * 160,
+        w: 220,
+        h: 100,
+        color: 'green',
+      })),
+    ];
+    const stressEdges = Array.from({ length: 399 }, (_, i) => {
+      const from = Math.floor(i / 2);
+      const to = (from + (i % 2) + 2) % stressNodes.length;
+      return { id: `stress-${i}`, from: stressNodes[from].id, to: stressNodes[to].id };
+    });
+    const denseBoard = await fetch(`${BASE}/api/projects/${slug}/canvas`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        version: 1,
+        nodes: stressNodes,
+        edges: [{ id: 'source-target', from: 'source', to: 'target' }, ...stressEdges],
+      }),
+    });
+    expect(denseBoard.status, 'seed a maximum-size canvas for the drag performance journey').toBe(200);
+    await page.reload();
+    await expect(page.locator('.cn-node')).toHaveCount(200);
+    await expect(page.locator('.cn-edge')).toHaveCount(400);
+    await page.getByRole('button', { name: /Reset view/ }).click();
+
+    const dragSource = page.locator('.cn-node[data-id="source"]');
+    const sourceBox = await dragSource.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    const dragStart = { x: sourceBox!.x + sourceBox!.width / 2, y: sourceBox!.y + sourceBox!.height / 2 };
+    const originalGeometry = await dragSource.evaluate((el) => ({
+      left: (el as HTMLElement).style.left,
+      top: (el as HTMLElement).style.top,
+    }));
+    const hitNodeId = await page.evaluate(({ x, y }) =>
+      document.elementFromPoint(x, y)?.closest('.cn-node')?.getAttribute('data-id') ?? null, dragStart);
+    expect(hitNodeId).toBe('source');
+    await page.mouse.move(dragStart.x, dragStart.y);
+    await page.mouse.down();
+    await expect(dragSource).toHaveClass(/cn-selected/);
+    await page.mouse.move(dragStart.x + 32, dragStart.y + 16, { steps: 4 });
+    await page.waitForTimeout(32);
+    await expect.poll(() => dragSource.evaluate((el) => (el as HTMLElement).style.transform))
+      .toContain('translate3d');
+    const draggingGeometry = await dragSource.evaluate((el) => ({
+      left: (el as HTMLElement).style.left,
+      top: (el as HTMLElement).style.top,
+    }));
+    expect(draggingGeometry).toEqual(originalGeometry);
+    await page.mouse.up();
+    await expect.poll(() => dragSource.evaluate((el) => (el as HTMLElement).style.left))
+      .not.toBe(originalGeometry.left);
+    await expect(dragSource).toHaveCSS('transform', 'none');
+
     const canvasWrap = page.locator('.canvas-wrap');
     await page.getByRole('button', { name: 'Fullscreen' }).click();
     await expect(canvasWrap).toHaveClass(/cn-fullscreen/);

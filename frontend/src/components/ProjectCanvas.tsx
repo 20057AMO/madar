@@ -373,6 +373,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const dragRef = useRef<null | {
     kind: 'node' | 'pan' | 'resize' | 'marquee';
     ids?: string[];
+    elements?: HTMLElement[];
     /** World positions of every dragged node at drag start. */
     startPos?: Record<string, { x: number; y: number }>;
     resize?: { id: string; w: number; h: number; pre: string };
@@ -394,6 +395,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     /** Pre-drag document snapshot — only appended to history if we moved. */
     pre?: string;
   }>(null);
+
+  useEffect(() => () => {
+    if (pointerFrameRef.current !== null) cancelAnimationFrame(pointerFrameRef.current);
+  }, []);
 
   // ── load ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -1030,7 +1035,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     setSelEdge(null);
     dragRef.current = {
       kind: 'resize',
-      resize: { id, w: node.w, h: node.h, pre: JSON.stringify(docRef.current) },
+      resize: { id, w: node.w, h: node.h, pre: '' },
       cX: e.clientX,
       cY: e.clientY,
       startX: node.w,
@@ -1419,6 +1424,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         dragRef.current = {
           kind: 'node',
           ids: [id],
+          elements: [nodeEl as HTMLElement],
           startPos: { [id]: { x: node.x, y: node.y } },
           cX: e.clientX,
           cY: e.clientY,
@@ -1426,7 +1432,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           startY: node.y,
           moved: false,
           connectDown: true,
-          pre: JSON.stringify(docRef.current),
           rect: cachedRect,
         };
         el.setPointerCapture(e.pointerId);
@@ -1457,20 +1462,27 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       if (e.button === 0) {
         // Build startPos for every node that will be dragged.
         const startPos: Record<string, { x: number; y: number }> = {};
+        const dragIdSet = new Set(dragIds);
+        const nodesById = new Map((docRef.current?.nodes ?? []).map((item) => [item.id, item] as const));
+        const elements: HTMLElement[] = [];
+        for (const element of el.querySelectorAll<HTMLElement>('.cn-node')) {
+          const elementId = element.dataset.id;
+          if (elementId && dragIdSet.has(elementId)) elements.push(element);
+        }
         for (const nid of dragIds) {
-          const n = docRef.current?.nodes.find((nn) => nn.id === nid);
+          const n = nodesById.get(nid);
           if (n) startPos[nid] = { x: n.x, y: n.y };
         }
         dragRef.current = {
           kind: 'node',
           ids: dragIds,
+          elements,
           startPos,
           cX: e.clientX,
           cY: e.clientY,
           startX: node.x,
           startY: node.y,
           moved: false,
-          pre: JSON.stringify(docRef.current),
           rect: cachedRect,
         };
         el.setPointerCapture(e.pointerId);
@@ -1546,6 +1558,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       const z = viewRef.current.z;
       dr.moved = true;
+      dr.resize.pre ||= JSON.stringify(docRef.current);
       const nw = clamp(dr.startX + dx / z, 60, 900);
       const nh = clamp(dr.startY + dy / z, 40, 900);
       const node = docRef.current?.nodes.find((n) => n.id === dr.resize!.id);
@@ -1560,20 +1573,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     } else if (dr.ids && dr.ids.length) {
       if (!dr.moved && Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
       const z = viewRef.current.z;
+      const firstMove = !dr.moved;
       dr.moved = true;
-      for (const id of dr.ids) {
-        const sp = dr.startPos?.[id];
-        const node = docRef.current?.nodes.find((n) => n.id === id);
-        if (!sp || !node) continue;
-        const nx = sp.x + dx / z;
-        const ny = sp.y + dy / z;
-        node.x = nx;
-        node.y = ny;
-        const el = containerRef.current?.querySelector<HTMLElement>(`.cn-node[data-id="${id}"]`);
-        if (el) {
-          el.style.left = `${nx}px`;
-          el.style.top = `${ny}px`;
-        }
+      dr.pre ||= JSON.stringify(docRef.current);
+      for (const element of dr.elements ?? []) {
+        if (firstMove) element.style.willChange = 'transform';
+        element.style.transform = `translate3d(${dx / z}px, ${dy / z}px, 0)`;
       }
     }
   };
@@ -1604,6 +1609,10 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     flushPointerMove();
     const dr = dragRef.current;
     dragRef.current = null;
+    for (const element of dr?.elements ?? []) {
+      element.style.transform = '';
+      element.style.willChange = '';
+    }
     // Release from the element the capture was SET on (the canvas root), not
     // from wherever the pointer ended up — and only if WE own this pointer id.
     try {
@@ -1675,18 +1684,21 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     }
     redoRef.current = [];
     setCanRedo(false);
+    const dx = (e.clientX - dr.cX) / viewRef.current.z;
+    const dy = (e.clientY - dr.cY) / viewRef.current.z;
     const next = {
       ...cur,
       nodes: cur.nodes.map((n) =>
-        dr!.ids!.includes(n.id)
-          ? { ...n, x: snapCoord(n.x), y: snapCoord(n.y) }
+        dr!.startPos?.[n.id]
+          ? {
+              ...n,
+              x: snapCoord(dr!.startPos![n.id].x + dx),
+              y: snapCoord(dr!.startPos![n.id].y + dy),
+            }
           : n
       ),
     };
 
-    useEffect(() => () => {
-      if (pointerFrameRef.current !== null) cancelAnimationFrame(pointerFrameRef.current);
-    }, []);
     docRef.current = next;
     setDoc(next);
     if (liveOpsRef.current) { queueOps(); flushOps(); setSaveState('saved'); }
@@ -1938,21 +1950,22 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   }
 
   const selected = selNode ? (doc?.nodes.find((n) => n.id === selNode) ?? null) : null;
-  const nodeById = (id: string) => doc?.nodes.find((n) => n.id === id);
+  const selectedNodeIds = new Set(selNodes);
 
   const renderEdges = () => {
     if (!doc) return null;
+    const nodesById = new Map(doc.nodes.map((node) => [node.id, node] as const));
     // Hide edges touching a collapsed section.
     const hidden = new Set(
       doc.nodes.filter((n) => n.section && collapsedSections.has(n.section)).map((n) => n.id)
     );
     const visible = doc.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to));
-    const src = connectFrom ? nodeById(connectFrom) : null;
+    const src = connectFrom ? nodesById.get(connectFrom) ?? null : null;
     if (!visible.length && !src) return null;
     // Pre-compute a world→SVG path for every edge between live nodes.
     const edgePath = (edge: CanvasEdge): string | null => {
-      const a = nodeById(edge.from);
-      const b = nodeById(edge.to);
+      const a = nodesById.get(edge.from);
+      const b = nodesById.get(edge.to);
       if (!a || !b) return null;
       const x1 = a.x + a.w / 2;
       const y1 = a.y + a.h / 2;
@@ -2396,7 +2409,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
           {renderEdges()}
           {doc?.nodes.map((n) => {
             if (n.section && collapsedSections.has(n.section)) return null;
-            const isSel = selNodes.includes(n.id);
+            const isSel = selectedNodeIds.has(n.id);
             const isEditing = editing === n.id;
             return (
               <div
