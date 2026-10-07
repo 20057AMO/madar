@@ -2593,7 +2593,7 @@ iframe[data-kbd-focus] {
   flex: 1;
   overflow: hidden;
   background:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.045) 1px, transparent 0) 0 0 / 24px 24px,
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.06) 1px, transparent 0) 0 0 / 24px 24px,
     var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2656,13 +2656,38 @@ iframe[data-kbd-focus] {
   bottom: clamp(18px, 2.5vw, 34px);
 }
 @media (max-width: 700px) {
+  .cn-sections-bar {
+    align-items: flex-start;
+    gap: 5px;
+  }
+  .cn-sections-heading {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .cn-sections-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+  .cn-section-chip,
+  .cn-section-empty-action,
+  .cn-unassigned-chip {
+    flex: 0 0 auto;
+  }
+  .cn-section-toggle,
+  .cn-section-del {
+    width: 30px;
+    height: 30px;
+  }
+  .cn-section-name { max-width: 150px; }
   .cn-fullscreen .cn-toolbar {
     gap: 4px;
     padding: 7px;
   }
   .cn-fullscreen .cn-tb-group {
-    padding-right: 4px;
-    margin-right: 0;
+    padding-inline-end: 4px;
+    margin-inline-end: 0;
   }
   .cn-fullscreen .cn-save-state {
     margin-inline-start: auto;
@@ -2713,20 +2738,21 @@ iframe[data-kbd-focus] {
 .cn-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
-  background: var(--panel);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 94%, var(--blue) 6%), var(--panel));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px 10px;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.12);
 }
 .cn-tb-group {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-right: 8px;
-  margin-right: 2px;
-  border-right: 1px solid var(--border-2);
+  padding-inline-end: 8px;
+  margin-inline-end: 0;
+  border-inline-end: 1px solid var(--border-2);
 }
 .cn-tb-group:last-child { border-right: none; }
 .cn-tb-spacer { flex: 1; }
@@ -2734,7 +2760,10 @@ iframe[data-kbd-focus] {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 9px;
+  min-width: 34px;
+  min-height: 34px;
+  justify-content: center;
+  padding: 5px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
@@ -2743,11 +2772,11 @@ iframe[data-kbd-focus] {
   cursor: pointer;
   transition: background 0.14s, color 0.14s, border-color 0.14s;
 }
-.cn-tb-btn:hover { background: var(--bg-3); color: var(--text); }
+.cn-tb-btn:hover { background: var(--bg-3); color: var(--text); border-color: var(--border-2); }
 .cn-tb-btn.cn-active {
-  background: var(--bg-3);
-  color: var(--text);
-  border-color: var(--border-2);
+  background: color-mix(in srgb, var(--blue) 14%, var(--bg-3));
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 35%, var(--border-2));
 }
 .cn-tb-btn:disabled { opacity: 0.35; pointer-events: none; }
 .cn-tb-hint { font-size: 0.72rem; color: var(--text-3); }
@@ -2781,18 +2810,53 @@ iframe[data-kbd-focus] {
 }
 .cn-sections-bar {
   display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg-2));
+}
+.cn-sections-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  color: var(--text-2);
+  font-size: 0.72rem;
+}
+.cn-sections-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 600;
+}
+.cn-sections-title .icon { color: var(--blue); }
+.cn-sections-total {
+  color: var(--text-3);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+.cn-sections-list {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 6px 0 4px;
+  min-width: 0;
 }
 .cn-section-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 7px 2px 3px;
+  min-height: 30px;
+  padding: 2px 7px 2px 4px;
   border-radius: 999px;
   font-size: 0.78rem;
-  background: rgba(128, 128, 128, 0.12);
+  background: color-mix(in srgb, var(--panel-2) 82%, transparent);
   border: 1px solid transparent;
 }
 .cn-section-chip.c-yellow { border-color: rgba(250, 204, 21, 0.45); }
@@ -2806,8 +2870,13 @@ iframe[data-kbd-focus] {
   color: var(--text-2);
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
   padding: 0;
 }
+.cn-section-toggle:hover { background: var(--bg-3); color: var(--text); }
 .cn-section-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-section-count {
   font-size: 0.7rem;
@@ -2823,10 +2892,49 @@ iframe[data-kbd-focus] {
   color: var(--text-3);
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
   padding: 0;
 }
-.cn-section-del:hover { color: var(--danger); }
+.cn-section-del:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .cn-section-add { display: inline-flex; align-items: center; gap: 4px; }
+.cn-unassigned-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--bg-3) 75%, transparent);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+.cn-sections-empty {
+  color: var(--text-3);
+  font-size: 0.74rem;
+}
+.cn-section-empty-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px dashed var(--border-2);
+  border-radius: 999px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--bg-3) 65%, transparent);
+  font-size: 0.74rem;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.cn-section-empty-action:hover {
+  border-color: var(--blue);
+  color: var(--text);
+  background: color-mix(in srgb, var(--blue) 10%, var(--bg-3));
+}
 .cn-section-input {
   background: var(--bg);
   color: var(--text-1);

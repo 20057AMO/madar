@@ -36,6 +36,17 @@ test('canvas section creation works with a mouse click and persists', async ({ p
   });
   expect(created.status, 'create a temporary project for the UI journey').toBe(201);
   try {
+    const seeded = await fetch(`${BASE}/api/projects/${slug}/canvas`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        version: 1,
+        nodes: [{ id: 'loose-note', type: 'note', text: 'Loose note', x: 40, y: 80, w: 220, h: 100, color: 'yellow' }],
+        edges: [],
+      }),
+    });
+    expect(seeded.status, 'seed one unassigned note').toBe(200);
+
     await page.addInitScript((value) => {
       localStorage.setItem('wsd.token', value);
       localStorage.setItem('wsd.lang', 'en');
@@ -43,16 +54,25 @@ test('canvas section creation works with a mouse click and persists', async ({ p
     await page.goto(`${BASE}/#/project/${slug}?tab=canvas`);
 
     await page.getByRole('heading', { name: /Planning canvas/ }).waitFor({ state: 'visible' });
-    await page.getByRole('button', { name: 'Add a section (swimlane)' }).click();
+    const sections = page.getByRole('group', { name: 'Board sections' });
+    await expect(sections).toBeVisible();
+    await expect(sections.getByText('1 unassigned')).toBeVisible();
+    await sections.getByRole('button', { name: 'Add your first section' }).click();
     await page.getByRole('textbox', { name: 'New section name' }).fill('Section from user test');
     await page.getByRole('button', { name: 'Create section' }).click();
 
     await expect(page.getByText('Section from user test', { exact: true })).toBeVisible();
+    await expect(sections.locator('.cn-section-count')).toHaveText('0');
+    await expect(sections.getByText('1 unassigned')).toBeVisible();
     await expect.poll(async () => {
       const response = await fetch(`${BASE}/api/projects/${slug}/canvas`, { headers });
       const canvas = await response.json();
       return canvas.sections?.map((section: { name: string }) => section.name) ?? [];
     }).toContain('Section from user test');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(sections).toBeVisible();
+    await expect(sections.getByText('Section from user test', { exact: true })).toBeVisible();
   } finally {
     await fetch(`${BASE}/api/projects/${slug}`, { method: 'DELETE', headers });
   }

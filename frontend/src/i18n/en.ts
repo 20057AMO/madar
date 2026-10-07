@@ -581,6 +581,12 @@ export const en = {
     saveFailed: 'Save failed — {error}',
     saveRetry: 'Save again',
     // Sections bar
+    sections: 'Board sections',
+    sectionsCount: '{count} sections',
+    sectionsEmpty: 'Group related notes into sections to keep the board organized.',
+    sectionAddFirst: 'Add your first section',
+    sectionSummary: '{name} · {count} nodes',
+    unassignedCount: '{count} unassigned',
     sectionExpand: 'Expand section',
     sectionCollapse: 'Collapse section',
     sectionDelete: 'Delete section {name}',

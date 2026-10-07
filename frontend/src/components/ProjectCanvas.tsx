@@ -2038,6 +2038,17 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     );
   };
 
+  const sectionCounts = new Map<string, number>();
+  const sectionIds = new Set((doc?.sections ?? []).map((section) => section.id));
+  let unassignedCount = 0;
+  for (const node of doc?.nodes ?? []) {
+    if (node.section && sectionIds.has(node.section)) {
+      sectionCounts.set(node.section, (sectionCounts.get(node.section) ?? 0) + 1);
+    } else {
+      unassignedCount++;
+    }
+  }
+
   return (
     <div class={`canvas-wrap ${isFullscreen ? 'cn-fullscreen' : ''}`} ref={wrapRef}>
       <h2 class="panel-title" style="display:flex;align-items:center;gap:6px">
@@ -2152,50 +2163,67 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
         </div>
       </div>
 
-      {/* Sections (swimlanes) bar */}
-      {(doc?.sections?.length || addSectionOpen) && (
-        <div class="cn-sections-bar">
-          {doc?.sections?.map((s) => {
-            const collapsed = collapsedSections.has(s.id);
-            const count = doc.nodes.filter((n) => n.section === s.id).length;
-            return (
-              <span key={s.id} class={`cn-section-chip c-${s.color}`}>
-                <button class="cn-section-toggle" aria-label={collapsed ? t('canvas.sectionExpand') : t('canvas.sectionCollapse')} onClick={() => toggleSection(s.id)}>
-                  {collapsed ? <ChevronRight width={12} height={12} /> : <ChevronDown width={12} height={12} />}
-                </button>
-                <span class="cn-section-name">{s.name}</span>
-                <span class="cn-section-count">{count}</span>
-                {!readOnly && (
-                  <button class="cn-section-del" aria-label={t('canvas.sectionDelete', { name: s.name })} onClick={() => setConfirmDelSection(s.id)}>
-                    <X width={12} height={12} />
+      {doc && (
+        <div class="cn-sections-bar" role="group" aria-label={t('canvas.sections')}>
+          <div class="cn-sections-heading">
+            <span class="cn-sections-title"><Rows3 width={14} height={14} />{t('canvas.sections')}</span>
+            <span class="cn-sections-total">{t('canvas.sectionsCount', { count: doc.sections?.length ?? 0 })}</span>
+          </div>
+          <div class="cn-sections-list">
+            {doc.sections?.map((s) => {
+              const collapsed = collapsedSections.has(s.id);
+              const count = sectionCounts.get(s.id) ?? 0;
+              return (
+                <span key={s.id} class={`cn-section-chip c-${s.color}`} title={t('canvas.sectionSummary', { name: s.name, count })}>
+                  <button class="cn-section-toggle" aria-label={collapsed ? t('canvas.sectionExpand') : t('canvas.sectionCollapse')} onClick={() => toggleSection(s.id)}>
+                    {collapsed ? <ChevronRight width={12} height={12} /> : <ChevronDown width={12} height={12} />}
                   </button>
-                )}
+                  <span class="cn-section-name">{s.name}</span>
+                  <span class="cn-section-count">{count}</span>
+                  {!readOnly && (
+                    <button class="cn-section-del" aria-label={t('canvas.sectionDelete', { name: s.name })} onClick={() => setConfirmDelSection(s.id)}>
+                      <X width={12} height={12} />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+            {unassignedCount > 0 && (
+              <span class="cn-unassigned-chip">{t('canvas.unassignedCount', { count: unassignedCount })}</span>
+            )}
+            {!doc.sections?.length && !addSectionOpen && (
+              readOnly
+                ? <span class="cn-sections-empty">{t('canvas.sectionsEmpty')}</span>
+                : (
+                  <button class="cn-section-empty-action" onClick={() => setAddSectionOpen(true)}>
+                    <Plus width={14} height={14} />{t('canvas.sectionAddFirst')}
+                  </button>
+                )
+            )}
+            {addSectionOpen && (
+              <span class="cn-section-add">
+                <input
+                  autoFocus
+                  class="cn-section-input"
+                  placeholder={t('canvas.sectionNamePlaceholder')}
+                  aria-label={t('canvas.sectionNameAria')}
+                  onKeyDown={(e: any) => {
+                    if (e.key === 'Enter') addSection(e.currentTarget.value);
+                    if (e.key === 'Escape') setAddSectionOpen(false);
+                  }}
+                  onBlur={(e: any) => {
+                    if (!e.currentTarget.parentElement?.contains(e.relatedTarget)) setAddSectionOpen(false);
+                  }}
+                />
+                <button class="cn-section-ok" aria-label={t('canvas.sectionCreate')} onClick={(e) => {
+                  const inp = (e.currentTarget.parentElement as HTMLElement).querySelector('.cn-section-input') as HTMLInputElement;
+                  if (inp) addSection(inp.value);
+                }}>
+                  <Plus width={14} height={14} />
+                </button>
               </span>
-            );
-          })}
-          {addSectionOpen && (
-            <span class="cn-section-add">
-              <input
-                autoFocus
-                class="cn-section-input"
-                placeholder={t('canvas.sectionNamePlaceholder')}
-                aria-label={t('canvas.sectionNameAria')}
-                onKeyDown={(e: any) => {
-                  if (e.key === 'Enter') addSection(e.currentTarget.value);
-                  if (e.key === 'Escape') setAddSectionOpen(false);
-                }}
-                onBlur={(e: any) => {
-                  if (!e.currentTarget.parentElement?.contains(e.relatedTarget)) setAddSectionOpen(false);
-                }}
-              />
-              <button class="cn-section-ok" aria-label={t('canvas.sectionCreate')} onClick={(e) => {
-                const inp = (e.currentTarget.parentElement as HTMLElement).querySelector('.cn-section-input') as HTMLInputElement;
-                if (inp) addSection(inp.value);
-              }}>
-                <Plus width={14} height={14} />
-              </button>
-            </span>
-          )}
+            )}
+          </div>
         </div>
       )}
 
