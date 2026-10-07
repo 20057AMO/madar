@@ -60,6 +60,11 @@ test('canvas section creation works with a mouse click and persists', async ({ p
     await page.getByRole('heading', { name: /Planning canvas/ }).waitFor({ state: 'visible' });
     const sections = page.getByRole('group', { name: 'Board sections' });
     await expect(sections).toBeVisible();
+    await page.getByRole('button', { name: 'Canvas shortcuts' }).click();
+    const shortcuts = page.getByRole('group', { name: 'Canvas shortcuts' });
+    await expect(shortcuts.getByText('Find nodes')).toBeVisible();
+    await expect(shortcuts.getByText('Add a sticky note')).toBeVisible();
+    await page.getByRole('button', { name: 'Canvas shortcuts' }).click();
     await expect(sections.getByText('3 unassigned')).toBeVisible();
     await sections.getByRole('button', { name: 'Add your first section' }).click();
     await page.getByRole('textbox', { name: 'New section name' }).fill('Section from user test');

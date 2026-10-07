@@ -31,6 +31,7 @@ import {
   ClipboardList,
   Globe,
   Search,
+  Keyboard,
 } from 'lucide-preact';
 import {
   getProjectCanvas,
@@ -2165,6 +2166,30 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             </span>
           )}
         </div>
+        <details class="cn-shortcuts">
+          <summary role="button" class="cn-tb-btn" title={t('canvas.shortcuts')} aria-label={t('canvas.shortcuts')}>
+            <Keyboard width={15} height={15} />
+          </summary>
+          <div class="cn-shortcuts-popover" role="group" aria-label={t('canvas.shortcuts')}>
+            <strong>{t('canvas.shortcuts')}</strong>
+            <dl>
+              <div><dt><kbd dir="ltr">Ctrl / ⌘ + F</kbd></dt><dd>{t('canvas.shortcutSearch')}</dd></div>
+              {!readOnly && (
+                <>
+                  <div><dt><kbd dir="ltr">Ctrl / ⌘ + Z</kbd></dt><dd>{t('canvas.shortcutUndo')}</dd></div>
+                  <div><dt><kbd dir="ltr">Ctrl / ⌘ + Shift + Z</kbd></dt><dd>{t('canvas.shortcutRedo')}</dd></div>
+                  <div><dt><kbd dir="ltr">Ctrl / ⌘ + S</kbd></dt><dd>{t('canvas.shortcutSave')}</dd></div>
+                  <div><dt><kbd dir="ltr">Ctrl / ⌘ + A</kbd></dt><dd>{t('canvas.shortcutSelectAll')}</dd></div>
+                  <div><dt><kbd dir="ltr">N</kbd></dt><dd>{t('canvas.shortcutNewNote')}</dd></div>
+                  <div><dt><kbd dir="ltr">C</kbd></dt><dd>{t('canvas.shortcutNewCard')}</dd></div>
+                  <div><dt><kbd dir="ltr">L</kbd></dt><dd>{t('canvas.shortcutConnect')}</dd></div>
+                  <div><dt><kbd dir="ltr">← ↑ → ↓</kbd></dt><dd>{t('canvas.shortcutMove')}</dd></div>
+                  <div><dt><kbd dir="ltr">Shift + Arrow</kbd></dt><dd>{t('canvas.shortcutMoveFast')}</dd></div>
+                </>
+              )}
+            </dl>
+          </div>
+        </details>
         <div class="cn-tb-spacer" />
         <div class="cn-save-state" role="status">
           {remoteUpdated && (
