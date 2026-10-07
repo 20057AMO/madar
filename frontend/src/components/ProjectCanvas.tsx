@@ -838,6 +838,22 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     );
   };
 
+  const patchSelectedText = (patch: Pick<CanvasNode, 'fontSize' | 'textAlign'>) => {
+    const ids = new Set(selNodes);
+    const current = docRef.current;
+    if (!current || !ids.size) return;
+    const targets = current.nodes.filter((node) => ids.has(node.id));
+    const changesSelection = targets.some((node) =>
+      (patch.fontSize !== undefined && node.fontSize !== patch.fontSize) ||
+      (patch.textAlign !== undefined && node.textAlign !== patch.textAlign)
+    );
+    if (!changesSelection) return;
+    mutate((d) => ({
+      ...d,
+      nodes: d.nodes.map((node) => ids.has(node.id) ? { ...node, ...patch } : node),
+    }));
+  };
+
   const setColor = (nodeId: string, color: CanvasColor) => patchNode(nodeId, { color });
 
   const addNode = (type: CanvasNodeType, atWorld?: { x: number; y: number }) => {
@@ -2002,6 +2018,16 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
 
   const selected = selNode ? (doc?.nodes.find((n) => n.id === selNode) ?? null) : null;
   const selectedNodeIds = new Set(selNodes);
+  const selectedNodes = doc?.nodes.filter((node) => selectedNodeIds.has(node.id)) ?? [];
+  const selectedFontSize = selectedNodes.length && selectedNodes.every((node) => (node.fontSize ?? 13) === (selectedNodes[0].fontSize ?? 13))
+    ? selectedNodes[0].fontSize ?? 13
+    : null;
+  const selectedTextAlign = selectedNodes.length && selectedNodes.every((node) =>
+    (node.textAlign ?? (document.documentElement.dir === 'rtl' ? 'right' : 'left')) ===
+    (selectedNodes[0].textAlign ?? (document.documentElement.dir === 'rtl' ? 'right' : 'left'))
+  )
+    ? selectedNodes[0].textAlign ?? (document.documentElement.dir === 'rtl' ? 'right' : 'left')
+    : null;
 
   const renderEdges = () => {
     if (!doc) return null;
@@ -2099,7 +2125,6 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const activeSearchIndex = searchResults.length && searchIndex >= 0 ? searchIndex % searchResults.length : -1;
   const activeSearchId = activeSearchIndex >= 0 ? searchResults[activeSearchIndex]?.id ?? null : null;
   const searchMatchIds = new Set(searchResults.map((node) => node.id));
-  const selectedTextAlign = selected?.textAlign ?? (document.documentElement.dir === 'rtl' ? 'right' : 'left');
   const minimapNodes = doc?.nodes ?? [];
   const minimapExtent = minimapNodes.reduce(
     (bounds, node) => ({
@@ -2422,11 +2447,12 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
             class="cn-format-select"
             aria-label={t('canvas.fontSize')}
             title={t('canvas.fontSize')}
-            value={selected.fontSize ?? 13}
+            value={selectedFontSize ?? 'mixed'}
             onPointerDown={(e: any) => e.stopPropagation()}
             onClick={(e: any) => e.stopPropagation()}
-            onChange={(e: any) => patchNode(selected.id, { fontSize: Number(e.currentTarget.value) })}
+            onChange={(e: any) => patchSelectedText({ fontSize: Number(e.currentTarget.value) })}
           >
+            {selectedFontSize === null && <option value="mixed" disabled>{t('canvas.formatMixed')}</option>}
             {CANVAS_FONT_SIZES.map((size) => <option key={size} value={size}>{size}px</option>)}
           </select>
           <div class="cn-text-align" role="group" aria-label={t('canvas.textAlignment')}>
@@ -2442,7 +2468,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                 aria-label={label}
                 title={label}
                 aria-pressed={selectedTextAlign === align}
-                onClick={() => patchNode(selected.id, { textAlign: align })}
+                onClick={() => patchSelectedText({ textAlign: align })}
               >
                 <Icon width={14} height={14} />
               </button>

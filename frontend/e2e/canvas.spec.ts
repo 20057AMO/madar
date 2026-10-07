@@ -77,6 +77,38 @@ test('canvas section creation works with a mouse click and persists', async ({ p
     await expect(formattedEditor).toHaveCSS('font-size', '24px');
     await expect(formattedEditor).toHaveCSS('text-align', 'right');
     await formattedEditor.press('Escape');
+    const otherFormattedNode = page.locator('.cn-node[data-id="match-one"]');
+    await otherFormattedNode.click({ modifiers: ['Shift'] });
+    const fontSizeControl = page.getByRole('combobox', { name: 'Text size' });
+    await expect(fontSizeControl).toHaveValue('mixed');
+    await expect(page.getByRole('button', { name: 'Align text left' })).toHaveAttribute('aria-pressed', 'false');
+    await fontSizeControl.selectOption('20');
+    await expect(formattedNode).toHaveCSS('font-size', '20px');
+    await expect(otherFormattedNode).toHaveCSS('font-size', '20px');
+    await expect(page.locator('.cn-node[data-id="loose-note"]')).toHaveCSS('font-size', '13px');
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(formattedNode).toHaveCSS('font-size', '24px');
+    await expect(otherFormattedNode).toHaveCSS('font-size', '13px');
+    await page.getByRole('button', { name: 'Redo' }).click();
+    await expect(formattedNode).toHaveCSS('font-size', '20px');
+    await expect(otherFormattedNode).toHaveCSS('font-size', '20px');
+    await page.getByRole('button', { name: 'Align text center' }).click();
+    await expect(formattedNode).toHaveCSS('text-align', 'center');
+    await expect(otherFormattedNode).toHaveCSS('text-align', 'center');
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(formattedNode).toHaveCSS('text-align', 'right');
+    await expect(otherFormattedNode).toHaveCSS('text-align', 'start');
+    await page.getByRole('button', { name: 'Redo' }).click();
+    await expect(formattedNode).toHaveCSS('text-align', 'center');
+    await expect(otherFormattedNode).toHaveCSS('text-align', 'center');
+    await expect.poll(async () => {
+      const response = await fetch(`${BASE}/api/projects/${slug}/canvas`, { headers });
+      const canvas = await response.json();
+      return canvas.nodes
+        .filter((node: { id: string }) => node.id === 'match-one' || node.id === 'match-two')
+        .map((node: { fontSize?: number; textAlign?: string }) => ({ fontSize: node.fontSize, textAlign: node.textAlign }))
+        .sort((a: { fontSize?: number }, b: { fontSize?: number }) => (a.fontSize ?? 0) - (b.fontSize ?? 0));
+    }).toEqual([{ fontSize: 20, textAlign: 'center' }, { fontSize: 20, textAlign: 'center' }]);
     const minimapToggle = page.getByRole('button', { name: 'Toggle board minimap' });
     await expect(minimapToggle).toBeVisible();
     await minimapToggle.click();

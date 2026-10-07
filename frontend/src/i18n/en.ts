@@ -627,6 +627,7 @@ export const en = {
     duplicate: 'Duplicate (Ctrl+D)',
     duplicateAria: 'Duplicate selected',
     fontSize: 'Text size',
+    formatMixed: 'Mixed',
     textAlignment: 'Text alignment',
     alignLeft: 'Align text left',
     alignCenter: 'Align text center',

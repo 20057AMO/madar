@@ -624,6 +624,7 @@ export const ar: Dict = {
     duplicate: 'تكرار (Ctrl+D)',
     duplicateAria: 'تكرار المحدد',
     fontSize: 'حجم النص',
+    formatMixed: 'متفاوت',
     textAlignment: 'محاذاة النص',
     alignLeft: 'محاذاة النص لليسار',
     alignCenter: 'توسيط النص',
