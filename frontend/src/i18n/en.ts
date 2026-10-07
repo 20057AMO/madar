@@ -556,11 +556,11 @@ export const en = {
   },
   canvas: {
     title: 'Planning canvas',
-    titleHint: '— drag nodes, double-click to edit, Ctrl+Z to undo',
+    titleHint: '— drag nodes · trackpad scroll to pan · pinch to zoom · Ctrl+Z to undo',
     readOnlyChip: 'Read-only',
     readOnlyChipTitle: 'Your role can only view this canvas',
     // Toolbar
-    zoomOut: 'Zoom out (scroll to zoom)',
+    zoomOut: 'Zoom out (mouse wheel or trackpad pinch)',
     zoomIn: 'Zoom in',
     fitAll: 'Fit all nodes',
     fitSelection: 'Fit selected nodes',

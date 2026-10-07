@@ -360,6 +360,16 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
   const connectEndRef = useRef<{ x: number; y: number } | null>(null);
   const pointerFrameRef = useRef<number | null>(null);
   const pendingPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const wheelFrameRef = useRef<number | null>(null);
+  const wheelCommitTimerRef = useRef<number | null>(null);
+  const pendingWheelRef = useRef<{
+    mode: 'pan' | 'zoom';
+    deltaX: number;
+    deltaY: number;
+    clientX: number;
+    clientY: number;
+    sensitivity: number;
+  } | null>(null);
   const dragRef = useRef<null | {
     kind: 'node' | 'pan' | 'resize' | 'marquee';
     ids?: string[];
@@ -1120,8 +1130,8 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     const v = viewRef.current;
     const nz = clamp(v.z * factor, MIN_Z, MAX_Z);
     const r = containerRef.current?.getBoundingClientRect();
-    const sx = anchor?.sx ?? (r ? r.width / 2 : 0);
-    const sy = anchor?.sy ?? (r ? r.height / 2 : 0);
+    const sx = anchor && r ? anchor.sx - r.left : r ? r.width / 2 : 0;
+    const sy = anchor && r ? anchor.sy - r.top : r ? r.height / 2 : 0;
     setViewState({
       z: nz,
       x: sx - ((sx - v.x) * nz) / v.z,
@@ -1160,23 +1170,92 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
     setConnectFrom(id);
   };
 
-  // ── wheel zoom (non-passive so we can preventDefault) ───────
+  // ── wheel pan / zoom (non-passive so we can preventDefault) ──
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const flushWheel = () => {
+      const pending = pendingWheelRef.current;
+      if (!pending) return;
+      pendingWheelRef.current = null;
+      if (pending.mode === 'pan') {
+        const next = {
+          ...viewRef.current,
+          x: viewRef.current.x - pending.deltaX,
+          y: viewRef.current.y - pending.deltaY,
+        };
+        viewRef.current = next;
+        writeCameraTransform(next);
+      } else {
+        const v = viewRef.current;
+        const rect = el.getBoundingClientRect();
+        const sx = pending.clientX - rect.left;
+        const sy = pending.clientY - rect.top;
+        const nz = clamp(v.z * Math.exp(-pending.deltaY * pending.sensitivity), MIN_Z, MAX_Z);
+        const next = {
+          z: nz,
+          x: sx - ((sx - v.x) * nz) / v.z,
+          y: sy - ((sy - v.y) * nz) / v.z,
+        };
+        viewRef.current = next;
+        writeCameraTransform(next);
+      }
+      if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
+      wheelCommitTimerRef.current = window.setTimeout(() => {
+        wheelCommitTimerRef.current = null;
+        setView(viewRef.current);
+        persistView();
+      }, 140);
+    };
     const onWheel = (e: WheelEvent) => {
       if ((e.target as HTMLElement).closest?.('textarea')) return;
       e.preventDefault();
-      // Trackpad pinch arrives as ctrl+wheel — zoom with it too (exponential
-      // mapping so small finger gestures feel proportional).
-      if (e.ctrlKey) {
-        zoomBy(clamp(Math.exp(-e.deltaY * 0.01), 0.5, 1.5), { sx: e.clientX, sy: e.clientY });
-        return;
+      // Trackpad pinch sets ctrlKey. Pixel-only discrete notches cover browsers
+      // that report a traditional mouse wheel in pixels instead of lines.
+      const pixelMouseNotch = e.deltaX === 0
+        && Math.abs(e.deltaY) >= 100
+        && (Math.abs(e.deltaY) % 100 === 0 || Math.abs(e.deltaY) % 120 === 0);
+      const mode = e.ctrlKey || e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL || pixelMouseNotch ? 'zoom' : 'pan';
+      const sensitivity = e.ctrlKey ? 0.01 : 0.001;
+      const deltaScale = e.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 40
+        : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? el.clientHeight : 1;
+      let pending = pendingWheelRef.current;
+      if (pending && pending.mode !== mode) {
+        flushWheel();
+        pending = null;
       }
-      zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, { sx: e.clientX, sy: e.clientY });
+      if (!pending) {
+        pending = {
+          mode,
+          deltaX: 0,
+          deltaY: 0,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          sensitivity,
+        };
+        pendingWheelRef.current = pending;
+      }
+      pending.deltaX += e.deltaX * deltaScale;
+      pending.deltaY += e.deltaY * deltaScale;
+      pending.clientX = e.clientX;
+      pending.clientY = e.clientY;
+      if (wheelFrameRef.current === null) {
+        wheelFrameRef.current = requestAnimationFrame(() => {
+          wheelFrameRef.current = null;
+          flushWheel();
+        });
+      }
     };
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      if (wheelFrameRef.current !== null) cancelAnimationFrame(wheelFrameRef.current);
+      if (wheelCommitTimerRef.current !== null) window.clearTimeout(wheelCommitTimerRef.current);
+      wheelFrameRef.current = null;
+      wheelCommitTimerRef.current = null;
+      pendingWheelRef.current = null;
+    };
   }, []);
 
   // ── global keyboard (undo/redo/delete/shortcuts) ────────────

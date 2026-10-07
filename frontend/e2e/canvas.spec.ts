@@ -124,10 +124,62 @@ test('canvas connect mode links the clicked target and persists the edge', async
     expect(fullscreenBox?.height).toBeGreaterThanOrEqual((viewport?.height ?? 0) * 0.95);
     expect(boardBox?.height).toBeGreaterThan(400);
 
+    const canvasRoot = page.locator('.canvas-root');
+    const initialTrackpadZoom = await page.locator('.cn-zoom-btn').innerText();
+    const beforeTrackpadPan = await page.locator('.cn-world').evaluate((el) => (el as HTMLElement).style.transform);
+    await canvasRoot.evaluate((el) => {
+      el.dispatchEvent(new WheelEvent('wheel', {
+        deltaX: 36,
+        deltaY: 72,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    await expect.poll(() =>
+      page.locator('.cn-world').evaluate((el) => (el as HTMLElement).style.transform)
+    ).not.toBe(beforeTrackpadPan);
+    await expect(page.locator('.cn-zoom-btn')).toHaveText(initialTrackpadZoom);
+
+    await canvasRoot.evaluate((el) => {
+      el.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: -30,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        ctrlKey: true,
+        clientX: 400,
+        clientY: 300,
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    await expect.poll(() => page.locator('.cn-zoom-btn').innerText()).not.toBe(initialTrackpadZoom);
+
+    const beforeMouseWheelZoom = await page.locator('.cn-zoom-btn').innerText();
+    await canvasRoot.evaluate((el) => {
+      el.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: 1,
+        deltaMode: WheelEvent.DOM_DELTA_LINE,
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    await expect.poll(() => page.locator('.cn-zoom-btn').innerText()).not.toBe(beforeMouseWheelZoom);
+
+    const beforePixelMouseWheelZoom = await page.locator('.cn-zoom-btn').innerText();
+    await canvasRoot.evaluate((el) => {
+      el.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: -100,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    await expect.poll(() => page.locator('.cn-zoom-btn').innerText()).not.toBe(beforePixelMouseWheelZoom);
+
     const beforePan = await page.locator('.cn-world').evaluate((el) => (el as HTMLElement).style.transform);
     const start = { x: (boardBox?.x ?? 0) + 32, y: (boardBox?.y ?? 0) + 32 };
     await page.keyboard.down('Space');
-    await expect(page.locator('.canvas-root')).toHaveClass(/cn-panning/);
+    await expect(canvasRoot).toHaveClass(/cn-panning/);
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();
     await page.mouse.move(start.x + 80, start.y + 50, { steps: 8 });
