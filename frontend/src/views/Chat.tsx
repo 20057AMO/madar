@@ -661,6 +661,7 @@ export function Chat() {
   const [canWrite, setCanWrite] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchQ, setSearchQ] = useState('');
+  const [searchedQuery, setSearchedQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TeamChatMessage[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -1011,6 +1012,11 @@ export function Chat() {
   };
   const sock = useTeamChatSocket(onEvent);
   const connTitle = sock.status === 'open' ? 'Connected' : sock.status === 'reconnecting' ? 'Reconnecting…' : 'Offline';
+  const connectionLabel = sock.status === 'open'
+    ? t2('متصل', 'Connected')
+    : sock.status === 'reconnecting'
+      ? t2('جارٍ إعادة الاتصال', 'Reconnecting')
+      : t2('غير متصل', 'Offline');
 
   // ── initial load
   useEffect(() => {
@@ -1056,6 +1062,7 @@ export function Chat() {
     setSettingsOpen(false);
     setSearchResults(null);
     setSearchQ('');
+    setSearchedQuery('');
     setMessages([]);
     mdCache.current.clear();
     setComposer({ text: '', attachments: [] });
@@ -1621,10 +1628,12 @@ export function Chat() {
 
   const doSearch = async () => {
     if (!activeId || !searchQ.trim()) return;
+    const query = searchQ.trim();
     setError('');
     try {
-      const { messages: found } = await searchChatMessages(activeId, searchQ.trim());
+      const { messages: found } = await searchChatMessages(activeId, query);
       setSearchResults(found);
+      setSearchedQuery(query);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Search failed');
     }
@@ -2175,6 +2184,7 @@ export function Chat() {
                   onClick={() => switchChannel(c.id)}
                   role="button"
                   tabIndex={0}
+                  aria-current={isActive ? 'page' : undefined}
                   aria-label={c.unread ? `${label}, ${t2(`${c.unread} رسالة غير مقروءة`, `${c.unread} unread messages`)}` : label}
                   onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchChannel(c.id); } }}
                 >
@@ -2259,7 +2269,17 @@ export function Chat() {
                           return other && presence.has(other.userId) ? t2('متصل الآن', 'online') : t2('رسالة مباشرة', 'Direct message');
                         })()
                       : active.kind === 'project' ? t2('قناة مشروع', 'Project channel') : t2('قناة الفريق', 'Team channel')}
-                    {viewerOnly ? (ar ? ' · قراءة فقط' : ' · read-only') : ''}
+                    {!userCanWrite() && (
+                      <span class="tchat-readonly-badge">
+                        {viewerOnly
+                          ? t2('قراءة فقط', 'Read only')
+                          : t2('الإرسال للمدراء فقط', 'Admins only')}
+                      </span>
+                    )}
+                    <span class="tchat-head-connection" role="status" title={connectionLabel}>
+                      <span class={`tchat-conn-dot tchat-conn-${sock.status}`} aria-hidden="true" />
+                      {connectionLabel}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2281,7 +2301,10 @@ export function Chat() {
                     </span>
                   )}
                 </div>
-                <button class="btn btn-sm" ref={channelSearchBtnRef} onClick={() => setSearchResults((prev) => (prev === null ? [] : null))} aria-pressed={searchResults !== null} title={t2('بحث', 'Search')} aria-label={t2('البحث في رسائل هذه القناة', 'Search messages in this channel')}>
+                <button class="btn btn-sm tchat-search-toggle" ref={channelSearchBtnRef} onClick={() => {
+                  setSearchedQuery('');
+                  setSearchResults((prev) => (prev === null ? [] : null));
+                }} aria-pressed={searchResults !== null} title={t2('بحث', 'Search')} aria-label={t2('البحث في رسائل هذه القناة', 'Search messages in this channel')}>
                   <Search width={14} height={14} /> {t2('بحث', 'Search')}
                 </button>
                 {active.kind === 'channel' && canManageChannel() && (
@@ -2360,21 +2383,43 @@ export function Chat() {
             {/* search box */}
             {searchResults !== null && (
               <div class="tchat-searchbox">
-                <input
-                  class="input"
-                  placeholder={t2('ابحث في هذه القناة…', 'Search this channel…')}
-                  aria-label={t2('البحث في الرسائل', 'Search messages')}
-                  value={searchQ}
-                  onInput={(e: Event) => setSearchQ((e.target as HTMLInputElement).value)}
-                  onKeyDown={(e: KeyboardEvent) => {
-                  if (e.key === 'Enter') void doSearch();
-                  else if (e.key === 'Escape') {
-                    setSearchResults(null);
-                    setSearchQ('');
-                    channelSearchBtnRef.current?.focus();
-                  }
-                }}
-                />                 {searchResults.length > 0 && (
+                <div class="tchat-search-controls">
+                  <input
+                    class="input"
+                    placeholder={t2('ابحث في هذه القناة…', 'Search this channel…')}
+                    aria-label={t2('البحث في الرسائل', 'Search messages')}
+                    value={searchQ}
+                    onInput={(e: Event) => setSearchQ((e.target as HTMLInputElement).value)}
+                    onKeyDown={(e: KeyboardEvent) => {
+                      if (e.key === 'Enter') void doSearch();
+                      else if (e.key === 'Escape') {
+                        setSearchResults(null);
+                        setSearchQ('');
+                        setSearchedQuery('');
+                        channelSearchBtnRef.current?.focus();
+                      }
+                    }}
+                  />
+                  <button class="btn btn-sm" type="button" onClick={() => void doSearch()} disabled={!searchQ.trim()}>
+                    <Search width={14} height={14} />
+                    {t2('بحث', 'Search')}
+                  </button>
+                  <button
+                    class="btn btn-icon btn-sm"
+                    type="button"
+                    aria-label={t2('إغلاق البحث', 'Close search')}
+                    title={t2('إغلاق البحث', 'Close search')}
+                    onClick={() => {
+                      setSearchResults(null);
+                      setSearchQ('');
+                      setSearchedQuery('');
+                      channelSearchBtnRef.current?.focus();
+                    }}
+                  >
+                    <X width={14} height={14} />
+                  </button>
+                </div>
+                {searchResults.length > 0 && searchQ.trim() === searchedQuery && (
                    <div class="tchat-search-results">
                      {searchResults.map((m) => (
                        <div
@@ -2391,8 +2436,12 @@ export function Chat() {
                        </div>
                      ))}
                    </div>
-                 )}
-                {searchResults.length === 0 && <div class="dim" style="padding:6px 10px">{t2('لا نتائج.', 'No matches.')}</div>}
+                )}
+                {!searchQ.trim()
+                  ? <div class="tchat-search-hint">{t2('اكتب كلمة للبحث في هذه المحادثة.', 'Type a keyword to search this conversation.')}</div>
+                  : searchQ.trim() !== searchedQuery
+                    ? <div class="tchat-search-hint">{t2('اضغط بحث أو Enter لعرض النتائج.', 'Select Search or press Enter to see results.')}</div>
+                    : searchResults.length === 0 && <div class="tchat-search-hint">{t2('لا نتائج مطابقة.', 'No matches found.')}</div>}
               </div>
             )}
 
@@ -2417,21 +2466,23 @@ export function Chat() {
                {renderedMessages}
                {!messages.length && (
                  <div class="tchat-empty-msg">
-                   {active?.kind === 'direct' ? (
-                     <>
-                       {t2('أنت و', 'You and')} {otherDirectName(active)} {t2('— قولا سلاماً', '— say hello')}
-                        {userCanWrite() && (
-                          <button class="tchat-empty-btn" onClick={focusComposer}>
-                            {t2('اكتب أول رسالة', 'Write first message')}
-                          </button>
-                        )}
-                     </>
-                   ) : active?.kind === 'project' ? (
-                     t2('قناة مساحة العمل', 'Workspace channel')
-                   ) : active ? (
-                     t2(`# ${active.name} — ابدأ المحادثة`, `# ${active.name} — Start the conversation`)
-                   ) : (
-                     t2('لا رسائل بعد.', 'No messages yet.')
+                   <span class="tchat-empty-icon-wrap" aria-hidden="true"><MessageCircle width={26} height={26} class="icon" /></span>
+                   <strong>
+                     {active?.kind === 'direct'
+                       ? t2(`محادثة مع ${otherDirectName(active)}`, `Conversation with ${otherDirectName(active)}`)
+                       : active?.kind === 'project'
+                         ? t2('قناة مساحة العمل', 'Workspace channel')
+                         : t2(`# ${active?.name || ''}`, `# ${active?.name || ''}`)}
+                   </strong>
+                   <span>
+                     {active?.kind === 'direct'
+                       ? t2('لا رسائل بعد — ابدأ بإلقاء التحية.', 'No messages yet — say hello to start the conversation.')
+                       : t2('لا رسائل بعد في هذه المحادثة.', 'There are no messages in this conversation yet.')}
+                   </span>
+                   {userCanWrite() && (
+                     <button class="tchat-empty-btn primary" onClick={focusComposer}>
+                       {t2('اكتب أول رسالة', 'Write the first message')}
+                     </button>
                    )}
                  </div>
                )}
@@ -2533,6 +2584,7 @@ export function Chat() {
                          class="tchat-textarea"
                          placeholder={t2('اكتب رسالة…', 'Type a message…')}
                          aria-label={t2('اكتب رسالة', 'Type a message')}
+                         aria-describedby="tchat-composer-hint"
                          rows={1}
                          maxLength={5000}
                          value={composer.text}
@@ -2586,6 +2638,9 @@ export function Chat() {
                  {composer.text.length > 4800 && (
                    <span class="tchat-char-counter" aria-live="off">{composer.text.length}/5000</span>
                  )}
+                 <span class="tchat-composer-hint" id="tchat-composer-hint">
+                   {t2('Enter للإرسال · Shift+Enter لسطر جديد', 'Enter to send · Shift+Enter for a new line')}
+                 </span>
 
                </div>
             ) : viewerOnly ? (
@@ -2595,9 +2650,33 @@ export function Chat() {
             )}
           </>
         ) : (
-          <div class="tchat-main-empty">
-            <MessageCircle width={32} height={32} class="icon" />
-            <p>{t2('اختر محادثة لتبدأ الدردشة.', 'Select a conversation to start chatting.')}</p>
+          <div class="tchat-main-empty" role="status">
+            <span class="tchat-empty-icon-wrap" aria-hidden="true"><MessageCircle width={30} height={30} class="icon" /></span>
+            <h2>{channels.length
+              ? t2('محادثات الفريق', 'Team conversations')
+              : t2('ابدأ محادثة الفريق', 'Start a team conversation')}</h2>
+            <p>{channels.length
+              ? t2('اختر محادثة من القائمة لعرض الرسائل والرد عليها.', 'Choose a conversation from the list to read and reply.')
+              : user?.role === 'viewer'
+                ? t2('لا توجد محادثات متاحة بعد. اطلب من مدير إنشاء قناة للفريق.', 'No conversations are available yet. Ask an admin to create a team channel.')
+                : t2('أنشئ قناة للفريق أو ابدأ رسالة مباشرة للعثور على محادثاتك هنا.', 'Create a team channel or start a direct message to find your conversations here.')}</p>
+            <div class="tchat-empty-actions">
+              {user?.role !== 'viewer' && (
+                <>
+                  <button class="tchat-empty-btn primary" onClick={() => setCreateOpen(true)}>
+                    <Plus width={15} height={15} /> {t2('إنشاء قناة', 'Create a channel')}
+                  </button>
+                  <button class="tchat-empty-btn" onClick={() => setDirectOpen(true)}>
+                    <UserIcon width={15} height={15} /> {t2('رسالة مباشرة', 'New direct message')}
+                  </button>
+                </>
+              )}
+              {channels.length > 0 && (
+                <button class="tchat-empty-btn tchat-browse-btn" onClick={openRail}>
+                  <Menu width={15} height={15} /> {t2('استعراض المحادثات', 'Browse conversations')}
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -75,7 +75,10 @@
 }
 .tchat-channel-item:hover,
 .tchat-channel-item:focus-within { background: var(--panel-2); }
-.tchat-channel-item.active { background: var(--panel-2); }
+.tchat-channel-item.active {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+}
 .tchat-channel-row {
   flex: 1;
   min-width: 0;
@@ -90,7 +93,11 @@
 }
 .tchat-channel-row:hover { background: var(--panel-2); }
 .tchat-channel-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-.tchat-channel-row.active { background: var(--panel-2); }
+.tchat-channel-row.active {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  border-inline-start: 3px solid var(--accent);
+  padding-inline-start: 7px;
+}
 .tchat-channel-row.unread .tchat-channel-name { font-weight: 700; color: var(--text); }
 
 /* Round avatar (direct) / glyph tile (channel/project) with online ring */
@@ -254,7 +261,32 @@
 }
 .tchat-head-status-dot.on { background: var(--green); }
 .tchat-head-title { font-size: 0.92rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tchat-head-sub { font-size: 0.68rem; color: var(--text-2); }
+.tchat-head-sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 0.68rem;
+  color: var(--text-2);
+}
+.tchat-readonly-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--yellow);
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+.tchat-head-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  font-size: 0.64rem;
+}
+.tchat-head-connection .tchat-conn-dot { width: 6px; height: 6px; }
 .tchat-head-typing { color: var(--green); }
 .tchat-member-avatars { display: flex; align-items: center; }
 .tchat-member-avatars > * { margin-inline-start: -6px; border: 2px solid var(--panel); }
@@ -357,10 +389,28 @@
 /* ── Search ─────────────────────────────────────────────────── */
 .tchat-searchbox { border-bottom: 1px solid var(--border); background: var(--panel); }
 .tchat-searchbox .input { background: var(--bg); }
+.tchat-search-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+}
+.tchat-search-controls .input { min-width: 0; flex: 1; }
+.tchat-search-controls .btn { flex-shrink: 0; }
+.tchat-search-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
 .tchat-search-results {
   max-height: 220px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
+}
+.tchat-search-hint {
+  padding: 8px 12px;
+  color: var(--text-2);
+  font-size: 0.7rem;
 }
 .tchat-search-result {
   padding: 7px 12px;
@@ -1013,6 +1063,13 @@ mark.tchat-search-hit {
   background: var(--panel);
   position: relative;
 }
+.tchat-composer-hint {
+  align-self: flex-end;
+  color: var(--text-3);
+  font-size: 0.64rem;
+  line-height: 1.2;
+  padding-inline-end: 4px;
+}
 .tchat-composer-row {
   display: flex;
   gap: 8px;
@@ -1063,6 +1120,11 @@ mark.tchat-search-hit {
 /* The composer is borderless, so the shared :focus-visible ring is the only
    keyboard focus cue it has (WCAG 2.4.7). */
 .tchat-textarea::placeholder { color: var(--text-3); }
+.tchat-textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: 5px;
+}
 
 /* Circular send/mic button — swaps with content (WhatsApp behavior) */
 .tchat-send-fab {
@@ -1222,9 +1284,48 @@ mark.tchat-search-hit {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 12px;
   color: var(--text-2);
+  text-align: center;
+  padding: 32px 20px;
 }
+.tchat-main-empty h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.08rem;
+  font-weight: 650;
+}
+.tchat-main-empty p {
+  max-width: 380px;
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+.tchat-empty-icon-wrap {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+}
+.tchat-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.tchat-empty-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.tchat-empty-btn.primary:hover { filter: brightness(1.08); }
+.tchat-browse-btn { display: none; }
+.tchat-empty-icon-wrap > .icon { width: 24px; height: 24px; opacity: 1; }
 
 .tchat-user-picker { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
 .tchat-user-row {
@@ -1455,6 +1556,18 @@ mark.tchat-search-hit {
 }
 .tchat-empty-btn:hover { border-color: var(--text-3); background: var(--panel-2); }
 .tchat-empty-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.tchat-empty-msg {
+  max-width: min(460px, 90%);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  padding: 20px 24px;
+}
+.tchat-empty-msg strong { color: var(--text); font-size: 0.88rem; }
+.tchat-empty-msg > span:not(.tchat-empty-icon-wrap) { line-height: 1.5; }
+.tchat-empty-msg .tchat-empty-icon-wrap { width: 44px; height: 44px; }
+.tchat-empty-msg .tchat-empty-icon-wrap .icon { opacity: 1; }
+.tchat-empty-msg .tchat-empty-btn { margin-top: 0; }
 
 /* ── Composer char counter ──────────────────────────────────── */
 .tchat-char-counter {
@@ -1651,7 +1764,12 @@ mark.tchat-search-hit {
   .tchat-attachment-img,
   .tchat-attachment-grid { max-width: 100%; }
   .tchat-composer { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .tchat-composer-hint { font-size: 0.6rem; }
+  .tchat-head-connection { font-size: 0.6rem; }
   .tchat-day-sep { margin: 8px 0 4px; }
+}
+@media (max-width: 1023px) {
+  .tchat-browse-btn { display: inline-flex; }
 }
 
 /* ── Touch targets — coarse pointers only ───────────────────── */
