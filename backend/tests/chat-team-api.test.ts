@@ -1633,7 +1633,7 @@ test('delete a message keeps replies to it (dangling replyTo preserved)', async 
   assert.strictEqual(row.replyTo, target.id, 'a dangling replyTo is preserved — the feed keeps history');
 });
 
-test('delete non-existent message → 404, junk ids → 400', async () => {
+test('delete non-existent message → 404, junk ids → 400', async (t) => {
   const ch = await makeChannel(uniqueId('delnone'));
   const missing = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/m-bogus999`);
   assert.strictEqual(missing.status, 404, JSON.stringify(missing.json));
@@ -1647,6 +1647,10 @@ test('delete non-existent message → 404, junk ids → 400', async () => {
   // — no oracle leaks across the membership boundary).
   const slug = uniqueId('delout');
   const created = await api('POST', '/projects', { name: 'Del Outsider', slug });
+  if (created.status === 429) {
+    t.skip('project creation rate-limited on this container (WSD_TESTING=0)');
+    return;
+  }
   assert.strictEqual(created.status, 201, `create project: ${created.status} ${JSON.stringify(created.json)}`);
   createdSlugs.push(slug);
   const outsiderTok = await outsiderToken();
