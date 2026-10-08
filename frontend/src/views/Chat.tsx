@@ -730,12 +730,17 @@ export function Chat() {
   const globalReq = useRef(0);
   const globalDebounceRef = useRef<number | null>(null);
   const [pendingJump, setPendingJump] = useState<{ channelId: string; msgId: string } | null>(null);
+  const pendingJumpRunRef = useRef<{ key: string; token: number } | null>(null);
+  const jumpTokenRef = useRef(0);
   const searchBoxRef = useRef<HTMLInputElement | null>(null);
 
   // Channel switches close any open lightbox SYNCHRONOUSLY — a delayed effect
   // would retire the image URL after the messages already unmounted, leaving
   // the overlay on a revoked/blobless broken frame.
   const switchChannel = (id: string | null) => {
+    jumpTokenRef.current += 1;
+    pendingJumpRunRef.current = null;
+    setPendingJump(null);
     setActiveId(id);
     setLightbox(null);
     setEmojiPickerFor(null);
@@ -750,6 +755,18 @@ export function Chat() {
       unreadLocal.current.delete(id);
       if (unreadTotal() === 0) document.title = origTitleRef.current || document.title;
     }
+  };
+
+  const requestMessageJump = (channelId: string, msgId: string) => {
+    if (activeIdRef.current !== channelId) switchChannel(channelId);
+    if (pendingJumpRunRef.current) {
+      loadingEarlierRef.current = false;
+      setLoadingEarly(false);
+    }
+    jumpTokenRef.current += 1;
+    pendingJumpRunRef.current = null;
+    setError('');
+    setPendingJump({ channelId, msgId });
   };
 
   const openRail = () => {
@@ -1309,17 +1326,103 @@ export function Chat() {
     if (composer.text) el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
   }, [composer.text, activeId]);
 
-  // ── pendingJump: scroll to a message after switching to its channel
+  // ── pendingJump: load older pages as needed, then scroll to the result
   useEffect(() => {
     if (!pendingJump) return;
-    if (pendingJump.channelId !== activeId) return;
-    const el = document.getElementById(`msg-${pendingJump.msgId}`);
-    if (el) {
+    if (pendingJump.channelId !== activeId || active?.id !== pendingJump.channelId || loadingEarly) return;
+
+    const key = `${pendingJump.channelId}:${pendingJump.msgId}`;
+    const token = jumpTokenRef.current;
+    if (pendingJumpRunRef.current?.key === key && pendingJumpRunRef.current.token === token) return;
+
+    if (messagesRef.current.some((m) => m.id === pendingJump.msgId)) {
       jumpToMessage(pendingJump.msgId);
       setPendingJump(null);
+      return;
     }
-    // else: wait — messages may still be loading via WS replay or REST seed
-  }, [messages, pendingJump, activeId]);
+    if (!messagesRef.current.length) return;
+    if (noMoreRef.current) {
+      setPendingJump(null);
+      setError(t2('تعذر العثور على الرسالة؛ ربما حُذفت.', 'Message not found; it may have been deleted.'));
+      return;
+    }
+
+    const run = { key, token };
+    pendingJumpRunRef.current = run;
+    const isCurrent = () => jumpTokenRef.current === token && activeIdRef.current === pendingJump.channelId;
+    const waitForRender = () => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+
+    const loadTarget = async () => {
+      loadingEarlierRef.current = true;
+      setLoadingEarly(true);
+      let cursor = messagesRef.current[0]?.id;
+      try {
+        while (isCurrent() && cursor) {
+          const { messages: older = [] } = await getChatMessages(pendingJump.channelId, { limit: 200, before: cursor });
+          if (!isCurrent()) return;
+          if (!older.length) {
+            noMoreRef.current = true;
+            setNoMore(true);
+            break;
+          }
+
+          const fresh = older.filter((m) => !messagesRef.current.some((loaded) => loaded.id === m.id));
+          if (!fresh.length) {
+            noMoreRef.current = true;
+            setNoMore(true);
+            break;
+          }
+
+          const list = listRef.current;
+          const previousHeight = list?.scrollHeight ?? 0;
+          const previousTop = list?.scrollTop ?? 0;
+          setMessages((prev) => {
+            const known = new Set(prev.map((m) => m.id));
+            const unique = fresh.filter((m) => !known.has(m.id));
+            return unique.length ? [...unique, ...prev].slice(-2000) : prev;
+          });
+          await waitForRender();
+          if (!isCurrent()) return;
+          if (listRef.current) {
+            listRef.current.scrollTop = previousTop + (listRef.current.scrollHeight - previousHeight);
+          }
+
+          if (messagesRef.current.some((m) => m.id === pendingJump.msgId)) {
+            jumpToMessage(pendingJump.msgId);
+            setPendingJump(null);
+            return;
+          }
+
+          const nextCursor = older[0]?.id;
+          if (older.length < 200 || !nextCursor || nextCursor === cursor) {
+            noMoreRef.current = true;
+            setNoMore(true);
+            break;
+          }
+          cursor = nextCursor;
+        }
+
+        if (isCurrent()) {
+          setPendingJump(null);
+          setError(t2('تعذر العثور على الرسالة؛ ربما حُذفت.', 'Message not found; it may have been deleted.'));
+        }
+      } catch (err) {
+        if (isCurrent()) {
+          setPendingJump(null);
+          setError(err instanceof Error ? err.message : t2('تعذر تحميل الرسالة. حاول مرة أخرى.', 'Could not load the message. Try again.'));
+        }
+      } finally {
+        if (isCurrent()) {
+          loadingEarlierRef.current = false;
+          setLoadingEarly(false);
+        }
+        if (pendingJumpRunRef.current === run) pendingJumpRunRef.current = null;
+      }
+    };
+    void loadTarget();
+  }, [messages.length, pendingJump, activeId, active, loadingEarly]);
 
   // ── Global search: debounced handler
   const doGlobalSearch = (q: string) => {
@@ -2136,20 +2239,18 @@ export function Chat() {
                           role="button"
                           tabIndex={0}
                           onClick={() => {
-                            setPendingJump({ channelId: gr.channelId, msgId: m.id });
                             setGlobalOpen(false);
                             setGlobalQ('');
                             setGlobalResults(null);
-                            switchChannel(gr.channelId);
+                            requestMessageJump(gr.channelId, m.id);
                           }}
                           onKeyDown={(e: KeyboardEvent) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault();
-                              setPendingJump({ channelId: gr.channelId, msgId: m.id });
                               setGlobalOpen(false);
                               setGlobalQ('');
                               setGlobalResults(null);
-                              switchChannel(gr.channelId);
+                              requestMessageJump(gr.channelId, m.id);
                             }
                           }}
                         >
@@ -2442,8 +2543,8 @@ export function Chat() {
                          role="button"
                          tabIndex={0}
                          aria-label={t2('انتقل إلى الرسالة', 'Jump to message')}
-                         onClick={() => { jumpToMessage(m.id); }}
-                         onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpToMessage(m.id); } }}
+                         onClick={() => requestMessageJump(activeId!, m.id)}
+                         onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); requestMessageJump(activeId!, m.id); } }}
                        >
                          <span class="dim">{m.username}</span>
                          <span class="tchat-search-hit-text" dangerouslySetInnerHTML={{ __html: snippetHtml(m.text, searchQ) }} />
