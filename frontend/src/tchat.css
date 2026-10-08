@@ -589,6 +589,9 @@ mark.tchat-search-hit {
 .tchat-msg-text.md .tchat-md-h.h6 { font-size: 0.98em; }
 .tchat-msg-author { font-weight: 600; font-size: 0.75rem; color: var(--accent); margin-bottom: 2px; }
 .tchat-msg-reply {
+  display: block;
+  width: 100%;
+  font: inherit;
   font-size: 0.68rem;
   color: var(--text-2);
   border-inline-start: 2px solid var(--accent);
@@ -601,6 +604,18 @@ mark.tchat-search-hit {
   background: rgba(255, 255, 255, 0.04);
   padding-block: 2px;
   padding-inline-end: 6px;
+}
+.tchat-msg-reply-link {
+  appearance: none;
+  border-block: 0;
+  border-inline-end: 0;
+  text-align: start;
+  cursor: pointer;
+}
+.tchat-msg-reply-link:hover { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.tchat-msg-reply-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 .tchat-msg-reply-from { color: var(--accent); font-weight: 600; margin-inline-end: 5px; }
 .tchat-msg-reply-deleted { font-style: italic; }

@@ -1863,7 +1863,7 @@ export function Chat() {
       const dayKey = daySeparatorKey(m.createdAt);
       const prevDayKey = prev ? daySeparatorKey(prev.createdAt) : undefined;
       const showDaySep = !prev || dayKey !== prevDayKey;
-      const showNewDivider = !!newDividerId && m.id === newDividerId && !showDaySep;
+      const showNewDivider = !!newDividerId && m.id === newDividerId;
       const reply = m.replyTo ? messages.find((x) => x.id === m.replyTo) : undefined;
       const author = active?.members.find((x) => x.userId === m.userId);
       const isEditing = editingMsgId === m.id;
@@ -1911,12 +1911,26 @@ export function Chat() {
               <div class="tchat-msg-author">{m.username}</div>
             )}
             {reply ? (
-              <div class="tchat-msg-reply">
+              <button
+                type="button"
+                class="tchat-msg-reply tchat-msg-reply-link"
+                aria-label={t2(`انتقل إلى رسالة ${reply.username}`, `Jump to ${reply.username}'s message`)}
+                onClick={(e: MouseEvent) => {
+                  e.stopPropagation();
+                  jumpToMessage(reply.id);
+                }}
+                onContextMenu={(e: MouseEvent) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onDblClick={(e: MouseEvent) => e.stopPropagation()}
+                onTouchStart={(e: TouchEvent) => e.stopPropagation()}
+              >
                 <span class="tchat-msg-reply-from">{reply.username}</span> {(reply.text || '').slice(0, 60) || '📎'}
-              </div>
+              </button>
             ) : m.replyTo ? (
               <div class="tchat-msg-reply tchat-msg-reply-deleted">
-                <span class="tchat-msg-reply-from">{t2('رد', 'Reply')}</span> {t2('الرسالة الأصلية حُذفت', 'Original message deleted')}
+                <span class="tchat-msg-reply-from">{t2('رد', 'Reply')}</span> {t2('الرسالة الأصلية غير ظاهرة في هذه الصفحة', 'Original message is not loaded in this view')}
               </div>
             ) : null}
             {isEditing ? (
