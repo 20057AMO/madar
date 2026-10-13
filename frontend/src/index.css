@@ -1034,7 +1034,7 @@ textarea.agent-prompt-input {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px;
 }
 .session-chip-meta {
-  font-size: 0.62rem; color: var(--text-3); white-space: nowrap;
+  font-size: 0.62rem; color: var(--text-2); white-space: nowrap;
 }
 .session-chip-actions {
   display: flex; align-items: center; gap: 2px;
@@ -1042,6 +1042,8 @@ textarea.agent-prompt-input {
 .session-chip-act {
   border: 0; background: none; cursor: pointer;
   color: var(--text-3); font-size: 0.8rem; padding: 4px 5px;
+  min-width: 24px; min-height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
   border-radius: 6px; line-height: 1;
 }
 .session-chip-act:hover { color: var(--text); background: var(--bg-2); }
@@ -1827,9 +1829,10 @@ textarea.agent-prompt-input {
   transition: all 0.15s; text-align: left;
 }
 .agent-nav-btn:hover { background: var(--bg-3); color: var(--text); }
-.agent-nav-btn.active { background: var(--blue); color: #fff; }
+.agent-nav-btn.active { background: var(--blue); color: #0b0e14; }
+.agent-nav-btn.active .agent-nav-name { color: inherit; }
 .agent-nav-icon { font-size: 1rem; }
-.agent-nav-name { font-weight: 600; }
+.agent-nav-name { font-weight: 600; color: var(--text-2); }
 .agents-main {
   flex: 1; display: flex; flex-direction: column; min-width: 0;
 }
@@ -1874,7 +1877,7 @@ textarea.agent-prompt-input {
 
 /* New agent button */
 .new-agent-btn {
-  opacity: 0.5; border-style: dashed !important;
+  opacity: 0.85; border-style: dashed !important;
   transition: opacity 0.15s;
 }
 .new-agent-btn:hover { opacity: 1; }
@@ -2966,7 +2969,7 @@ iframe[data-kbd-focus] {
 .cn-section-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-section-count {
   font-size: 0.7rem;
-  color: var(--text-3);
+  color: var(--text-2);
   background: rgba(128, 128, 128, 0.18);
   border-radius: 999px;
   padding: 0 5px;
@@ -3165,7 +3168,7 @@ iframe[data-kbd-focus] {
   align-items: center;
   font-size: 0.7rem;
   font-variant-numeric: tabular-nums;
-  color: var(--text-3);
+  color: var(--text-2);
   background: var(--bg-3);
   border: 1px solid var(--border);
   border-radius: 9999px;

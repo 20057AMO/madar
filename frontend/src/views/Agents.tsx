@@ -24,6 +24,7 @@ import { renderMarkdown } from '../lib/markdown';
 import { projectOptionLabel } from '../lib/project-label';
 import { AgentSettingsModal } from '../components/AgentSettingsModal';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { useI18n } from '../i18n';
 
 const AGENT_PRESETS = [
   { name: 'Coder', icon: '⚡', desc: 'Write and build code', prompt: 'You are an expert developer. Follow this workflow: 1) Read context and existing patterns, 2) Plan approach briefly, 3) Implement clean minimal code, 4) Verify with build/typecheck, 5) Summarize changes. Standards: error handling on every async call, proper TypeScript types, sanitize input, no unrelated refactors. After coding, always run the appropriate build command to verify.', tools: true },
@@ -46,6 +47,7 @@ function relTime(iso: string): string {
 
 export function Agents() {
   const [, setLocation] = useHashLocation();
+  const { t2 } = useI18n();
   const [agents, setAgents] = useState<AgentDef[]>([]);
   const [activeAgentId, setActiveAgentId] = useState('');
   const [sessions, setSessions] = useState<AgentSession[]>([]);
@@ -330,7 +332,7 @@ export function Agents() {
   const activeProviderModels = agentModels;
 
   return (
-    <div class="agents-page">
+    <main class="agents-page">
       {loading && (
         <div class="empty-state" style="margin:60px auto" role="status">
           <div class="big">⏳</div>
@@ -435,6 +437,7 @@ export function Agents() {
                         <input
                           class="modern-input session-rename-input"
                           type="text"
+                          aria-label={t2('إعادة تسمية الجلسة', 'Rename session')}
                           value={renameValue}
                           onInput={(e: any) => setRenameValue(e.target.value)}
                           onKeyDown={(e: KeyboardEvent) => {
@@ -646,6 +649,6 @@ export function Agents() {
       )}
     </>
     )}
-    </div>
+    </main>
   );
 }
