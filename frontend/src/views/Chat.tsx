@@ -2300,7 +2300,6 @@ export function Chat() {
                   role="button"
                   tabIndex={0}
                   aria-current={isActive ? 'page' : undefined}
-                  aria-label={c.unread ? `${label}, ${t2(`${c.unread} رسالة غير مقروءة`, `${c.unread} unread messages`)}` : label}
                   onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchChannel(c.id); } }}
                 >
                   <span class={`tchat-channel-avatar${onlineNow ? ' online' : ''}`}>

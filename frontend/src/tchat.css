@@ -43,10 +43,19 @@
   gap: 7px;
   font-weight: 600;
   font-size: 0.85rem;
+  white-space: nowrap;
 }
 .tchat-online {
   font-size: 0.68rem;
   color: var(--green);
+  white-space: nowrap;
+}
+.tchat-rail-head .btn {
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .tchat-rail-actions {
   display: flex;
