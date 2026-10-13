@@ -12,6 +12,9 @@ interface ConfirmModalProps {
   /** Danger = destructive action: warning avatar + red confirm button. */
   danger?: boolean;
   loading?: boolean;
+  /** Optional error shown INSIDE the dialog (e.g. a refused delete) — a
+   *  role="alert" a screen reader hears while focus stays trapped in-modal. */
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -31,6 +34,7 @@ export function ConfirmModal({
   cancelLabel,
   danger = false,
   loading = false,
+  error = null,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -100,6 +104,7 @@ export function ConfirmModal({
         </div>
         <div class="reauth-title" id="confirm-title" style="text-align:center">{title}</div>
         {message && <p class="settings-hint" id="confirm-msg" style="text-align:center">{message}</p>}
+        {error && <div role="alert" class="notice error">{error}</div>}
         <div style="display:flex; gap:8px; margin-top:14px; justify-content:center;">
           <button class="btn-ghost sm" type="button" ref={cancelRef} onClick={onCancel} disabled={loading}>
             {dismissLabel}

@@ -42,7 +42,7 @@ import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
 import { resolveContainedPath, parseUploadPaths, uploadRelativePath, copyContainedFile, readContainedFile } from './services/workspace-paths-core';
-import { loadMeta, updateMeta, listMetaSlugs, memberList, writableMemberList } from './services/projects-meta';
+import { loadMeta, readMeta, updateMeta, listMetaSlugs, memberList, writableMemberList } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
@@ -777,7 +777,11 @@ app.patch('/api/users/:userId/role', requireAdmin, authLimiter, async (req: any,
   }
   const ok = updateUserRole(req.params.userId, role as any);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
-  recordAudit('user-role-changed', true, req.ip, req.params.userId);
+  const targetInfo = getUserInfo(req.params.userId);
+  recordAudit('user-role-changed', true, req.ip, req.params.userId, {
+    role: String(role),
+    username: targetInfo?.username || req.params.userId,
+  });
   res.json({ ok: true });
 });
 
@@ -795,18 +799,59 @@ app.delete('/api/users/:userId', requireAdmin, userAdminLimiter, (req: any, res)
   const owned: string[] = [];
   for (const slug of listMetaSlugs()) {
     const meta = loadMeta(slug);
-    if (meta && meta.ownerId === req.params.userId && meta.name) owned.push(meta.name);
+    // `|| slug` (and dropping the `meta.name` guard): a name-less legacy meta
+    // must still count as owned — otherwise the delete would proceed and strand
+    // a dangling ownerId. Name is mandatory at creation (validateProjectSpec),
+    // so this is purely defensive.
+    if (meta && meta.ownerId === req.params.userId) owned.push(meta.name || slug);
   }
   if (owned.length) {
     return res.status(400).json({
       error: `Cannot delete this user while they own projects: ${owned.join(', ')}. Transfer ownership first.`,
     });
   }
+  // Capture username before deletion for audit details
+  const deletedUserInfo = getUserInfo(req.params.userId);
+  const deletedUsername = deletedUserInfo?.username || req.params.userId;
   const ok = deleteUser(req.params.userId);
   if (!ok) return res.status(404).json({ error: 'User not found.' });
   deleteAvatar(req.params.userId); // best-effort avatar cleanup
   removeUserChannels(req.params.userId).catch(() => { /* best-effort on chat state */ });
-  recordAudit('user-deleted', true, req.ip, req.params.userId);
+  // Clean up membership rows from all project meta files (F5).
+  // Only projects that ACTUALLY carry a row for the deleted user are touched:
+  // updateMeta ALWAYS rewrites meta.json, so calling it unconditionally rewrote
+  // every store on every user delete. Worse, writableMemberList injects
+  // `members: []` into a LEGACY store (no `members` key), silently disabling the
+  // legacy no-membership access fallback. A read-only memberList probe
+  // (fail-closed) skips both cases before any write — a legacy doc has no row
+  // and is therefore left byte-for-byte untouched.
+  let membershipsChanged = false;
+  try {
+    for (const slug of listMetaSlugs()) {
+      try {
+        const existing = loadMeta(slug);
+        if (!existing) continue;
+        if (!memberList(existing).some((m) => m.userId === req.params.userId)) continue;
+        updateMeta(slug, (meta) => {
+          const members = writableMemberList(meta);
+          meta.members = members.filter((m) => m.userId !== req.params.userId);
+        });
+        membershipsChanged = true;
+      } catch (err) {
+        // Best-effort per slug: ignore individual failures
+        console.warn(`[users] Failed to clean memberships for project ${slug}:`, err);
+      }
+    }
+  } catch (err) {
+    // Best-effort: ignore cleanup failures
+    console.warn('[users] Failed to iterate project slugs for membership cleanup:', err);
+  }
+  // F6: the projects-list cache resolves owner/member usernames from users.json,
+  // so a deleted user can only surface there via an ownerId (blocked above) or a
+  // membership row — exactly what changed. No change ⇒ nothing stale ⇒ skip the
+  // invalidation instead of churning the cache on every user delete.
+  if (membershipsChanged) invalidateProjectsCache();
+  recordAudit('user-deleted', true, req.ip, req.params.userId, { username: deletedUsername });
   res.json({ ok: true });
 });
 
@@ -2010,14 +2055,14 @@ app.post('/api/projects/:slug/members', requireProjectAccess('admin'), async (re
     }
 
     const callerId = req.user?.id;
+    if (readMeta(slug).state === 'absent') {
+      return res.status(404).json({ error: 'Project not found' });
+    }
     const outcome = { roleChanged: false };
     // Read-modify-write through the per-slug queue: a whole-document write built
     // from an earlier loadMeta() would drop anything another writer persisted in
     // between (ports, limits, tags, snapshot config).
     updateMeta(slug, (meta) => {
-      if (!meta.ownerId && !meta.members) {
-        throw Object.assign(new Error('Project not found'), { statusCode: 404 });
-      }
       // Refuses a corrupt `members` field instead of crashing on .find/.push.
       const members = writableMemberList(meta);
       const existing = members.find((m) => m.userId === userId);

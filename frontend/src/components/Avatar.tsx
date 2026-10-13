@@ -40,7 +40,7 @@ export function Avatar({ name, avatar, size = 28, title, decorative }: Props) {
     height: size,
     borderRadius: '50%',
     background: `${color}26`,
-    color,
+    color: '#fff',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

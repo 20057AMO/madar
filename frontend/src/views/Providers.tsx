@@ -844,7 +844,7 @@ function AddProviderModal({ onClose, onAdded, onLocked }: { onClose: () => void;
         >
           <summary>{t2('متقدم (المضيف / النوع)', 'Advanced (host / type)')}</summary>
           <label class="field-label">{t2('قالب', 'Template')}</label>
-          <select class="modern-input" value="" onChange={(e: any) => applyTemplate(e.target.value)}>
+          <select aria-label={t2('قالب', 'Template')} class="modern-input" value="" onChange={(e: any) => applyTemplate(e.target.value)}>
             <option value="" disabled>{t2('اختر مزوّداً معروفاً…', 'Choose a known provider…')}</option>
             {templates.filter((t) => !t.host.includes('host.docker.internal')).map((t) => (
               <option key={t.name} value={t.name}>{t.name}</option>

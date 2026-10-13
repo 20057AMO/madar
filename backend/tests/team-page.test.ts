@@ -173,8 +173,30 @@ describe('Team page & permissions (real Docker container)', () => {
     if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
     const realAdmin = { headers: { ...authHeaders(), Authorization: `Bearer ${loginData.token}` } };
 
+    const t0 = new Date().toISOString();
     const ok = await req('PATCH', `/users/${viewerId}/role`, { role: 'editor', accountPassword: pw }, realAdmin.headers);
     assert.strictEqual(ok.status, 200, `role change with correct password: ${ok.status}`);
+
+    // F13: a successful role change is audited WITH the details bag, so the
+    // security log names the granted role instead of only the target id.
+    // Gated here (same self-skip as the test) because reaching the write at
+    // all requires a real admin login — the sudo gate runs BEFORE recordAudit.
+    const auditRes = await req('GET', '/auth/audit?limit=100', undefined, realAdmin.headers);
+    assert.strictEqual(auditRes.status, 200);
+    const auditEntries: any[] = (await auditRes.json()).entries || [];
+    const changed = auditEntries.filter(
+      (e) => e.event === 'user-role-changed' && e.userId === viewerId && e.ts >= t0
+    );
+    assert.ok(changed.length > 0, 'a user-role-changed entry was recorded for this change');
+    const withRole = changed.filter((e) => e.details?.role === 'editor');
+    assert.ok(
+      withRole.length > 0,
+      `user-role-changed carries details.role === 'editor' (got: ${JSON.stringify(changed.map((e) => e.details))})`
+    );
+    assert.ok(
+      changed.every((e) => typeof e.details?.username === 'string' && e.details.username.length > 0),
+      'every user-role-changed entry names the target username'
+    );
 
     const roster = await (await req('GET', '/users/with-memberships', undefined, realAdmin.headers)).json();
     const viewerRow = (roster.users as any[]).find((u: any) => u.id === viewerId);

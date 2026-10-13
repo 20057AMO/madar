@@ -2454,8 +2454,19 @@ iframe[data-kbd-focus] {
   border-radius: 9999px;
   padding: 0 8px;
   font-size: 0.75rem;
-  color: var(--text-3);
+  color: var(--text-2);
   font-weight: 500;
+}
+
+/* Inline error notice used by TeamPanel + ConfirmModal's error slot. */
+.notice.error {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.4);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  text-align: center;
 }
 
 .add-member-form {

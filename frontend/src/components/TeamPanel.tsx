@@ -16,6 +16,7 @@ import {
 import { ConfirmModal } from './ConfirmModal';
 import { ReAuthModal } from './ReAuthModal';
 import { Avatar } from './Avatar';
+import { useI18n } from '../i18n';
 import type { PresenceUser } from '../usePresence';
 
 interface Props {
@@ -26,9 +27,14 @@ interface Props {
 
 const ROLE_HIERARCHY: Record<string, number> = { admin: 3, editor: 2, viewer: 1 };
 
+const ROLE_LABELS_AR: Record<string, string> = { admin: 'مدير', editor: 'محرر', viewer: 'عارض' };
+
 export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   const [, setLocation] = useHashLocation();
   const { user: currentUser } = useAuth();
+  const { t2, lang } = useI18n();
+  const ar = lang === 'ar';
+  const roleLabel = (role: string) => (ar ? ROLE_LABELS_AR[role] || role : role);
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [allUsers, setAllUsers] = useState<TeamUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,6 +56,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   // Remove confirmation
   const [removeTarget, setRemoveTarget] = useState<ProjectMember | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   // Transfer ownership (sudo — account password required)
   const [transferTarget, setTransferTarget] = useState<ProjectMember | null>(null);
@@ -73,7 +80,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
       setAllUsers(usersRes || []);
       setError(null);
     } catch (err: any) {
-      setError(err.message || 'Failed to load members');
+      setError(err.message || t2('فشل تحميل الأعضاء', 'Failed to load members'));
     } finally {
       setLoading(false);
     }
@@ -81,6 +88,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
 
   useEffect(() => {
     setRemoveTarget(null);
+    setRemoveError(null);
     setTransferTarget(null);
     setTransferError(null);
     loadMembers();
@@ -88,6 +96,9 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
 
   const isMember = (userId: string) => members.some((m) => m.userId === userId);
   const nonMembers = allUsers.filter((u) => !isMember(u.id));
+
+  // Role-aware ordering: admins first, then editors, then viewers.
+  const sortedMembers = [...members].sort((a, b) => (ROLE_HIERARCHY[b.role] || 0) - (ROLE_HIERARCHY[a.role] || 0));
 
   const handleAdd = async () => {
     if (!selectedUserId) return;
@@ -99,7 +110,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
       setShowAdd(false);
       await loadMembers();
     } catch (err: any) {
-      setError(err.message || 'Failed to add member');
+      setError(err.message || t2('فشل إضافة العضو', 'Failed to add member'));
     } finally {
       setAdding(false);
     }
@@ -111,9 +122,10 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
       setRemoving(true);
       await removeProjectMember(slug, removeTarget.userId);
       setRemoveTarget(null);
+      setRemoveError(null);
       await loadMembers();
     } catch (err: any) {
-      setError(err.message || 'Failed to remove member');
+      setRemoveError(err.message || t2('فشل إزالة العضو', 'Failed to remove member'));
     } finally {
       setRemoving(false);
     }
@@ -129,7 +141,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
       setOwnerId(data.ownerId);
       await loadMembers();
     } catch (err: any) {
-      setTransferError(err.message || 'Failed to transfer ownership');
+      setTransferError(err.message || t2('فشل نقل الملكية', 'Failed to transfer ownership'));
     } finally {
       setTransferring(false);
     }
@@ -140,12 +152,12 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
       await addProjectMember(slug, member.userId, newRole);
       await loadMembers();
     } catch (err: any) {
-      setError(err.message || 'Failed to change role');
+      setError(err.message || t2('فشل تغيير الدور', 'Failed to change role'));
     }
   };
 
   if (loading) {
-    return <div class="panel-muted" role="status">Loading team...</div>;
+    return <div class="panel-muted" role="status">{t2('جارٍ تحميل الفريق…', 'Loading team...')}</div>;
   }
 
   return (
@@ -155,13 +167,13 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
       <div class="team-header">
         <h2 class="team-title">
           <Users class="icon" />
-          <span>Project Team</span>
+          <span>{t2('فريق المشروع', 'Project Team')}</span>
           <span class="badge">{members.length}</span>
         </h2>
         {canManage && nonMembers.length > 0 && (
-          <button class="btn-primary sm" aria-expanded={showAdd} onClick={() => setShowAdd(!showAdd)}>
+          <button class="btn-primary sm" aria-expanded={showAdd} onClick={() => { if (showAdd) setError(null); setShowAdd(!showAdd); }}>
             <UserPlus class="icon" />
-            {showAdd ? 'Cancel' : 'Add Member'}
+            {showAdd ? t2('إلغاء', 'Cancel') : t2('إضافة عضو', 'Add Member')}
           </button>
         )}
       </div>
@@ -170,42 +182,40 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
         <div class="add-member-form">
           <select
             class="select-dark"
-            aria-label="User to add"
+            aria-label={t2('مستخدم للإضافة', 'User to add')}
             value={selectedUserId}
             onChange={(e) => setSelectedUserId((e.target as HTMLSelectElement).value)}
           >
-            <option value="">Select user...</option>
+            <option value="">{t2('اختر مستخدماً…', 'Select user...')}</option>
             {nonMembers.map((u) => (
-              <option key={u.id} value={u.id}>{u.username} ({u.role})</option>
+              <option key={u.id} value={u.id}>{u.username} ({roleLabel(u.role)})</option>
             ))}
           </select>
           <select
             class="select-dark"
-            aria-label="Role for the new member"
+            aria-label={t2('دور العضو الجديد', 'Role for the new member')}
             value={selectedRole}
             onChange={(e) => setSelectedRole((e.target as HTMLSelectElement).value as UserRole)}
           >
-            <option value="viewer">Viewer</option>
-            <option value="editor">Editor</option>
-            <option value="admin">Admin</option>
+            <option value="viewer">{t2('عارض', 'Viewer')}</option>
+            <option value="editor">{t2('محرر', 'Editor')}</option>
+            <option value="admin">{t2('مدير', 'Admin')}</option>
           </select>
           <button
             class="btn-primary sm"
             disabled={!selectedUserId || adding}
             onClick={handleAdd}
           >
-            {adding ? 'Adding...' : 'Add'}
+            {adding ? t2('جارٍ الإضافة…', 'Adding...') : t2('إضافة', 'Add')}
           </button>
         </div>
       )}
 
       <div class="member-list">
         {members.length === 0 ? (
-          <div class="panel-muted" role="status">No team members yet.</div>
+          <div class="panel-muted" role="status">{t2('لا يوجد أعضاء بعد.', 'No team members yet.')}</div>
         ) : (
-          members
-            .sort((a, b) => (ROLE_HIERARCHY[b.role] || 0) - (ROLE_HIERARCHY[a.role] || 0))
-            .map((m) => {
+          sortedMembers.map((m) => {
               const isOwner = ownerId === m.userId;
               return (
                 <div class="member-row" key={m.userId}>
@@ -213,12 +223,12 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                     class="member-info"
                     role="button"
                     tabIndex={0}
-                    title={`View ${m.displayName || m.username}'s profile`}
+                    title={t2(`عرض ملف ${m.displayName || m.username}`, `View ${m.displayName || m.username}'s profile`)}
                     onClick={() => setLocation(`/user/${m.userId}`)}
                     onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLocation(`/user/${m.userId}`); } }}
                   >
                     <div class="member-avatar" style="position:relative">
-                      <Avatar name={m.displayName || m.username} avatar={avatarUrl(m.userId, m.avatarExt)} size={34} />
+                      <Avatar name={m.displayName || m.username} avatar={avatarUrl(m.userId, m.avatarExt)} size={34} decorative />
                       {onlineIds.has(m.userId) && <span class="presence-online-dot" />}
                     </div>
                     <div class="member-details">
@@ -226,7 +236,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                         {m.displayName || m.username}
                         {isOwner && <Crown class="icon icon-sm" style={{ color: '#f59e0b', marginLeft: '4px' }} />}
                       </span>
-                      <span class="member-meta">Added {new Date(m.addedAt).toLocaleDateString()}</span>
+                      <span class="member-meta">{t2('أُضيف في', 'Added')} {new Date(m.addedAt).toLocaleDateString()}</span>
                     </div>
                   </div>
                   <div class="member-actions">
@@ -234,39 +244,39 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                       // The owner's role is fixed — the ownership check in
                       // checkProjectAccess outranks any member role, so a
                       // changeable select here would be a lie. Show it as-is.
-                      <span class="member-meta" style="textTransform:capitalize" title="The owner always holds admin access">
+                      <span class="member-meta" style="textTransform:capitalize" title={t2('المالك يحمل دائماً صلاحية مدير', 'The owner always holds admin access')}>
                         <Crown class="icon icon-sm" style={{ color: '#f59e0b', verticalAlign: '-2px', marginRight: '3px' }} />
-                        Owner · Admin
+                        {t2('مالك · مدير', 'Owner · Admin')}
                       </span>
                     ) : canManage ? (
                       <select
                         class="select-dark select-sm"
-                        aria-label={`Role for ${m.username}`}
+                        aria-label={t2(`دور ${m.username}`, `Role for ${m.username}`)}
                         value={m.role}
                         onChange={(e) => handleRoleChange(m, (e.target as HTMLSelectElement).value as UserRole)}
                       >
-                        <option value="viewer">Viewer</option>
-                        <option value="editor">Editor</option>
-                        <option value="admin">Admin</option>
+                        <option value="viewer">{t2('عارض', 'Viewer')}</option>
+                        <option value="editor">{t2('محرر', 'Editor')}</option>
+                        <option value="admin">{t2('مدير', 'Admin')}</option>
                       </select>
                     ) : (
-                      <span class="member-meta" style="textTransform:capitalize">{m.role}</span>
+                      <span class="member-meta" style="textTransform:capitalize">{roleLabel(m.role)}</span>
                     )}
                     {canManage && !isOwner && (
                       <>
                         <button
                           class="btn-ghost sm"
-                          title="Transfer ownership"
-                          aria-label={`Transfer ownership to ${m.username}`}
+                          title={t2('نقل الملكية', 'Transfer ownership')}
+                          aria-label={t2(`نقل الملكية إلى ${m.username}`, `Transfer ownership to ${m.username}`)}
                           onClick={() => { setTransferError(null); setTransferTarget(m); }}
                         >
                           <Crown class="icon icon-sm" />
                         </button>
                         <button
                           class="btn-danger sm"
-                          title="Remove member"
-                          aria-label={`Remove ${m.username}`}
-                          onClick={() => setRemoveTarget(m)}
+                          title={t2('إزالة العضو', 'Remove member')}
+                          aria-label={t2(`إزالة ${m.username}`, `Remove ${m.username}`)}
+                          onClick={() => { setRemoveError(null); setRemoveTarget(m); }}
                         >
                           <Trash2 class="icon icon-sm" />
                         </button>
@@ -282,12 +292,13 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
       <ConfirmModal
         open={!!removeTarget}
         danger={true}
-        title={`Remove ${removeTarget?.username}?`}
-        message="They will lose access to this project."
-        confirmLabel="Remove"
+        title={removeTarget ? t2(`إزالة ${removeTarget.username}؟`, `Remove ${removeTarget.username}?`) : ''}
+        message={t2('سيفقد الوصول إلى هذا المشروع.', 'They will lose access to this project.')}
+        confirmLabel={t2('إزالة', 'Remove')}
         onConfirm={handleRemove}
-        onCancel={() => setRemoveTarget(null)}
+        onCancel={() => { setRemoveTarget(null); setRemoveError(null); }}
         loading={removing}
+        error={removeError}
       />
 
       <ReAuthModal
@@ -295,9 +306,9 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
         username={currentUser?.username}
         loading={transferring}
         error={transferError}
-        title={`Transfer ownership to ${transferTarget?.username}?`}
-        description={`${transferTarget?.username} becomes the new owner with full control. You will become an admin member. Enter your account password to confirm.`}
-        confirmLabel="Transfer ownership"
+        title={t2(`نقل الملكية إلى ${transferTarget?.username}؟`, `Transfer ownership to ${transferTarget?.username}?`)}
+        description={t2(`سيصبح ${transferTarget?.username} المالك الجديد بصلاحية كاملة. ستصبح أنت عضواً مديراً. أدخل كلمة مرور حسابك للتأكيد.`, `${transferTarget?.username} becomes the new owner with full control. You will become an admin member. Enter your account password to confirm.`)}
+        confirmLabel={t2('نقل الملكية', 'Transfer ownership')}
         onConfirm={handleTransfer}
         onCancel={() => { setTransferTarget(null); setTransferError(null); }}
       />

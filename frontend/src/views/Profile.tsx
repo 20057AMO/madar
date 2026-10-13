@@ -626,6 +626,7 @@ export function Profile() {
         <div class="settings-row">
           <span class="field-label">{t2('خروج تلقائي', 'Auto-logout')}</span>
           <select
+            aria-label={t2('خروج تلقائي', 'Auto-logout')}
             class="modern-input"
             style="max-width: 160px"
             value={idleChoice}
@@ -641,6 +642,7 @@ export function Profile() {
         <div class="settings-row">
           <span class="field-label">{t2('إعادة قفل المزوّدين تلقائياً', 'Auto-relock Providers')}</span>
           <select
+            aria-label={t2('إعادة قفل المزوّدين تلقائياً', 'Auto-relock Providers')}
             class="modern-input"
             style="max-width: 160px"
             value={relockChoice}

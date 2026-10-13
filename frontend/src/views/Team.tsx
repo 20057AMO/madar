@@ -1,11 +1,9 @@
-import { useState, useEffect } from 'preact/hooks';
-import { useHashLocation } from 'wouter/use-hash-location';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import {
   Users,
   UserPlus,
   Trash2,
   Loader2,
-  AlertTriangle,
 } from 'lucide-preact';
 import { useAuth } from '../auth';
 import {
@@ -19,6 +17,7 @@ import {
 } from '../api';
 import { Avatar } from '../components/Avatar';
 import { ReAuthModal } from '../components/ReAuthModal';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { useI18n } from '../i18n';
 
 const ROLE_CONFIG: Record<UserRole, { labelAr: string; labelEn: string; color: string; hintAr: string; hintEn: string }> = {
@@ -26,21 +25,22 @@ const ROLE_CONFIG: Record<UserRole, { labelAr: string; labelEn: string; color: s
   editor: {
     labelAr: 'محرر',
     labelEn: 'Editor',
-    color: '#3b82f6',
+    color: '#58a6ff',
     hintAr: 'محرر عام — يكتب في كل مشروع؛ لا يدير المستخدمين أو الإعدادات أو المزوّدين أو يحذف مشاريع الآخرين.',
     hintEn: 'Global editor — writes to every project; cannot manage users, settings, providers, or delete others’ projects.',
   },
-  viewer: { labelAr: 'عارض', labelEn: 'Viewer', color: '#6b7280', hintAr: 'قراءة فقط على المشاريع المُضاف إليها.', hintEn: 'Read-only on the projects they are added to.' },
+  viewer: { labelAr: 'عارض', labelEn: 'Viewer', color: '#9ca3af', hintAr: 'قراءة فقط على المشاريع المُضاف إليها.', hintEn: 'Read-only on the projects they are added to.' },
 };
 
 const ROLE_ORDER: Record<UserRole, number> = { admin: 3, editor: 2, viewer: 1 };
+
+const NEW_ROLE_ORDER: UserRole[] = ['admin', 'editor', 'viewer'];
 
 export function Team() {
   const { user: currentUser } = useAuth();
   const { t2, lang } = useI18n();
   const ar = lang === 'ar';
   const isAdmin = currentUser?.role === 'admin';
-  const [, setLocation] = useHashLocation();
   const [users, setUsers] = useState<TeamUserWithMemberships[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -53,6 +53,9 @@ export function Team() {
   const [pendingRole, setPendingRole] = useState<{ user: TeamUserWithMemberships; role: UserRole } | null>(null);
   const [roleSaving, setRoleSaving] = useState(false);
   const [roleError, setRoleError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const roleRefs = useRef<Record<UserRole, HTMLButtonElement | null>>({ admin: null, editor: null, viewer: null });
 
   useEffect(() => {
     loadUsers();
@@ -113,14 +116,37 @@ export function Team() {
     }
   }
 
+  function handleRoleKeyDown(e: KeyboardEvent, r: UserRole) {
+    const handled = ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown', 'Home', 'End'];
+    if (!handled.includes(e.key)) return;
+    e.preventDefault();
+    let next: UserRole;
+    if (e.key === 'Home') {
+      next = NEW_ROLE_ORDER[0];
+    } else if (e.key === 'End') {
+      next = NEW_ROLE_ORDER[NEW_ROLE_ORDER.length - 1];
+    } else {
+      const i = NEW_ROLE_ORDER.indexOf(r);
+      const step = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1;
+      const delta = ar ? -step : step;
+      next = NEW_ROLE_ORDER[(i + delta + NEW_ROLE_ORDER.length) % NEW_ROLE_ORDER.length];
+    }
+    setNewRole(next);
+    roleRefs.current[next]?.focus();
+  }
+
   async function handleDelete(userId: string) {
     try {
-      setError('');
+      setDeleting(true);
+      setDeleteError(null);
       await deleteUser(userId);
       setConfirmDelete(null);
+      setDeleteError(null);
       await loadUsers();
     } catch (err: any) {
-      setError(err.message || t2('فشل حذف المستخدم', 'Failed to delete user'));
+      setDeleteError(err.message || t2('فشل حذف المستخدم', 'Failed to delete user'));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -134,8 +160,13 @@ export function Team() {
 
   if (loading) {
     return (
-      <div class="page-container" style={{ display: 'flex', justifyContent: 'center', paddingTop: '4rem' }}>
-        <Loader2 class="icon spin" size={32} />
+      <div
+        class="page-container"
+        role="status"
+        aria-label={t2('جارٍ التحميل', 'Loading')}
+        style={{ display: 'flex', justifyContent: 'center', paddingTop: '4rem' }}
+      >
+        <Loader2 class="icon spin" size={32} aria-hidden="true" />
       </div>
     );
   }
@@ -182,10 +213,12 @@ export function Team() {
           padding: '1.25rem',
           marginBottom: '1rem',
         }}>
-          <h3 style={{ margin: '0 0 1rem' }}>{t2('إضافة مستخدم جديد', 'Add New User')}</h3>
+          <h2 style={{ margin: '0 0 1rem', fontSize: '1.17rem' }}>{t2('إضافة مستخدم جديد', 'Add New User')}</h2>
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <input
               type="text"
+              aria-label={t2('اسم المستخدم', 'Username')}
+              autocomplete="username"
               placeholder={t2('اسم المستخدم', 'Username')}
               value={newUsername}
               onInput={(e) => setNewUsername((e.target as HTMLInputElement).value)}
@@ -193,27 +226,32 @@ export function Team() {
             />
             <input
               type="password"
+              aria-label={t2('كلمة المرور', 'Password')}
+              autocomplete="new-password"
               placeholder={t2('كلمة المرور (6 أحرف على الأقل)', 'Password (min 6 characters)')}
               value={newPassword}
               onInput={(e) => setNewPassword((e.target as HTMLInputElement).value)}
               style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
             />
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              {(['admin', 'editor', 'viewer'] as UserRole[]).map((r) => {
+            <div role="radiogroup" aria-label={t2('دور المستخدم الجديد', 'New user role')} style={{ display: 'flex', gap: '0.5rem' }}>
+              {NEW_ROLE_ORDER.map((r) => {
                 const cfg = ROLE_CONFIG[r];
                 return (
                   <button
                     key={r}
+                    ref={(el) => { roleRefs.current[r] = el; }}
                     type="button"
                     role="radio"
                     aria-checked={newRole === r}
+                    tabIndex={newRole === r ? 0 : -1}
+                    onKeyDown={(e: KeyboardEvent) => handleRoleKeyDown(e, r)}
                     onClick={() => setNewRole(r)}
                     style={{
                       padding: '0.375rem 0.75rem',
                       borderRadius: 6,
                       border: `1px solid ${newRole === r ? cfg.color : 'var(--border)'}`,
                       background: newRole === r ? `${cfg.color}20` : 'transparent',
-                      color: newRole === r ? cfg.color : 'var(--text-secondary)',
+                      color: newRole === r ? 'var(--text)' : 'var(--text-secondary)',
                       cursor: 'pointer',
                       fontSize: '0.8125rem',
                       fontWeight: newRole === r ? 600 : 400,
@@ -255,79 +293,81 @@ export function Team() {
                 background: isMe ? 'rgba(59,130,246,0.06)' : 'var(--surface)',
                 border: `1px solid ${isMe ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`,
                 borderRadius: 10,
-                cursor: 'pointer',
               }}
-              onClick={() => setLocation(`/user/${u.id}`)}
-              role="button"
-              tabIndex={0}
-              title={t2(`عرض ملف ${u.profile?.displayName || u.username}`, `View ${u.profile?.displayName || u.username}'s profile`)}
-              onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLocation(`/user/${u.id}`); } }}
             >
-              <Avatar name={u.profile?.displayName || u.username} avatar={avatarUrl(u.id, u.profile?.avatarExt)} size={36} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{u.profile?.displayName || u.username}</span>
-                  {isMe && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({t2('أنت', 'you')})</span>}
-                  <span style={{
-                    fontSize: '0.6875rem',
-                    padding: '0.125rem 0.375rem',
-                    borderRadius: 4,
-                    background: `${cfg.color}20`,
-                    color: cfg.color,
-                    fontWeight: 600,
-                  }}>
-                    {ar ? cfg.labelAr : cfg.labelEn}{u.role === 'editor' ? (ar ? ' · عام' : ' · global') : ''}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>
-                  {ar ? cfg.hintAr : cfg.hintEn}
-                </div>
-                <div style={{ fontSize: '0.6875rem', color: 'rgba(255,255,255,0.3)', marginTop: '0.125rem' }}>
-                  {t2('انضم في', 'Joined')} {new Date(u.createdAt).toLocaleDateString(ar ? 'ar' : undefined)}
-                </div>
-                {u.memberships && u.memberships.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', marginTop: '0.5rem' }}>
-                    {u.memberships.map((m) => (
-                      <span
-                        key={m.slug}
-                        title={m.isOwner ? t2(`مالك ${m.name}`, `Owner of ${m.name}`) : t2(`${m.role} على ${m.name}`, `${m.role} on ${m.name}`)}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
-                          fontSize: '0.6875rem',
-                          padding: '0.125rem 0.4375rem',
-                          borderRadius: 999,
-                          background: 'rgba(59,130,246,0.08)',
-                          border: '1px solid rgba(59,130,246,0.18)',
-                          color: 'var(--text-secondary)',
-                          maxWidth: 220,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        {m.isOwner && <span style={{ color: '#f59e0b' }}>★</span>}
-                        {m.name}
-                        <span style={{
-                          fontSize: '0.625rem',
-                          padding: '0 0.25rem',
-                          borderRadius: 4,
-                          background: 'rgba(59,130,246,0.14)',
-                          color: '#60a5fa',
-                          fontWeight: 600,
-                          textTransform: 'capitalize',
-                        }}>
-                          {m.isOwner ? (ar ? 'مالك' : 'owner') : m.role}
-                        </span>
-                      </span>
-                    ))}
+              <a
+                href={`#/user/${u.id}`}
+                onClick={(e) => e.stopPropagation()}
+                title={t2(`عرض ملف ${u.profile?.displayName || u.username}`, `View ${u.profile?.displayName || u.username}'s profile`)}
+                style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1, minWidth: 0, color: 'inherit', textDecoration: 'none' }}
+              >
+                        <Avatar name={u.profile?.displayName || u.username} avatar={avatarUrl(u.id, u.profile?.avatarExt)} size={36} decorative />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{u.profile?.displayName || u.username}</span>
+                    {isMe && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({t2('أنت', 'you')})</span>}
+                    <span style={{
+                      fontSize: '0.6875rem',
+                      padding: '0.125rem 0.375rem',
+                      borderRadius: 4,
+                      background: `${cfg.color}20`,
+                      color: cfg.color,
+                      fontWeight: 600,
+                    }}>
+                      {ar ? cfg.labelAr : cfg.labelEn}{u.role === 'editor' ? (ar ? ' · عام' : ' · global') : ''}
+                    </span>
                   </div>
-                )}
-              </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>
+                    {ar ? cfg.hintAr : cfg.hintEn}
+                  </div>
+                  <div style={{ fontSize: '0.6875rem', color: 'rgba(255,255,255,0.55)', marginTop: '0.125rem' }}>
+                    {t2('انضم في', 'Joined')} {new Date(u.createdAt).toLocaleDateString(ar ? 'ar' : undefined)}
+                  </div>
+                  {u.memberships && u.memberships.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', marginTop: '0.5rem' }}>
+                      {u.memberships.map((m) => (
+                        <span
+                          key={m.slug}
+                          title={m.isOwner ? t2(`مالك ${m.name}`, `Owner of ${m.name}`) : t2(`${m.role} على ${m.name}`, `${m.role} on ${m.name}`)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            fontSize: '0.6875rem',
+                            padding: '0.125rem 0.4375rem',
+                            borderRadius: 999,
+                            background: 'rgba(59,130,246,0.08)',
+                            border: '1px solid rgba(59,130,246,0.18)',
+                            color: 'var(--text-secondary)',
+                            maxWidth: 220,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {m.isOwner && <span style={{ color: '#f59e0b' }}>★</span>}
+                          {m.name}
+                          <span style={{
+                            fontSize: '0.625rem',
+                            padding: '0 0.25rem',
+                            borderRadius: 4,
+                            background: 'rgba(59,130,246,0.14)',
+                            color: '#60a5fa',
+                            fontWeight: 600,
+                            textTransform: 'capitalize',
+                          }}>
+                            {m.isOwner ? (ar ? 'مالك' : 'owner') : m.role}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </a>
               {isAdmin && !isMe && (
                 <div style={{ display: 'flex', gap: '0.375rem', flexShrink: 0 }}>
                   <select
+                    aria-label={t2(`تغيير دور ${u.profile?.displayName || u.username}`, `Change role for ${u.profile?.displayName || u.username}`)}
                     value={u.role}
                     onClick={(e: Event) => e.stopPropagation()}
                     onChange={(e) => handleRoleChangeRequested(u.id, (e.target as HTMLSelectElement).value as UserRole)}
@@ -346,7 +386,7 @@ export function Team() {
                   </select>
                   <button
                     class="btn-icon"
-                    onClick={(e: Event) => { e.stopPropagation(); setConfirmDelete(u); }}
+                    onClick={(e: Event) => { e.stopPropagation(); setDeleteError(null); setConfirmDelete(u); }}
                     title={t2('إزالة المستخدم', 'Remove user')}
                     aria-label={t2(`إزالة المستخدم ${u.username}`, `Remove user ${u.username}`)}
                     style={{ color: '#ef4444' }}
@@ -360,47 +400,17 @@ export function Team() {
         })}
       </div>
 
-      {confirmDelete && (
-        <div
-          style={{
-            position: 'fixed', inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => setConfirmDelete(null)}
-        >
-          <div
-            style={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 12,
-              padding: '1.5rem',
-              maxWidth: 400,
-              width: '90%',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-              <AlertTriangle size={20} color="#ef4444" />
-              <h3 style={{ margin: 0 }}>{t2('إزالة المستخدم', 'Remove User')}</h3>
-            </div>
-            <p style={{ margin: '0 0 1rem', color: 'var(--text-secondary)' }}>
-              {t2('هل تريد إزالة', 'Are you sure you want to remove')} <strong>{confirmDelete.username}</strong>{t2('؟ سيُسجَّل خروجه فوراً.', '? They will be logged out immediately.')}
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <button class="btn" onClick={() => setConfirmDelete(null)}>{t2('إلغاء', 'Cancel')}</button>
-              <button
-                class="btn"
-                style={{ background: '#ef4444', color: '#fff' }}
-                onClick={() => handleDelete(confirmDelete.id)}
-              >
-                {t2('إزالة', 'Remove')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmModal
+        open={!!confirmDelete}
+        danger
+        title={confirmDelete ? t2(`إزالة ${confirmDelete.username}؟`, `Remove ${confirmDelete.username}?`) : ''}
+        message={confirmDelete ? t2(`هل تريد إزالة ${confirmDelete.username}؟ سيُسجَّل خروجه فوراً.`, `Are you sure you want to remove ${confirmDelete.username}? They will be logged out immediately.`) : undefined}
+        confirmLabel={t2('إزالة', 'Remove')}
+        loading={deleting}
+        error={deleteError}
+        onConfirm={() => { if (confirmDelete) handleDelete(confirmDelete.id); }}
+        onCancel={() => { setConfirmDelete(null); setDeleteError(null); }}
+      />
       <ReAuthModal
         open={pendingRole !== null}
         username={pendingRole ? (pendingRole.user.profile?.displayName || pendingRole.user.username) : currentUser?.username}

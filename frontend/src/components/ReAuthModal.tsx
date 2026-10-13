@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { User, ShieldCheck, Loader2 } from 'lucide-preact';
+import { useI18n } from '../i18n';
 
 interface ReAuthModalProps {
   open: boolean;
@@ -22,14 +23,18 @@ interface ReAuthModalProps {
 export function ReAuthModal({
   open,
   username,
-  title = 'Confirm your identity',
-  description = 'Enter your account password to continue.',
-  confirmLabel = 'Confirm',
+  title,
+  description,
+  confirmLabel,
   loading = false,
   error = null,
   onConfirm,
   onCancel,
 }: ReAuthModalProps) {
+  const { t2 } = useI18n();
+  const titleText = title ?? t2('تأكيد هويتك', 'Confirm your identity');
+  const descriptionText = description ?? t2('أدخل كلمة مرور حسابك للمتابعة.', 'Enter your account password to continue.');
+  const confirmText = confirmLabel ?? t2('تأكيد', 'Confirm');
   const [pw, setPw] = useState('');
   const overlayRef = useRef<HTMLDivElement>(null);
   const pwRef = useRef<HTMLInputElement>(null);
@@ -78,7 +83,7 @@ export function ReAuthModal({
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
-      trigger?.focus();
+      if (trigger?.isConnected) trigger.focus();
     };
   }, [open]);
 
@@ -96,16 +101,16 @@ export function ReAuthModal({
         <div class="reauth-avatar" aria-hidden="true">
           <User width={26} height={26} />
         </div>
-        <div class="reauth-username">{username || 'account'}</div>
-        <div class="reauth-title" id="reauth-title">{title}</div>
-        <p class="settings-hint" id="reauth-desc" style="text-align:center">{description}</p>
+        <div class="reauth-username">{username || t2('الحساب', 'account')}</div>
+        <div class="reauth-title" id="reauth-title">{titleText}</div>
+        <p class="settings-hint" id="reauth-desc" style="text-align:center">{descriptionText}</p>
 
         <input
           ref={pwRef}
           class="modern-input"
           type="password"
-          placeholder="Account password"
-          aria-label="Account password"
+          placeholder={t2('كلمة مرور الحساب', 'Account password')}
+          aria-label={t2('كلمة مرور الحساب', 'Account password')}
           autoFocus
           value={pw}
           onInput={(e: any) => setPw(e.target.value)}
@@ -115,16 +120,16 @@ export function ReAuthModal({
 
         <div style="display:flex; gap:8px; margin-top:14px; justify-content:flex-end;">
           <button class="btn-ghost sm" type="button" onClick={onCancel} disabled={loading}>
-            Cancel
+            {t2('إلغاء', 'Cancel')}
           </button>
           <button class="btn-primary sm" type="submit" disabled={loading || !pw}>
             {loading ? (
               <span style="display:inline-flex;align-items:center;gap:6px;">
-                <Loader2 width={14} height={14} class="icon spin" /> Verifying…
+                <Loader2 width={14} height={14} class="icon spin" /> {t2('جارٍ التحقق…', 'Verifying…')}
               </span>
             ) : (
               <span style="display:inline-flex;align-items:center;gap:6px;">
-                <ShieldCheck width={14} height={14} /> {confirmLabel}
+                <ShieldCheck width={14} height={14} /> {confirmText}
               </span>
             )}
           </button>
