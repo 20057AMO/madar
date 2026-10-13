@@ -2616,7 +2616,7 @@ export function ProjectCanvas({ slug, readOnly }: { slug: string; readOnly?: boo
                   {doc?.sections?.length ? (
                     <>
                       <span class="cn-ctx-label">{t('canvas.ctxSection')}</span>
-                      <select class="cn-section-select cn-ctx-select" value={doc.nodes.find((n) => n.id === ctxMenu.nodeId)?.section ?? ''} onClick={(e: any) => e.stopPropagation()} onChange={(e: any) => { setNodeSection(ctxMenu.nodeId!, e.currentTarget.value || undefined); closeCtxMenu(); }}>
+                      <select aria-label={t('canvas.ctxSection')} class="cn-section-select cn-ctx-select" value={doc.nodes.find((n) => n.id === ctxMenu.nodeId)?.section ?? ''} onClick={(e: any) => e.stopPropagation()} onChange={(e: any) => { setNodeSection(ctxMenu.nodeId!, e.currentTarget.value || undefined); closeCtxMenu(); }}>
                         <option value="">{t('canvas.noSection')}</option>
                         {doc.sections.map((s) => (
                           <option key={s.id} value={s.id}>{s.name}</option>

@@ -258,6 +258,7 @@ export function AgentSettingsModal({ agent, onSave, onDelete, onClose }: Props) 
               <div style="margin-top:8px">
                 <label class="agent-settings-field-label">Permission level</label>
                 <select
+                  aria-label="Permission level"
                   class="modern-input"
                   value={permission}
                   onChange={(e: any) => setPermission(e.target.value)}

@@ -311,7 +311,6 @@
   color: var(--text-3);
   padding: 14px 10px 5px;
   user-select: none;
-  opacity: 0.85;
 }
 .nav-group-label:first-child { padding-top: 2px; }
 
