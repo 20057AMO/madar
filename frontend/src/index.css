@@ -1057,6 +1057,7 @@ textarea.agent-prompt-input {
 .session-rename-row { flex: 1; min-width: 0; }
 .session-rename-input {
   width: 100%; padding: 2px 6px; font-size: 0.76rem; font-weight: 600;
+  min-height: 24px; vertical-align: middle;
   background: var(--bg-2); border: 1px solid var(--accent); border-radius: 4px;
   color: var(--text); outline: none;
 }

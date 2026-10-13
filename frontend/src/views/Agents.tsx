@@ -426,6 +426,7 @@ export function Agents() {
                 <input
                   class="session-search-input"
                   type="text"
+                  aria-label={t2('البحث عن جلسة', 'Search sessions')}
                   placeholder="Search…"
                   value={sessionSearch}
                   onInput={(e: any) => setSessionSearch(e.target.value)}
