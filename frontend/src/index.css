@@ -15,9 +15,13 @@
   --panel-2: #1c1e24;
   --border: #23252b;
   --border-2: #2e3138;
+  --border-control: #666c77;
   --text: #e8e9ea;
   --text-2: #9ba0a8;
   --text-3: #7d8289;
+  --text-1: var(--text);
+  --text-secondary: var(--text-2);
+  --surface: var(--bg-2);
   --accent: #ffffff;
   /* Focus ring — WCAG 1.4.11 needs 3:1 against whatever it sits on. Mid-gray
      clears both ends (4.1:1 on --bg, 3.8:1 on the near-white .btn-primary
@@ -46,6 +50,7 @@ body {
 }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input, select { font: inherit; color: inherit; }
+input::placeholder, textarea::placeholder { color: var(--text-3); }
 ::selection { background: color-mix(in srgb, var(--text) 18%, transparent); }
 .scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
 .scrollbar::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
@@ -90,7 +95,7 @@ input, select { font: inherit; color: inherit; }
 .modern-input {
   width: 100%;
   background: var(--bg-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   font-size: 0.85rem;
@@ -101,6 +106,7 @@ input, select { font: inherit; color: inherit; }
 .modern-input::placeholder { color: var(--text-3); }
 .modern-input:focus { border-color: var(--text-3); box-shadow: 0 0 0 3px var(--focus-ring); }
 select.modern-input { appearance: none; cursor: pointer; }
+.input { border: 1px solid var(--border-control); background: var(--bg-2); }
 
 .btn-primary {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -1583,7 +1589,7 @@ textarea.agent-prompt-input {
 /* tag editor — one bordered region with chips + inline input */
 .tag-editor {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  background: var(--bg-2); border: 1px solid var(--border);
+  background: var(--bg-2); border: 1px solid var(--border-control);
   border-radius: var(--radius-sm); padding: 7px 9px;
   transition: border-color .15s;
 }
@@ -1961,7 +1967,7 @@ textarea.agent-prompt-input {
 .session-search-input {
   min-width: 80px; max-width: 120px;
   padding: 3px 6px; font-size: 0.7rem;
-  border: 1px solid var(--border); border-radius: 6px;
+  border: 1px solid var(--border-control); border-radius: 6px;
   background: var(--bg); color: var(--text);
 }
 .session-search-input::placeholder { color: var(--text-3); }
@@ -2273,7 +2279,7 @@ button.tag-chip.active {
 /* â”€â”€ Themed file input â”€â”€ */
 input[type="file"].modern-file {
   font-size: 0.75rem; color: var(--text-2);
-  background: var(--bg-2); border: 1px solid var(--border);
+  background: var(--bg-2); border: 1px solid var(--border-control);
   border-radius: var(--radius-sm); padding: 4px 6px;
   cursor: pointer;
 }
@@ -2516,7 +2522,7 @@ iframe[data-kbd-focus] {
 .select-dark {
   background: var(--panel-2);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 0.8rem;
@@ -3079,7 +3085,7 @@ iframe[data-kbd-focus] {
 .cn-section-input {
   background: var(--bg);
   color: var(--text-1);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: 6px;
   padding: 2px 6px;
   font-size: 0.78rem;
@@ -3099,7 +3105,7 @@ iframe[data-kbd-focus] {
 .cn-section-select {
   background: var(--bg);
   color: var(--text-1);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: 6px;
   padding: 2px 4px;
   font-size: 0.75rem;
@@ -3343,7 +3349,7 @@ iframe[data-kbd-focus] {
 .cn-dot-active { opacity: 1; border-color: #fff; }
 .cn-dot.c-yellow { background: #fbbf24; }
 .cn-dot.c-blue { background: #3b82f6; }
-.cn-dot.c-red { background: #ef4444; }
+.cn-dot.c-red { background: var(--red); }
 .cn-dot.c-green { background: #22c55e; }
 
 /* Floating add (+) button — logical inline position so RTL mirrors it. */

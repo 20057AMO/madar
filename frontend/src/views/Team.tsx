@@ -193,12 +193,12 @@ export function Team() {
 
       {error && (
         <div role="alert" style={{
-          background: 'rgba(239,68,68,0.1)',
-          border: '1px solid rgba(239,68,68,0.3)',
+          background: 'rgba(248,81,73,0.1)',
+          border: '1px solid rgba(248,81,73,0.3)',
           borderRadius: 8,
           padding: '0.75rem 1rem',
           marginBottom: '1rem',
-          color: '#ef4444',
+          color: 'var(--red)',
           fontSize: '0.875rem',
         }}>
           {error}
@@ -222,7 +222,7 @@ export function Team() {
               placeholder={t2('اسم المستخدم', 'Username')}
               value={newUsername}
               onInput={(e) => setNewUsername((e.target as HTMLInputElement).value)}
-              style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+              style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-control)', background: 'var(--bg)', color: 'var(--text)' }}
             />
             <input
               type="password"
@@ -231,7 +231,7 @@ export function Team() {
               placeholder={t2('كلمة المرور (6 أحرف على الأقل)', 'Password (min 6 characters)')}
               value={newPassword}
               onInput={(e) => setNewPassword((e.target as HTMLInputElement).value)}
-              style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+              style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-control)', background: 'var(--bg)', color: 'var(--text)' }}
             />
             <div role="radiogroup" aria-label={t2('دور المستخدم الجديد', 'New user role')} style={{ display: 'flex', gap: '0.5rem' }}>
               {NEW_ROLE_ORDER.map((r) => {
@@ -374,7 +374,7 @@ export function Team() {
                     style={{
                       padding: '0.25rem 0.5rem',
                       borderRadius: 6,
-                      border: '1px solid var(--border)',
+                      border: '1px solid var(--border-control)',
                       background: 'var(--bg)',
                       color: 'var(--text)',
                       fontSize: '0.8125rem',
@@ -389,7 +389,7 @@ export function Team() {
                     onClick={(e: Event) => { e.stopPropagation(); setDeleteError(null); setConfirmDelete(u); }}
                     title={t2('إزالة المستخدم', 'Remove user')}
                     aria-label={t2(`إزالة المستخدم ${u.username}`, `Remove user ${u.username}`)}
-                    style={{ color: '#ef4444' }}
+                    style={{ color: 'var(--red)' }}
                   >
                     <Trash2 size={16} />
                   </button>

@@ -7,7 +7,7 @@
  * string is still valid TypeScript. This suite scans every `frontend/src`
  * source file and refuses:
  *   - U+FFFD (REPLACEMENT CHARACTER) — the fingerprint of a decode that lost
- *     bytes, and of a literal � pasted into a string;
+ *     bytes, and of a literal U+FFFD pasted into a string;
  *   - C0 control characters below 0x20 other than \t, \n and \r — invisible
  *     bytes that render as nothing (or as a broken glyph) inside UI copy.
  *
@@ -25,7 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SRC_DIR = fileURLToPath(new URL('../../frontend/src', import.meta.url));
-const SOURCE_EXT = new Set(['.ts', '.tsx']);
+const SOURCE_EXT = new Set(['.ts', '.tsx', '.css']);
 
 interface Offender {
   index: number;
