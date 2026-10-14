@@ -37,6 +37,7 @@ import {
   CircleCheck,
   RotateCcw,
   BrainCircuit,
+  Sparkles,
 } from 'lucide-preact';
 import type { ActivityDetails } from '../api';
 
@@ -168,6 +169,25 @@ const META: Record<string, ActivityMeta> = {
   },
   // ── Agents ──
   agent_run: { Icon: BrainCircuit, labelKey: 'activity.agent_run', dotClass: 'agent_run', fmtDetail: fmtGeneric },
+  // ── Project intelligence digests ──
+  digest_generated: {
+    Icon: Sparkles,
+    labelKey: 'activity.digest_generated',
+    dotClass: 'digest_generated',
+    fmtDetail: fmtGeneric,
+  },
+  digest_config: {
+    Icon: CalendarClock,
+    labelKey: 'activity.digest_config',
+    dotClass: 'digest_config',
+    fmtDetail: fmtGeneric,
+  },
+  digest_deleted: {
+    Icon: Trash2,
+    labelKey: 'activity.digest_deleted',
+    dotClass: 'digest_deleted',
+    fmtDetail: fmtGeneric,
+  },
 };
 
 /** Presentation metadata for an action (unknown actions get a neutral fallback). */

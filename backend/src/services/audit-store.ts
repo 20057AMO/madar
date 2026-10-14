@@ -88,6 +88,9 @@ export type AuditEvent =
   | 'chat-channel-settings-failed'
   | 'agent-run'
   | 'agent-run-failed'
+  | 'digest-config-change'
+  | 'digest-generate'
+  | 'digest-delete'
   | 'mount-audit';
 
 export interface AuditEntry {

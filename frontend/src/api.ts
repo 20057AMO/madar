@@ -608,6 +608,55 @@ export async function downloadStoredSnapshot(slug: string, file: string): Promis
   return { blob, filename: file };
 }
 
+// ── Project intelligence digests (scheduled AI summaries) ─────────────────
+export type DigestTrigger = 'schedule' | 'manual';
+export type DigestStatus = 'running' | 'done' | 'failed';
+
+/** One stored digest. `summary`/`blockers`/`nextSteps` are LLM output derived
+ *  from untrusted workspace content — render as text, never as HTML. */
+export interface DigestEntry {
+  id: string;
+  createdAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  trigger: DigestTrigger;
+  status: DigestStatus;
+  summary: string;
+  blockers: string[];
+  nextSteps: string[];
+  error?: string;
+  provider?: string;
+  model?: string;
+  tokens?: number | null;
+  cost?: number | null;
+  actorName?: string;
+}
+export interface DigestConfig {
+  enabled: boolean;
+  intervalMin: number;
+  lastDigestAt: string | null;
+}
+export const getDigestConfig = (slug: string) =>
+  api<DigestConfig>(`/api/projects/${encodeURIComponent(slug)}/digests/config`);
+export const setDigestConfig = (slug: string, patch: { enabled?: boolean; intervalMin?: number }) =>
+  api<DigestConfig>(`/api/projects/${encodeURIComponent(slug)}/digests/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+export const listDigests = (slug: string) =>
+  api<{ entries: DigestEntry[]; total: number }>(`/api/projects/${encodeURIComponent(slug)}/digests`);
+export const generateDigest = (slug: string) =>
+  api<{ digest: { id: string; status: DigestStatus } }>(
+    `/api/projects/${encodeURIComponent(slug)}/digests`,
+    { method: 'POST' },
+  );
+export const deleteDigest = (slug: string, id: string) =>
+  api<{ ok: boolean }>(
+    `/api/projects/${encodeURIComponent(slug)}/digests/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+
 // ── Project notes (ideas / bugs / goals) ─────────────────────────────────
 export type NoteKind = 'idea' | 'bug' | 'goal';
 export interface NoteItem {

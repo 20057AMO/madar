@@ -18,6 +18,7 @@ import {
 } from './project-slug-core';
 import type { ProjectLimits } from './project-limits';
 import type { ServeConfig } from './serve-core';
+import type { DigestConfig } from './digest-core';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || path.join(__dirname, '..', '..', 'data');
 const META_DIR = path.join(DATA_DIR, 'projects');
@@ -89,6 +90,10 @@ export interface ProjectMeta {
   crashWatch?: CrashWatch;
   /** static-site serve toggle (enabled/port/pid) — see services/serve-core.ts. */
   serve?: ServeConfig;
+  /** scheduled intelligence-digest config — see services/digest-core.ts. */
+  digest?: DigestConfig;
+  /** timestamp of the last successful digest (scheduler due-check). */
+  lastDigestAt?: string;
 }
 
 /**

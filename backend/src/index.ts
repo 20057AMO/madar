@@ -48,6 +48,7 @@ import { recordActivity, listActivity } from './services/project-activity';
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
 import { exportProjectZip } from './services/project-zip';
 import * as snapAuto from './services/project-snapshots-auto';
+import * as digest from './services/project-digest';
 import { getIdeStatus } from './services/ide-service';
 import { createStatusCache, resolveEmbeddedPort, isLanReachableHost, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
 import {
@@ -2017,6 +2018,93 @@ app.post('/api/projects/:slug/snapshots/:file/restore', requireProjectAccess('ed
   }
 });
 
+// ── Project intelligence digests (scheduled AI summaries) ────────────
+// AI-generated project digest: a periodic (or manual) summary of goals, notes,
+// activity and recent changes. Viewer+ reads; editor+ writes. requireProjectAccess
+// folds :slug once before the gate, so every call below names the canonical
+// project. The config route is registered BEFORE the generic :id route so
+// "config" is never captured as a digest id.
+
+// List stored digests (newest-first).
+app.get('/api/projects/:slug/digests', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    // 404 parity with the snapshots config route: a canonical-but-absent
+    // project must not answer 200 with an empty history.
+    if (readMeta(req.params.slug).state === 'absent') {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(digest.listDigests(req.params.slug));
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+// Read a project's digest schedule (viewer+).
+app.get('/api/projects/:slug/digests/config', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    if (readMeta(req.params.slug).state === 'absent') {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(digest.getDigestConfig(req.params.slug));
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+// Update a project's digest schedule (partial merge: enabled / intervalMin).
+app.put('/api/projects/:slug/digests/config', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    const cfg = digest.setDigestConfig(req.params.slug, (req.body as any) || {}, req.user?.id);
+    recordAudit('digest-config-change', true, req.ip, undefined, {
+      enabled: cfg.enabled ? 1 : 0,
+      intervalMin: cfg.intervalMin,
+    });
+    res.json(cfg);
+  } catch (err: any) {
+    recordAudit('digest-config-change', false, req.ip);
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+// Generate a digest now. `startDigest` runs the preflight gates synchronously
+// (404/409/429/503) and returns the fresh `running` entry; generation continues
+// in the background. An engine failure is recorded on the entry (never a 500).
+app.post('/api/projects/:slug/digests', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    const entry = digest.startDigest(req.params.slug, { trigger: 'manual', userId: req.user?.id });
+    recordAudit('digest-generate', true, req.ip, undefined, { id: entry.id });
+    res.status(201).json({ digest: { id: entry.id, status: entry.status } });
+  } catch (err: any) {
+    recordAudit('digest-generate', false, req.ip);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// One stored digest by id (viewer+).
+app.get('/api/projects/:slug/digests/:id', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    const entry = digest.getDigest(req.params.slug, req.params.id);
+    if (!entry) return res.status(404).json({ error: 'Digest not found' });
+    res.json(entry);
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+// Delete one stored digest.
+app.delete('/api/projects/:slug/digests/:id', requireProjectAccess('editor'), (req: any, res) => {
+  try {
+    if (!digest.deleteDigest(req.params.slug, req.params.id, req.user?.id)) {
+      return res.status(404).json({ error: 'Digest not found' });
+    }
+    recordAudit('digest-delete', true, req.ip, undefined, { id: req.params.id });
+    res.json({ ok: true });
+  } catch (err: any) {
+    recordAudit('digest-delete', false, req.ip);
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
 // ── Project membership ────────────────────────────────────────
 
 // List members
@@ -3291,6 +3379,12 @@ startBootUpdatesReapply();
 
 // Per-project automated snapshot captures (boot + every WSD_SNAPSHOT_SWEEP_MS).
 snapAuto.startSnapshotAutomation();
+
+// Project-intelligence digests: first flip any run orphaned by a crashed server
+// (running → failed), then start the periodic sweep (boot + every
+// WSD_DIGEST_SWEEP_MS, one deferred pass at boot).
+digest.reconcileRunningDigests();
+digest.startDigestAutomation();
 
 // Container-crash detection (boot + every WSD_ALERT_SWEEP_MS) — WebSocket-
 // independent, so crashes are caught even with zero browsers connected.
