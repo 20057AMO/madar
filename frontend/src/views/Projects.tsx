@@ -159,9 +159,23 @@ export function Projects() {
     let open = false;
     try { open = sessionStorage.getItem('wsd.openCreate') === '1'; } catch { /* ignored */ }
     if (open) {
+      setPageTab('projects');
       setCreateOpen(true);
       try { sessionStorage.removeItem('wsd.openCreate'); } catch { /* ignored */ }
     }
+  }, []);
+
+  // The sessionStorage handshake only fires on mount, so a palette "new
+  // project" action taken while this page is already on screen would be lost.
+  // The live event covers that case and consumes the flag too.
+  useEffect(() => {
+    const openCreate = () => {
+      setPageTab('projects');
+      setCreateOpen(true);
+      try { sessionStorage.removeItem('wsd.openCreate'); } catch { /* ignored */ }
+    };
+    window.addEventListener('wsd:openCreate', openCreate);
+    return () => window.removeEventListener('wsd:openCreate', openCreate);
   }, []);
 
   // Duplicate-project modal state.

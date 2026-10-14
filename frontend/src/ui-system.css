@@ -60,6 +60,18 @@
 .toast-x:hover { color: var(--text); background: var(--border); }
 
 /* ── Command palette ─────────────────────────────────────────── */
+/* The palette is a ROOT-level sibling of the app shell, so its z-index
+   competes DIRECTLY with page overlays — `.view` is position:static with no
+   stacking context (the `viewIn` keyframe is opacity-only and finishes at 1),
+   so `.modal-overlay` at 260 really does outrank this 250. The primary control
+   is the GUARD, not the layer: the host makes the palette and blocking modals
+   MUTUALLY EXCLUSIVE — the palette refuses to open while a blocking overlay is
+   present (`.modal-overlay:not(.static-overlay), .confirm-overlay`) and closes
+   if one appears while it is open. `.static-overlay` is the in-flow providers
+   lock gate — not a modal — so the palette stays usable there. z-index 250 is
+   then defense-in-depth for the observer window: the palette sits ABOVE every
+   page-scoped popover (canvas ctx ~200, chat ctx 210/211, lightbox 220) so it
+   is never hidden behind one, and BELOW toasts (300). */
 .palette-overlay {
   position: fixed;
   inset: 0;
@@ -139,13 +151,14 @@
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-height: 40px;
   text-align: start;
   background: none;
   border: none;
   color: var(--text-2);
   font: inherit;
   font-size: 0.82rem;
-  padding: 8px 10px;
+  padding: 10px 10px;
   border-radius: 8px;
   cursor: pointer;
 }
@@ -158,7 +171,31 @@
 
 .palette-row-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.palette-row-current {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* The badge sits on --panel (#17181d) when its row is idle but on --panel-2
+   (#1c1e24) when the row is active/highlighted — where --text-3 is only
+   4.30:1 (below AA). Bump to --text-2 in that state (6.34:1) so the badge
+   clears 4.5:1 in BOTH states. */
+.palette-row.active .palette-row-current { color: var(--text-2); }
+
 .palette-enter { color: var(--text-3); flex-shrink: 0; }
+
+.palette-note {
+  padding: 8px 12px;
+  font-size: 0.72rem;
+  color: var(--text-3);
+}
+.palette-note.error { color: var(--red); }
 
 .palette-empty {
   padding: 26px 12px;
@@ -175,6 +212,10 @@
 }
 
 .palette-hint { font-size: 0.66rem; color: var(--text-3); }
+
+/* Arabic letterforms are connected — tracking breaks them. */
+[lang='ar'] .palette-section-title,
+[lang='ar'] .palette-row-current { letter-spacing: 0; }
 
 /* ── Shared skeleton block & empty state ─────────────────────── */
 .skel-block { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
@@ -445,4 +486,5 @@
 @media (prefers-reduced-motion: reduce) {
   .qa-tile, .project-card, .nav-btn { transition: none; }
   .qa-tile:hover:not(:disabled), .project-card:hover { transform: none; }
+  .palette, .toast { animation: none; }
 }

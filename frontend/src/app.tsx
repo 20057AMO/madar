@@ -1,6 +1,6 @@
 import { Component, type ComponentChildren } from 'preact';
 import { lazy, Suspense } from 'preact/compat';
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { Router, Route } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
@@ -454,7 +454,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           </>
         )}
       </nav>
-      <button class="palette-hint-row" onClick={() => { onClose(); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true })); }}>
+      <button class="palette-hint-row" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('wsd:palette-open')); }}>
         <Search width={13} height={13} class="icon" />
         <span>{t('palette.title')}</span>
         <kbd class="palette-hint-kbd">Ctrl K</kbd>
@@ -592,7 +592,6 @@ function Shell() {
   const { user, loading } = useAuth();
   const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
   // The route the /login bounce interrupted, held for as long as the login
   // render lasts. consumePostLoginRoute() is one-shot, and the shell can
   // re-render before the hash write is observed — replaying the consume would
@@ -625,20 +624,6 @@ function Shell() {
   useEffect(() => {
     setSidebarOpen(false);
   }, [location]);
-
-  // Global Ctrl+K / Cmd+K opens the command palette (authenticated only).
-  const openPalette = useCallback(() => setPaletteOpen(true), []);
-  useEffect(() => {
-    if (!user) return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        setPaletteOpen((open) => !open);
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [user, openPalette]);
 
   if (loading) {
     return (
@@ -711,7 +696,7 @@ function Shell() {
             class="menu-btn palette-trigger"
             aria-label={t('palette.title')}
             title={`${t('palette.title')} (Ctrl+K)`}
-            onClick={() => setPaletteOpen(true)}
+            onClick={() => window.dispatchEvent(new CustomEvent('wsd:palette-open'))}
           >
             <Command width={16} height={16} />
           </button>
@@ -744,9 +729,85 @@ function Shell() {
           </Suspense>
         </main>
       </div>
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </>
   );
+}
+
+/**
+ * A real blocking overlay: a modal (create-project, ReAuth, Confirm,
+ * AgentSettings, Trash restore) or the chat confirm dialog. The providers lock
+ * gate is `.modal-overlay.static-overlay` — in-flow, not a modal — so it is
+ * excluded and the palette stays usable there. Mirrors the guard already used
+ * by ProjectCanvas's global keyboard handler.
+ *
+ * Why a guard: the palette is a ROOT-level sibling of the app shell, so its
+ * z-index competes DIRECTLY with page overlays — `.view` is position:static
+ * with no stacking context (the `viewIn` keyframe is opacity-only and finishes
+ * at 1). `z-index: 250` (palette) / `260` (`.modal-overlay`) is only
+ * defense-in-depth for the observer window; the guard is the real control, so
+ * coexistence — which would mount the palette over the modal and let its
+ * capture-phase key handler swallow the modal's keys — is prevented instead of
+ * layered.
+ */
+const BLOCKING_OVERLAY_SELECTOR = '.modal-overlay:not(.static-overlay), .confirm-overlay';
+const blockingOverlayOpen = () => !!document.querySelector(BLOCKING_OVERLAY_SELECTOR);
+
+/**
+ * Command-palette host. Lifted out of Shell because Shell early-returns for
+ * /agents and admin /opencode-studio — the palette (and the global Ctrl+K
+ * listener) must survive those branches. Rendered as a Shell sibling, gated on
+ * the signed-in user. Sidebar/mobile triggers open it through the
+ * `wsd:palette-open` window event, matching the ROUTE_LANDING_EVENT pattern.
+ *
+ * Both open paths refuse while a blocking overlay is present, and an observer
+ * closes the palette if one appears while it is open, so the palette and a
+ * blocking modal are mutually exclusive.
+ */
+function PaletteHost() {
+  const { user } = useAuth();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setOpen(false);
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        // While a modal is up, leave Ctrl+K to the browser/modal (no
+        // preventDefault) — the palette must never mount over it.
+        if (blockingOverlayOpen()) return;
+        e.preventDefault();
+        setOpen((v) => !v);
+      }
+    };
+    const onOpen = () => {
+      if (blockingOverlayOpen()) return;
+      setOpen(true);
+    };
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('wsd:palette-open', onOpen);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('wsd:palette-open', onOpen);
+    };
+  }, [user]);
+
+  // Defensive close: an async/programmatic modal can mount while the palette
+  // is already open, which would leave the palette painted over it. Watch the
+  // body and close on the first blocking overlay; torn down with the open
+  // state so it never observes while closed.
+  useEffect(() => {
+    if (!open) return;
+    const observer = new MutationObserver(() => {
+      if (blockingOverlayOpen()) setOpen(false);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [open]);
+
+  if (!user) return null;
+  return <CommandPalette open={open} onClose={() => setOpen(false)} />;
 }
 
 /**
@@ -890,6 +951,7 @@ export function App() {
               <RouteTitle />
               <RouteAnnouncer />
               <Shell />
+              <PaletteHost />
               <EmbedSessionWarmup />
               <IdeKeepAlive />
               <OpencodeKeepAlive />

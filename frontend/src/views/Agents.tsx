@@ -332,7 +332,7 @@ export function Agents() {
   const activeProviderModels = agentModels;
 
   return (
-    <main class="agents-page">
+    <main class="agents-page" id="main" tabIndex={-1}>
       {loading && (
         <div class="empty-state" style="margin:60px auto" role="status">
           <div class="big">⏳</div>

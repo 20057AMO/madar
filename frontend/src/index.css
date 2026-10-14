@@ -1119,8 +1119,15 @@ textarea.agent-prompt-input {
 }
 
 /* -- Modal (password popup) -- */
+/* Modals render INSIDE `.view`, but `.view` is position:static and creates NO
+   stacking context (the `viewIn` keyframe is opacity-only and finishes at 1),
+   so this z-index DOES compete with the root-level command palette. The guard
+   is the primary control — the palette and blocking modals are mutually
+   exclusive — so `z-index: 250` (palette) / `260` (modal) is defense-in-depth
+   for the observer window: the modal clears the palette, sits above in-page
+   popovers (canvas/chat ctx 200-211, lightbox 220) and below toasts (300). */
 .modal-overlay {
-  position: fixed; inset: 0; z-index: 200;
+  position: fixed; inset: 0; z-index: 260;
   background: rgba(0,0,0,0.6);
   display: flex; align-items: center; justify-content: center;
   padding: 20px;

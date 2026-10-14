@@ -314,7 +314,7 @@ export function OpencodeStudio() {
     : items;
 
   return (
-    <div class="opencode-page">
+    <main class="opencode-page" id="main" tabIndex={-1}>
       <h1 class="sr-only">{t2('استوديو Opencode', 'Opencode Studio')}</h1>
       <div class="opencode-toolbar">
         <button class="btn-ghost sm" onClick={() => setLocation('/')}><ArrowLeft width={13} height={13} class="icon" /> {t('nav.dashboard')}</button>
@@ -586,6 +586,6 @@ export function OpencodeStudio() {
         onConfirm={executeUpdate}
         onCancel={() => { setPendingUpdate(false); setReauthError(null); setUpdating(false); }}
       />
-    </div>
+    </main>
   );
 }
