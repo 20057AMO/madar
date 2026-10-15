@@ -1,51 +1,12 @@
 /**
  * E2E tests for agent CRUD — edit + delete flow against the live container.
  *
- * API calls go through page.evaluate so they carry the browser's auth token.
+ * API calls go through page.evaluate so they carry the browser's auth token;
+ * auth itself is shared with the other suites via ./helpers (a JWT forged for
+ * a REAL user resolved from the running container).
  */
-import { test, expect, type Page } from '@playwright/test';
-import jwt from 'jsonwebtoken';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const BASE = 'http://localhost:3000';
-
-function parseDotEnv(filePath: string): Record<string, string> {
-  const raw = fs.readFileSync(filePath, 'utf8');
-  const out: Record<string, string> = {};
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq < 0) continue;
-    out[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
-  }
-  return out;
-}
-
-const __filename = fileURLToPath(import.meta.url);
-const repoRoot = path.resolve(path.dirname(__filename), '..', '..');
-const env = parseDotEnv(path.join(repoRoot, '.env'));
-const JWT_SECRET = env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error(
-    'JWT_SECRET not found in .env — the server no longer has a public default to share, ' +
-    'so set a long random JWT_SECRET in .env (the server then uses that same value) before running e2e',
-  );
-}
-
-function forgeToken(): string {
-  return jwt.sign({ id: 'e2e-user', username: 'e2e', tv: 0 }, JWT_SECRET, { expiresIn: '24h' });
-}
-
-async function injectAuth(page: Page): Promise<void> {
-  const token = forgeToken();
-  await page.addInitScript(({ t }) => {
-    localStorage.setItem('wsd.token', t);
-  }, { t: token });
-}
+import { test, expect, type Page } from './fixtures';
+import { BASE, injectAuth } from './helpers';
 
 async function apiCall(page: Page, method: string, apiPath: string, body?: any): Promise<any> {
   return page.evaluate(async ({ method, apiPath, body, base }) => {

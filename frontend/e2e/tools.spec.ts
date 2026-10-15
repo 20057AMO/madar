@@ -1,13 +1,11 @@
 /**
  * E2E smoke tests for the Madar web UI — runs against the live container.
  *
- * Auth: We forge a JWT locally (same secret as the server) for a REAL user
- * resolved from the running container's data/users.json and inject it into
- * localStorage via addInitScript, so the app treats the browser as logged in.
- * A fabricated user id is refused server-side (verifyToken returns null for
- * unknown ids → the app bounces to /login). The UI language is pinned to
- * English so text assertions stay deterministic (first-visit default is
- * Arabic).
+ * Auth: shared with the other suites via ./helpers — a JWT forged locally (same
+ * secret the server resolved) for a REAL user resolved from the running
+ * container's data/users.json, injected into localStorage via addInitScript so
+ * the app treats the browser as logged in. The UI language is pinned to English
+ * so text assertions stay deterministic (first-visit default is Arabic).
  *
  * Tool entry policy (current reality):
  *  - The raw surfaces (code-server / opencode web) bind loopback INSIDE the
@@ -20,74 +18,12 @@
  *    an "Open in new tab" anchor pointing at the proxy — never a raw
  *    upstream port.
  */
-import { test, expect, type Page } from '@playwright/test';
-import jwt from 'jsonwebtoken';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { execFileSync } from 'child_process';
+import { test, expect, type Page } from './fixtures';
+import { BASE, injectAuth } from './helpers';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
-
-const BASE = 'http://localhost:3000';
-
-/** Minimal .env parser (no dotenv dependency). */
-function parseDotEnv(filePath: string): Record<string, string> {
-  const raw = fs.readFileSync(filePath, 'utf8');
-  const out: Record<string, string> = {};
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq < 0) continue;
-    out[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
-  }
-  return out;
-}
-
-const __filename = fileURLToPath(import.meta.url);
-const repoRoot = path.resolve(path.dirname(__filename), '..', '..');
-const env = parseDotEnv(path.join(repoRoot, '.env'));
-const JWT_SECRET = env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error(
-    'JWT_SECRET not found in .env — the server no longer has a public default to share, ' +
-    'so set a long random JWT_SECRET in .env (the server then uses that same value) before running e2e',
-  );
-}
-
-/** Resolve a session token for a REAL user that exists in the running container. */
-let cachedToken: string | null = null;
-function sessionToken(): string {
-  if (cachedToken) return cachedToken;
-  const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
-  const users = JSON.parse(
-    execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], { encoding: 'utf8' }),
-  );
-  const list: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> = users.users || [];
-  const user = list.find((entry) => entry.role === 'admin') || list.find((entry) => entry.id);
-  if (!user?.id) {
-    throw new Error('No existing user is available in the running container');
-  }
-  cachedToken = jwt.sign(
-    { id: user.id, username: user.username, role: user.role, tv: user.tokenVersion || 0, jti: 'tools-e2e' },
-    JWT_SECRET,
-    { expiresIn: '24h' },
-  );
-  return cachedToken;
-}
-
-/** Inject auth token + English UI into localStorage before any page script runs. */
-async function injectAuth(page: Page): Promise<void> {
-  const token = sessionToken();
-  await page.addInitScript((value) => {
-    localStorage.setItem('wsd.token', value);
-    localStorage.setItem('wsd.lang', 'en');
-  }, token);
-}
 
 /** Click a locator and capture the popup it opens, returning its URL. */
 async function popupUrl(page: Page, click: () => Promise<void>): Promise<string> {
