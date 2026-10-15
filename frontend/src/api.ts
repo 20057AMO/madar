@@ -657,6 +657,50 @@ export const deleteDigest = (slug: string, id: string) =>
     { method: 'DELETE' },
   );
 
+// ── Planning suggestions (rule-based) ────────────────────────────────────
+export type SuggestionKind =
+  | 'goal_without_task'
+  | 'untracked_idea'
+  | 'stale_bug'
+  | 'orphan_card'
+  | 'duplicate_item'
+  | 'empty_board';
+export type SuggestionSeverity = 'high' | 'med' | 'low';
+export type SuggestionSource = 'rule' | 'ai';
+export type SuggestionTarget = 'note' | 'canvas';
+
+/** One rule-based planning suggestion. `title`/`rationale`/`payload.text` are
+ *  derived from user notes/canvas — render as text, never as HTML. */
+export interface Suggestion {
+  id: string;
+  key: string;
+  kind: SuggestionKind;
+  severity: SuggestionSeverity;
+  title: string;
+  rationale: string;
+  source: SuggestionSource;
+  target: SuggestionTarget;
+  payload: { text: string; kind?: NoteKind };
+  refs: string[];
+  createdAt: string;
+}
+export const listSuggestions = (slug: string) =>
+  api<{ items: Suggestion[]; total: number }>(
+    `/api/projects/${encodeURIComponent(slug)}/suggestions`,
+  );
+// The list is recomputed server-side on every GET, so there is deliberately no
+// refresh route: a "refresh" is a plain listSuggestions() re-fetch.
+export const dismissSuggestion = (slug: string, key: string) =>
+  api<{ ok: boolean }>(`/api/projects/${encodeURIComponent(slug)}/suggestions/dismiss`, {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  });
+export const acceptSuggestion = (slug: string, key: string) =>
+  api<{ ok: boolean; landed: { target: SuggestionTarget; id: string } }>(
+    `/api/projects/${encodeURIComponent(slug)}/suggestions/accept`,
+    { method: 'POST', body: JSON.stringify({ key }) },
+  );
+
 // ── Project notes (ideas / bugs / goals) ─────────────────────────────────
 export type NoteKind = 'idea' | 'bug' | 'goal';
 export interface NoteItem {

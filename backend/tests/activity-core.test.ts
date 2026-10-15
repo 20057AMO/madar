@@ -4,7 +4,7 @@
  * Docker, no service imports (same pattern as alerts-core/serve-core).
  *
  * Contract under test:
- *  - The canonical 37-action vocabulary, unknown/junk rejected.
+ *  - The canonical 38-action vocabulary, unknown/junk rejected.
  *  - sanitizeDetails: numbers/strings/string-arrays only, 400-char cap,
  *    booleans/objects/null/nested dropped, empty → undefined.
  *  - appendActivity/capActivity: injectable ceiling, newest kept.
@@ -28,7 +28,7 @@ import {
   type ActivityEntry,
 } from '../src/services/activity-core.ts';
 
-describe('activity vocabulary — the 37 canonical actions', () => {
+describe('activity vocabulary — the 38 canonical actions', () => {
   test('covers the full saladin action list', () => {
     const expected = [
       'created', 'recreated', 'duplicated', 'imported', 'restored', 'deleted',
@@ -42,8 +42,9 @@ describe('activity vocabulary — the 37 canonical actions', () => {
       'review_opened', 'review_commented', 'review_resolved', 'review_reopened', 'review_deleted',
       'agent_run',
       'digest_generated', 'digest_config', 'digest_deleted',
+      'suggestion_accepted',
     ];
-    assert.strictEqual(ACTIVITY_ACTIONS.length, 37);
+    assert.strictEqual(ACTIVITY_ACTIONS.length, 38);
     assert.deepStrictEqual([...ACTIVITY_ACTIONS].sort(), expected.sort());
   });
 
@@ -56,6 +57,13 @@ describe('activity vocabulary — the 37 canonical actions', () => {
       assert.ok(isActivityAction(a), `expected ${a} to be valid`);
     }
     for (const bad of ['digest', 'digest-deleted', 'digests_generated', 'digest_deleted!', 'DIGEST_CONFIG']) {
+      assert.strictEqual(isActivityAction(bad), false, `expected ${bad} to be rejected`);
+    }
+  });
+
+  test('the suggestion acceptance action is accepted; near-misses are rejected', () => {
+    assert.ok(isActivityAction('suggestion_accepted'), 'suggestion_accepted is canonical');
+    for (const bad of ['suggestion', 'suggestion-accepted', 'suggestions_accepted', 'suggestion_accepted!', 'SUGGESTION_ACCEPTED']) {
       assert.strictEqual(isActivityAction(bad), false, `expected ${bad} to be rejected`);
     }
   });

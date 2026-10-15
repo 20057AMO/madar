@@ -91,6 +91,8 @@ export type AuditEvent =
   | 'digest-config-change'
   | 'digest-generate'
   | 'digest-delete'
+  | 'suggestion-dismiss'
+  | 'suggestion-accept'
   | 'mount-audit';
 
 export interface AuditEntry {

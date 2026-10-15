@@ -10,7 +10,7 @@
  * API-facing list reverses to newest-first via sliceActivity.
  */
 
-/** The complete, canonical action vocabulary (37 events). */
+/** The complete, canonical action vocabulary (38 events). */
 export const ACTIVITY_ACTIONS = [
   // Lifecycle (9)
   'created',
@@ -59,6 +59,8 @@ export const ACTIVITY_ACTIONS = [
   'digest_generated',
   'digest_config',
   'digest_deleted',
+  // Planning suggestions (1)
+  'suggestion_accepted',
 ] as const;
 
 /** Per-list cap for the activity API (mirrors listAudit's MAX_ENTRIES). */

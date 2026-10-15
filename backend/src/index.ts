@@ -49,6 +49,7 @@ import { exportProjectSnapshot, importProjectSnapshot } from './services/project
 import { exportProjectZip } from './services/project-zip';
 import * as snapAuto from './services/project-snapshots-auto';
 import * as digest from './services/project-digest';
+import * as suggest from './services/planning-suggest';
 import { getIdeStatus } from './services/ide-service';
 import { createStatusCache, resolveEmbeddedPort, isLanReachableHost, EMBEDDED_STATUS_DEFAULT_TTL_MS } from './services/embedded-status-core';
 import {
@@ -2101,6 +2102,68 @@ app.delete('/api/projects/:slug/digests/:id', requireProjectAccess('editor'), (r
     res.json({ ok: true });
   } catch (err: any) {
     recordAudit('digest-delete', false, req.ip);
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+// ── Planning suggestions (rule-based canvas/notes recommendations) ──────
+// The rule engine turns the live canvas + notes into concrete, accept/reject
+// suggestions ("this open goal has no task cards", "this bug is 20 days old").
+// Viewer+ reads; editor+ dismisses/accepts. requireProjectAccess folds :slug
+// once before the gate, so every call below names the canonical project. The
+// list is recomputed on every GET (only dismissals are persisted), so there is
+// no refresh route. An accept names ONLY a key — the written payload is
+// server-computed.
+
+// List the current suggestions (recomputed from canvas/notes, dismissals applied).
+app.get('/api/projects/:slug/suggestions', requireProjectAccess('viewer'), (req: any, res) => {
+  try {
+    // 404 parity with snapshots/digests: a canonical-but-absent project must
+    // not answer 200 with an empty list.
+    if (readMeta(req.params.slug).state === 'absent') {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(suggest.getSuggestions(req.params.slug));
+  } catch (err: any) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+// Dismiss one suggestion by key so it never re-suggests. A key matching no
+// current suggestion is a 404 (symmetric with accept) — not an accepted no-op.
+app.post('/api/projects/:slug/suggestions/dismiss', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    if (readMeta(req.params.slug).state === 'absent') {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+    if (!key) return res.status(400).json({ error: 'key is required' });
+    suggest.dismissSuggestion(req.params.slug, key);
+    recordAudit('suggestion-dismiss', true, req.ip, undefined, { slug: req.params.slug });
+    res.json({ ok: true });
+  } catch (err: any) {
+    recordAudit('suggestion-dismiss', false, req.ip);
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+});
+
+// Accept one suggestion by key: land its server-computed payload as a note or
+// a canvas card, then dismiss the key. Unknown key → 404; junk body → 400.
+app.post('/api/projects/:slug/suggestions/accept', requireProjectAccess('editor'), userWriteLimiter, (req: any, res) => {
+  try {
+    if (readMeta(req.params.slug).state === 'absent') {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+    if (!key) return res.status(400).json({ error: 'key is required' });
+    const out = suggest.acceptSuggestion(req.params.slug, key, req.user?.id);
+    recordAudit('suggestion-accept', true, req.ip, undefined, {
+      slug: req.params.slug,
+      target: out.landed.target,
+    });
+    res.json(out);
+  } catch (err: any) {
+    recordAudit('suggestion-accept', false, req.ip);
     res.status(err.statusCode || 400).json({ error: err.message });
   }
 });

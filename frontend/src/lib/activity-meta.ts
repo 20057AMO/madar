@@ -38,6 +38,7 @@ import {
   RotateCcw,
   BrainCircuit,
   Sparkles,
+  Lightbulb,
 } from 'lucide-preact';
 import type { ActivityDetails } from '../api';
 
@@ -69,7 +70,7 @@ function fmtPairs(details: ActivityDetails): string[] {
 
 const fmtGeneric = (details: ActivityDetails): string => fmtPairs(details).join(' · ');
 
-/** All 33 server actions. Labels resolve through i18n keys under `activity.*`. */
+/** All 38 server actions. Labels resolve through i18n keys under `activity.*`. */
 const META: Record<string, ActivityMeta> = {
   // ── Lifecycle ──
   created: { Icon: FolderPlus, labelKey: 'activity.created', dotClass: 'created', fmtDetail: fmtGeneric },
@@ -186,6 +187,13 @@ const META: Record<string, ActivityMeta> = {
     Icon: Trash2,
     labelKey: 'activity.digest_deleted',
     dotClass: 'digest_deleted',
+    fmtDetail: fmtGeneric,
+  },
+  // ── Planning suggestions ──
+  suggestion_accepted: {
+    Icon: Lightbulb,
+    labelKey: 'activity.suggestion_accepted',
+    dotClass: 'suggestion_accepted',
     fmtDetail: fmtGeneric,
   },
 };

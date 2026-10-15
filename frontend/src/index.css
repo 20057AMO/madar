@@ -1552,6 +1552,7 @@ textarea.agent-prompt-input {
 .activity-dot.digest_generated { background: var(--accent); } .activity-ico.digest_generated { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .activity-dot.digest_config { background: var(--text-2); } .activity-ico.digest_config { color: var(--text-2); background: color-mix(in srgb, var(--text-2) 12%, transparent); }
 .activity-dot.digest_deleted { background: var(--red); } .activity-ico.digest_deleted { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.activity-dot.suggestion_accepted { background: var(--accent); } .activity-ico.suggestion_accepted { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 /* Icon tints for the five legacy dot classes (their dots are styled above) */
 .activity-ico.created { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
 .activity-ico.started { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
