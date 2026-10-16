@@ -524,6 +524,27 @@ const ROUTE_TITLES: Record<string, string> = {
   '/profile': 'Profile',
 };
 
+/**
+ * The opencode client's own cold deep link — `/{base64url(directory)}/session`
+ * (e.g. `/L3dvcmtzcGFjZXMveW91dHViZQ/session`) — which main.tsx folds into the
+ * hash before the first render. route-landing.ts already names that shape; the
+ * title has to recognise it too or the tab silently reads "Madar". Decoding is
+ * the only honest test: the segment is opaque base64url, so any prefix check on
+ * the raw text would claim unrelated paths.
+ */
+function isOpencodeDirectoryPath(path: string): boolean {
+  const segment = path.split('/')[1];
+  if (!segment || !/^[A-Za-z0-9_-]+$/.test(segment)) return false;
+  try {
+    const padded = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4));
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes).startsWith('/workspaces');
+  } catch {
+    return false;
+  }
+}
+
 function RouteTitle() {
   const [location] = useHashLocation();
   useEffect(() => {
@@ -532,6 +553,11 @@ function RouteTitle() {
     if (!label && path.startsWith('/project/')) label = 'Project';
     if (!label && path.startsWith('/user/')) label = 'Profile';
     if (!label && path.startsWith('/terminals/')) label = 'Terminals';
+    // Recognised exactly like route-landing.ts: opencode owns every deeper
+    // /opencode/<segment…> URL (the directory deep link), and the folded
+    // bare-directory form above is that same surface.
+    if (!label && path.startsWith('/opencode/')) label = 'opencode';
+    if (!label && isOpencodeDirectoryPath(path)) label = 'opencode';
     document.title = label ? `${label} — Madar` : 'Madar';
   }, [location]);
   return null;
