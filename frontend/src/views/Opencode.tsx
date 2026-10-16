@@ -346,13 +346,12 @@ export function Opencode() {
             {t('opencode.openNewTab')}
           </a>
         )}
-        <span style="display:inline-flex;align-items:center;gap:6px;margin-left:12px" title={t('opencode.pickerTitle')}>
+        <span class="tool-picker-row" title={t('opencode.pickerTitle')}>
           <FolderOpen width={13} height={13} class="icon" />
           <label class="sr-only" for="oc-project-select">{t('opencode.pickerLabel')}</label>
           <select
             id="oc-project-select"
-            class="modern-input chat-sel"
-            style="width:200px;min-height:26px;padding:4px 8px;font-size:0.72rem"
+            class="modern-input chat-sel tool-picker"
             value={picked}
             disabled={opening}
             onInput={(e: any) => openProject(e.target.value)}

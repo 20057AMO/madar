@@ -307,13 +307,12 @@ export function EmbeddedIDE() {
         {embed.ready && running !== null && (
           <a class="btn-ghost sm" href={ideUrl} target="_blank" rel="noreferrer">{t('ide.openNewTab')}</a>
         )}
-        <span style="display:inline-flex;align-items:center;gap:6px;margin-left:12px" title={t('ide.folderTitle')}>
+        <span class="tool-picker-row" title={t('ide.folderTitle')}>
           <FolderOpen width={13} height={13} class="icon" />
           <label class="sr-only" for="ide-project-select">{t('ide.folderLabel')}</label>
           <select
             id="ide-project-select"
-            class="modern-input chat-sel"
-            style="width:200px;min-height:26px;padding:4px 8px;font-size:0.72rem"
+            class="modern-input chat-sel tool-picker"
             value={pickedSlug}
             onInput={(e: any) => pickProject(e.target.value)}
           >

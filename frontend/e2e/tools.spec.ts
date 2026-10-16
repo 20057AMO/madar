@@ -189,6 +189,40 @@ test.describe('Madar UI — tool entry points', () => {
     expect(opens).toHaveLength(0);
     await expect(page.locator('#oc-project-select')).toHaveValue('');
   });
+
+  /* -- g. phones: the picker is a full-width touch row, on tool pages only -- */
+  test('g) 360px — tool picker becomes a full-width 44px row; another page keeps its own select', async ({ page }) => {
+    await injectAuth(page);
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/ide'; });
+    const sel = page.locator('#ide-project-select');
+    await expect(sel).toBeVisible({ timeout: 20_000 });
+
+    // Above the breakpoint the fixed desktop box comes back — the rule is
+    // bounded to phones, not "everything narrower than 1280".
+    await page.setViewportSize({ width: 900, height: 700 });
+    await expect(sel).toHaveCSS('width', '200px');
+
+    // At 360px the picker stops being that box: it stretches into one
+    // full-width row at the 44px target the bar's own buttons already meet
+    // (it was 200px / 30px, with its label truncated to a few characters).
+    await page.setViewportSize({ width: 360, height: 640 });
+    const box = await sel.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.width).toBeGreaterThanOrEqual(300);
+    // …and nothing on the layer overflows sideways.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+    // Scoping: the row rule lives on #ide-main/#opencode-main, so an unrelated
+    // page's .chat-sel at the SAME viewport never picks it up (no class, and
+    // the mobile rule's flex-grow: 1 must not have landed on it).
+    await page.evaluate(() => { window.location.hash = '/projects'; });
+    const other = page.locator('select.chat-sel').first();
+    await expect(other).toBeVisible({ timeout: 20_000 });
+    expect(await other.evaluate((el) => el.classList.contains('tool-picker'))).toBe(false);
+    expect(await other.evaluate((el) => getComputedStyle(el).flexGrow)).toBe('0');
+  });
 });
 
 /* ------------------------------------------------------------------ */
