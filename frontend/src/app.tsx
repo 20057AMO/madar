@@ -219,7 +219,12 @@ const NavButton = ({
   onClick?: () => void;
 }) => {
   const [location] = useHashLocation();
-  const active = href ? location === href || (href !== '/' && (location.startsWith(href) || (href === '/projects' && location.startsWith('/project/')))) : false;
+  // Query stripped first (useHashLocation carries /projects?tab=trash), then
+  // prefix-match only on a real segment boundary — a bare startsWith made
+  // /opencode light up for /opencode-studio, exactly the near-miss isToolRoute
+  // already refuses for the full-screen layer.
+  const path = location.split('?')[0];
+  const active = href ? path === href || (href !== '/' && (path.startsWith(href + '/') || (href === '/projects' && path.startsWith('/project/')))) : false;
   return (
     <button
       class={`nav-btn ${active ? 'active' : ''}`}

@@ -400,7 +400,7 @@ export function EmbeddedIDE() {
                 <span class="dim" aria-hidden="true">{t('common.elapsed', { n: elapsed.seconds })}</span>
               )}
               {elapsed.showHint && (
-                <span aria-hidden="true" style="flex-basis: 100%; text-align: center; font-size: 0.75rem">
+                <span style="flex-basis: 100%; text-align: center; font-size: 0.75rem">
                   {t('common.coldStartHint')}
                 </span>
               )}

@@ -390,15 +390,18 @@ export function Opencode() {
           an outcome the user must act on (a dead ?project= link) has to stay
           readable while the frame is loading or already open, which is exactly
           when the status slot reports the frame state instead. */}
-      {notice && (
-        <div
-          class="term-title"
-          style="padding: 6px 14px; font-size: 0.7rem; border-bottom: 1px solid var(--border)"
-          role="status"
-        >
-          {notice}
-        </div>
-      )}
+      {/* The region stays MOUNTED across states and only its text is swapped —
+          a live region inserted already containing its text is announced
+          unreliably — and it collapses to nothing while empty, so sighted
+          layout is unchanged. */}
+      <div
+        class="term-title"
+        role="status"
+        aria-live="polite"
+        style={notice ? 'padding: 6px 14px; font-size: 0.7rem; border-bottom: 1px solid var(--border)' : undefined}
+      >
+        {notice || ''}
+      </div>
       {openErr && (
         <div
           class="term-title"
@@ -468,7 +471,7 @@ export function Opencode() {
                 <span class="dim" aria-hidden="true">{t('common.elapsed', { n: elapsed.seconds })}</span>
               )}
               {elapsed.showHint && (
-                <span aria-hidden="true" style="flex-basis: 100%; text-align: center; font-size: 0.75rem">
+                <span style="flex-basis: 100%; text-align: center; font-size: 0.75rem">
                   {t('common.coldStartHint')}
                 </span>
               )}
