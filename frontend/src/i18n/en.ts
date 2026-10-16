@@ -564,6 +564,8 @@ export const en = {
     frameTimeout:
       'opencode took too long to load. Its web process may have been restarted by an update.',
     noticeReady: 'New session for {name} is ready — opencode opened {name} as the working directory.',
+    projectUnavailable:
+      'Project "{slug}" is not available to open — it may have been renamed or deleted, or your account may not have editor access to it.',
   },
   canvas: {
     title: 'Planning canvas',

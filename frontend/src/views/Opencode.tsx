@@ -11,6 +11,7 @@ import { useFrameElapsed, useFrameFocusReturn, useFrameLoad } from '../lib/frame
 import { frameFocusRing } from '../lib/frame-focus-ring';
 import { buildOpencodeUrl } from '../lib/opencode-link';
 import { projectOptionLabel } from '../lib/project-label';
+import { replaceToolHashParam } from '../lib/tool-picker';
 import { startFrameTimer } from '../lib/perf-metrics';
 
 const PROJECT_KEY = 'wsd.opencode.project';
@@ -189,9 +190,14 @@ export function Opencode() {
     }
     if (!slug) {
       setDirectory(null);
+      replaceToolHashParam('/opencode', 'project', null);
       remount();
       return;
     }
+    // The address bar tracks what is actually open, so a refresh or a copied
+    // link reopens the same project. replaceState, so the deep-link effect
+    // below cannot re-fire against the URL it just wrote.
+    replaceToolHashParam('/opencode', 'project', slug);
     setOpening(true);
     try {
       const res = await openOpencodeProject(slug);
@@ -217,26 +223,36 @@ export function Opencode() {
       }
       setOpenErr(err.message);
       setDirectory(null);
+      // Nothing is open any more, so the address bar must not keep naming a
+      // project the user cannot see open.
+      replaceToolHashParam('/opencode', 'project', null);
     } finally {
       setOpening(false);
     }
   };
 
   // Reactive deep-links (?project=slug) + last-project memory — both work
-  // while this component stays mounted via the keep-alive layer. A remembered or
-  // deep-linked project the user cannot open is skipped (and the stored value
-  // dropped) instead of firing a request that can only 403.
+  // while this component stays mounted via the keep-alive layer. A project the
+  // user cannot open is never requested (that can only 403), but the two cases
+  // are NOT the same and are not treated the same:
+  //  - a REMEMBERED project that is now unopenable is dropped from storage and
+  //    skipped silently (the user did not ask for it on this visit);
+  //  - a project named by an EXPLICIT ?project= link is answered with an honest
+  //    notice and the dead param is stripped from the address bar, instead of
+  //    leaving the user staring at a link that silently did nothing.
   // NOTE: the query lives inside the hash, so read the full hash directly to
   // get ?project=.
   useEffect(() => {
     if (!projects.length) return;
     const handleHash = () => {
       let wanted = '';
+      let fromStore = false;
       const hash = window.location.hash || '';
       const qIdx = hash.indexOf('?');
       if (qIdx >= 0) {
         wanted = new URLSearchParams(hash.slice(qIdx)).get('project') || '';
       } else {
+        fromStore = true;
         try {
           wanted = localStorage.getItem(PROJECT_KEY) || '';
         } catch {
@@ -245,7 +261,20 @@ export function Opencode() {
       }
       if (!wanted || wanted === pickedRef.current) return;
       const project = projects.find((p) => p.slug === wanted);
-      if (project?.openable) openProject(wanted);
+      if (project?.openable) {
+        openProject(wanted);
+        return;
+      }
+      if (fromStore) {
+        try {
+          localStorage.removeItem(PROJECT_KEY);
+        } catch {
+          /* private mode */
+        }
+        return;
+      }
+      setNotice(t('opencode.projectUnavailable', { slug: wanted }));
+      replaceToolHashParam('/opencode', 'project', null);
     };
     handleHash();
     window.addEventListener('hashchange', handleHash);
@@ -340,19 +369,17 @@ export function Opencode() {
           </span>
         )}
         <span class="term-title" style="flex: 1; text-align: right; font-size: 0.7rem" role="status">
-          {notice && frameState !== 'ready'
-            ? notice
-            : embed.error
-              ? t('opencode.credentialFailed')
-              : running === false
-                ? t('opencode.offline')
-                : embed.forbidden
-                  ? t('opencode.needsEditor')
-                  : opening
-                    ? t('opencode.opening')
-                    : running
-                      ? frameStatus
-                      : t('opencode.checking')}
+          {embed.error
+            ? t('opencode.credentialFailed')
+            : running === false
+              ? t('opencode.offline')
+              : embed.forbidden
+                ? t('opencode.needsEditor')
+                : opening
+                  ? t('opencode.opening')
+                  : running
+                    ? frameStatus
+                    : t('opencode.checking')}
         </span>
         {embed.ready && running === true && frameState !== 'error' && (
           <button class="btn-ghost sm" onClick={() => remount()}>
@@ -360,6 +387,19 @@ export function Opencode() {
           </button>
         )}
       </div>
+      {/* Notices get their own row rather than sharing the toolbar status slot:
+          an outcome the user must act on (a dead ?project= link) has to stay
+          readable while the frame is loading or already open, which is exactly
+          when the status slot reports the frame state instead. */}
+      {notice && (
+        <div
+          class="term-title"
+          style="padding: 6px 14px; font-size: 0.7rem; border-bottom: 1px solid var(--border)"
+          role="status"
+        >
+          {notice}
+        </div>
+      )}
       {openErr && (
         <div
           class="term-title"

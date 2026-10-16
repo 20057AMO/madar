@@ -23,6 +23,7 @@
  */
 import { test, expect } from './fixtures';
 import { BASE, injectAuth } from './helpers';
+import { pickedFolderSlug } from '../src/lib/tool-picker';
 
 /* ------------------------------------------------------------------ */
 /*  Tests                                                             */
@@ -123,5 +124,94 @@ test.describe('Madar UI — tool entry points', () => {
     await page.evaluate(() => { window.location.hash = '/opencode'; });
     await expect(page.locator('#oc-project-select')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('iframe.opencode-frame[title="Madar opencode"]')).toBeVisible();
+  });
+
+  /* -- e. /#/ide?folder=… — the picker names the folder actually open ----- */
+  test('e) /#/ide?folder=… — picker follows the open folder; a sibling name is not a match', async ({ page }) => {
+    await injectAuth(page);
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/ide'; });
+
+    // WHICH project this admin sees is read from the rendered picker, so the
+    // suite never hard-codes a slug that may have been deleted meanwhile.
+    const select = page.locator('#ide-project-select');
+    await expect(select).toBeVisible({ timeout: 20_000 });
+    const firstOption = select.locator('option').nth(1);
+    await expect(firstOption).toBeAttached({ timeout: 15_000 });
+    const slug = (await firstOption.getAttribute('value')) || '';
+    expect(slug).not.toBe('');
+
+    // A DEEP folder (a sub-path inside the project) still names that project.
+    // The old prefix-strip put "<slug>/src" into the select value, so the
+    // toolbar showed no selection at all while the IDE was open on it.
+    const deep = `/workspaces/${slug}/src`;
+    await page.evaluate((f) => { window.location.hash = `/ide?folder=${encodeURIComponent(f)}`; }, deep);
+    await expect(select).toHaveValue(slug, { timeout: 10_000 });
+    // …and the address bar keeps naming the folder that is really open.
+    await expect.poll(() => page.url()).toContain(`folder=${encodeURIComponent(deep)}`);
+
+    // A SIBLING is not a match: a project "my-app" must never be reported for
+    // /workspaces/my-app-2 — the picker falls back to "All projects" rather
+    // than claiming a project the folder does not name.
+    const sibling = `/workspaces/${slug}-zz-e2e/src`;
+    await page.evaluate((f) => { window.location.hash = `/ide?folder=${encodeURIComponent(f)}`; }, sibling);
+    await expect(select).toHaveValue('', { timeout: 10_000 });
+    await expect.poll(() => page.url()).toContain(`folder=${encodeURIComponent(sibling)}`);
+
+    // A ?folder= we will not open is stripped, not left claiming in the address
+    // bar to be the open folder.
+    await page.evaluate(() => { window.location.hash = `/ide?folder=${encodeURIComponent('C:\\Users')}`; });
+    await expect.poll(() => page.url()).not.toContain('folder=');
+  });
+
+  /* -- f. /#/opencode?project=<unknown> — honest notice, no dead link ---- */
+  test('f) /#/opencode?project=<unknown> — honest notice, param stripped, no request', async ({ page }) => {
+    await injectAuth(page);
+    const opens: string[] = [];
+    page.on('request', (r) => {
+      if (r.url().includes('/api/opencode/open')) opens.push(r.url());
+    });
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/opencode?project=e2e-ghost-project'; });
+
+    // The link names a project this account cannot open: say so instead of
+    // silently doing nothing (the old code returned without a word).
+    const notice = page.getByRole('status').filter({ hasText: 'e2e-ghost-project' });
+    await expect(notice).toBeVisible({ timeout: 20_000 });
+    await expect(notice).toContainText('not available to open');
+
+    // The dead param is stripped, so a refresh or a copied link cannot lead
+    // straight back into the same silent dead end.
+    await expect.poll(() => page.url()).not.toContain('project=');
+
+    // Nothing was requested: an unopenable project must never reach the
+    // endpoint that seeds the workspace.
+    expect(opens).toHaveLength(0);
+    await expect(page.locator('#oc-project-select')).toHaveValue('');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Pure helpers — imported directly (no second test framework)        */
+/* ------------------------------------------------------------------ */
+
+test.describe('tool picker helpers (pure)', () => {
+  const roster = ['my-app', 'my-app-2', 'alpha'];
+
+  test('pickedFolderSlug: first segment only, whole-segment match', () => {
+    expect(pickedFolderSlug('/workspaces/my-app/src', roster)).toBe('my-app');
+    expect(pickedFolderSlug('/workspaces/my-app', roster)).toBe('my-app');
+    // A longer sibling is not a match for the shorter name — the trap a
+    // startsWith-based lookup falls into.
+    expect(pickedFolderSlug('/workspaces/my-app-2/src', roster)).toBe('my-app-2');
+    expect(pickedFolderSlug('/workspaces/my-app-2/src', ['my-app'])).toBe(null);
+    // Not a workspace path, the bare root, an empty folder, or a slug the
+    // roster does not render → no selection at all.
+    expect(pickedFolderSlug('/workspaces', roster)).toBe(null);
+    expect(pickedFolderSlug('/workspaces/', roster)).toBe(null);
+    expect(pickedFolderSlug('/', roster)).toBe(null);
+    expect(pickedFolderSlug('', roster)).toBe(null);
+    expect(pickedFolderSlug('/workspaces/ghost', roster)).toBe(null);
+    expect(pickedFolderSlug('/workspaces/ghost', [])).toBe(null);
   });
 });

@@ -9,6 +9,7 @@ import { useEmbedSession } from '../lib/embed-session';
 import { useFrameElapsed, useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
 import { frameFocusRing } from '../lib/frame-focus-ring';
 import { projectOptionLabel } from '../lib/project-label';
+import { pickedFolderSlug, replaceToolHashParam } from '../lib/tool-picker';
 import { startFrameTimer } from '../lib/perf-metrics';
 
 const FOLDER_KEY = 'wsd.ide.folder';
@@ -47,7 +48,6 @@ export function EmbeddedIDE() {
   // container and no longer published, so this URL is the only route to it.
   // code-server serves relative asset URLs, so the /ide prefix is safe.
   const ideUrl = `${proto}://${host}:${port}/ide/?folder=${encodeURIComponent(folder)}`;
-  const pickedSlug = folder === '/workspaces' ? '' : folder.replace('/workspaces/', '');
 
   // The proxy needs its session cookie before the frame can load, so the frame
   // stays unmounted (in the honest "checking…" state) until the exchange lands.
@@ -112,6 +112,11 @@ export function EmbeddedIDE() {
     } catch {
       /* private mode */
     }
+    // Keep the address bar in step with what is actually open, so a refresh or
+    // a link copied out of it reopens the same folder. `/workspaces` itself
+    // carries no param. replaceState, so this never re-fires the deep-link
+    // effect below into a loop.
+    replaceToolHashParam('/ide', 'folder', f === '/workspaces' ? null : f);
     if (reload) remount();
   };
 
@@ -124,7 +129,14 @@ export function EmbeddedIDE() {
       const hash = window.location.hash || '';
       const qIdx = hash.indexOf('?');
       const f = qIdx >= 0 ? new URLSearchParams(hash.slice(qIdx)).get('folder') : null;
-      if (f && f.startsWith('/workspaces/') && f !== folderRef.current) applyFolder(f, true);
+      if (!f) return;
+      if (f.startsWith('/workspaces/')) {
+        if (f !== folderRef.current) applyFolder(f, true);
+        return;
+      }
+      // A ?folder= we will not open (junk, or a path outside /workspaces) must
+      // not keep claiming in the address bar to be the open folder.
+      replaceToolHashParam('/ide', 'folder', null);
     };
     handleHash();
     window.addEventListener('hashchange', handleHash);
@@ -144,6 +156,15 @@ export function EmbeddedIDE() {
   }, []);
 
   const visible = useDocumentVisible();
+
+  // The picker reflects the folder that is ACTUALLY open — its first segment,
+  // and only when the roster really renders that option. Deriving it from the
+  // raw string (the old `folder.replace('/workspaces/', '')`) put a slug AND a
+  // sub-path into the select value for a deep folder like
+  // `/workspaces/my-app/src`, so the toolbar showed no selection at all while
+  // the IDE was open on that project.
+  const projectSlugs = useMemo(() => projects.map((p) => p.slug), [projects]);
+  const pickedSlug = pickedFolderSlug(folder, projectSlugs) || '';
 
   // Warm the connection to code-server before the iframe even mounts
   // (saves DNS + TCP round-trips on first paint). Driven by the reported port
