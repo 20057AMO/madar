@@ -457,7 +457,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       <button class="palette-hint-row" onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('wsd:palette-open')); }}>
         <Search width={13} height={13} class="icon" />
         <span>{t('palette.title')}</span>
-        <kbd class="palette-hint-kbd">Ctrl K</kbd>
+        <kbd class="palette-hint-kbd">Ctrl M</kbd>
       </button>
       <div class="sidebar-footer">
         <ProvidersUnlockBadge />
@@ -695,7 +695,7 @@ function Shell() {
           <button
             class="menu-btn palette-trigger"
             aria-label={t('palette.title')}
-            title={`${t('palette.title')} (Ctrl+K)`}
+            title={`${t('palette.title')} (Ctrl+M)`}
             onClick={() => window.dispatchEvent(new CustomEvent('wsd:palette-open'))}
           >
             <Command width={16} height={16} />
@@ -754,7 +754,7 @@ const blockingOverlayOpen = () => !!document.querySelector(BLOCKING_OVERLAY_SELE
 
 /**
  * Command-palette host. Lifted out of Shell because Shell early-returns for
- * /agents and admin /opencode-studio — the palette (and the global Ctrl+K
+ * /agents and admin /opencode-studio — the palette (and the global Ctrl+M
  * listener) must survive those branches. Rendered as a Shell sibling, gated on
  * the signed-in user. Sidebar/mobile triggers open it through the
  * `wsd:palette-open` window event, matching the ROUTE_LANDING_EVENT pattern.
@@ -773,8 +773,8 @@ function PaletteHost() {
       return;
     }
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
-        // While a modal is up, leave Ctrl+K to the browser/modal (no
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'm' || e.key === 'M')) {
+        // While a modal is up, leave Ctrl+M to the browser/modal (no
         // preventDefault) — the palette must never mount over it.
         if (blockingOverlayOpen()) return;
         e.preventDefault();
