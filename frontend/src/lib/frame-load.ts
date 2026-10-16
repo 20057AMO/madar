@@ -14,6 +14,12 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 export const FRAME_LOAD_TIMEOUT_MS = 15000;
 /** First-visit budget: a cold code-server / opencode start is much slower. */
 export const FRAME_LOAD_TIMEOUT_FIRST_MS = 30000;
+/**
+ * How long a frame may load before the overlay admits that a cold start is
+ * genuinely slow. Both tools measure >1s cold (VS Code ~3.5s) and the first
+ * budget is 30s, so a silent spinner past this point reads as a hang.
+ */
+export const FRAME_HINT_AFTER_MS = 10000;
 
 export type FrameState = 'loading' | 'ready' | 'error';
 
@@ -82,6 +88,39 @@ export function useFrameLoad(active: boolean, url: string): FrameLoad {
   const isReady = useCallback(() => stateRef.current === 'ready', []);
 
   return { frameKey, state, onLoad, remount, isReady };
+}
+
+/**
+ * Elapsed-time feedback for the loading overlay. A frame that is still loading
+ * says so, and the seconds it has been waiting are visible progress rather than
+ * a spinner that looks identical at 1s and at 20s.
+ *
+ * `attempt` is the frameKey, so a remount restarts the count instead of
+ * inheriting the previous attempt's total. Both outputs are rendered
+ * aria-hidden: the overlay is already a `role="status"`, and a region that
+ * re-announces on every tick is worse than silence.
+ */
+export function useFrameElapsed(
+  state: FrameState,
+  active: boolean,
+  attempt: number,
+): { seconds: number; showHint: boolean } {
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!active || state !== 'loading') {
+      setSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setSeconds(0);
+    const id = setInterval(() => {
+      setSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [state, active, attempt]);
+
+  return { seconds, showHint: seconds * 1000 >= FRAME_HINT_AFTER_MS };
 }
 
 /**

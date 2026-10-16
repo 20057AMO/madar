@@ -7,7 +7,7 @@ import { useAuth } from '../auth';
 import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
 import { useEmbedSession } from '../lib/embed-session';
-import { useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
+import { useFrameElapsed, useFrameFocusReturn, useFrameLoad } from '../lib/frame-load';
 import { frameFocusRing } from '../lib/frame-focus-ring';
 import { buildOpencodeUrl } from '../lib/opencode-link';
 import { projectOptionLabel } from '../lib/project-label';
@@ -63,6 +63,7 @@ export function Opencode() {
     url,
   );
   const overlayRef = useFrameFocusReturn(frameState);
+  const elapsed = useFrameElapsed(frameState, framePossible, frameKey);
   // Chromium rings no iframe for keyboard focus, so the frame arms its own.
   const frameRingRef = useMemo(frameFocusRing, []);
 
@@ -420,10 +421,18 @@ export function Opencode() {
               ref={overlayRef}
               tabIndex={-1}
               role="status"
-              style="background: rgba(10, 12, 16, 0.85); color: var(--text); outline: none"
+              style="flex-wrap: wrap; background: rgba(10, 12, 16, 0.85); color: var(--text); outline: none"
             >
               <RefreshCw width={16} height={16} class="icon spin" />
               {t('opencode.loadingFrame')}
+              {elapsed.seconds > 0 && (
+                <span class="dim" aria-hidden="true">{t('common.elapsed', { n: elapsed.seconds })}</span>
+              )}
+              {elapsed.showHint && (
+                <span aria-hidden="true" style="flex-basis: 100%; text-align: center; font-size: 0.75rem">
+                  {t('common.coldStartHint')}
+                </span>
+              )}
             </div>
           )}
           {frameState === 'error' && (

@@ -25,6 +25,8 @@ export const en = {
     stop: 'Stop',
     restart: 'Restart',
     reload: 'Reload',
+    elapsed: '{n}s',
+    coldStartHint: 'A cold start can take up to 30 seconds.',
     back: 'Back',
     search: 'Search',
     none: '—',

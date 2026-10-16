@@ -27,6 +27,8 @@ export const ar: Dict = {
     stop: 'إيقاف',
     restart: 'إعادة تشغيل',
     reload: 'إعادة تحميل',
+    elapsed: '{n} ث',
+    coldStartHint: 'قد يستغرق التشغيل الأول حتى 30 ثانية.',
     back: 'رجوع',
     search: 'بحث',
     none: '—',
