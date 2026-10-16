@@ -72,3 +72,28 @@ export async function injectAuth(page: Page): Promise<void> {
     localStorage.setItem('wsd.lang', 'en');
   }, token);
 }
+
+/**
+ * Inject auth token for a specific real user role (e.g. 'viewer') into localStorage.
+ * Falls back to admin if the requested role is not present.
+ */
+export async function injectAuthAs(page: Page, role: 'admin' | 'editor' | 'viewer'): Promise<void> {
+  const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
+  const users = JSON.parse(
+    execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], { encoding: 'utf8' }),
+  );
+  const list: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> = users.users || [];
+  const user = list.find((entry) => entry.role === role) || list.find((entry) => entry.role === 'admin') || list.find((entry) => entry.id);
+  if (!user?.id) {
+    throw new Error('No existing user is available in the running container');
+  }
+  const token = jwt.sign(
+    { id: user.id, username: user.username, role: user.role, tv: user.tokenVersion || 0, jti: 'e2e-session' },
+    JWT_SECRET,
+    { expiresIn: '24h' },
+  );
+  await page.addInitScript((value) => {
+    localStorage.setItem('wsd.token', value);
+    localStorage.setItem('wsd.lang', 'en');
+  }, token);
+}

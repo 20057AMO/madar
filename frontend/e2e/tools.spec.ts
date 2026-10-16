@@ -22,7 +22,7 @@
  *    upstream port.
  */
 import { test, expect } from './fixtures';
-import { BASE, injectAuth } from './helpers';
+import { BASE, injectAuth, injectAuthAs } from './helpers';
 import { pickedFolderSlug } from '../src/lib/tool-picker';
 
 /* ------------------------------------------------------------------ */
@@ -39,7 +39,7 @@ test.describe('Madar UI — tool entry points', () => {
 
     await page.locator('.nav-btn', { hasText: 'VS Code' }).click();
     await expect(page).toHaveURL(/#\/ide/);
-    await expect(page.locator('iframe.opencode-frame[title="Madar VS Code"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('iframe.opencode-frame[title=Madar VS Code]')).toBeVisible({ timeout: 20_000 });
 
     // The fullscreen IDE layer covers the sidebar — go back to the
     // dashboard first so the opencode button is clickable again.
@@ -49,7 +49,7 @@ test.describe('Madar UI — tool entry points', () => {
     await page.locator('.nav-btn', { hasText: 'opencode' }).first().click();
     await expect(page).toHaveURL(/#\/opencode$/);
     await expect(page.locator('#oc-project-select')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('iframe.opencode-frame[title="Madar opencode"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('iframe.opencode-frame[title=Madar opencode]')).toBeVisible({ timeout: 20_000 });
 
     // In-app means in-app: the click must never spawn a second page.
     expect(page.context().pages().length).toBe(1);
@@ -63,7 +63,7 @@ test.describe('Madar UI — tool entry points', () => {
 
     await page.locator('.qa-tile', { hasText: 'VS Code' }).click();
     await expect(page).toHaveURL(/#\/ide/);
-    await expect(page.locator('iframe.opencode-frame[title="Madar VS Code"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('iframe.opencode-frame[title=Madar VS Code]')).toBeVisible({ timeout: 20_000 });
 
     await page.evaluate(() => { window.location.hash = '/'; });
     await expect(page.locator('.qa-tile').first()).toBeVisible({ timeout: 15_000 });
@@ -73,7 +73,7 @@ test.describe('Madar UI — tool entry points', () => {
     await expect(page.locator('#oc-project-select')).toBeVisible({ timeout: 10_000 });
     // The IDE keep-alive layer is still mounted from the first hop — scope by
     // the frame title so the assertion names the opencode surface specifically.
-    await expect(page.locator('iframe.opencode-frame[title="Madar opencode"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('iframe.opencode-frame[title=Madar opencode]')).toBeVisible({ timeout: 20_000 });
   });
 
   /* -- c. /#/ide embedded page keeps its toolbar features ---------------- */
@@ -82,7 +82,7 @@ test.describe('Madar UI — tool entry points', () => {
     await page.goto(BASE);
     await page.evaluate(() => { window.location.hash = '/ide'; });
 
-    const iframe = page.locator('iframe.opencode-frame[title="Madar VS Code"]');
+    const iframe = page.locator('iframe.opencode-frame[title=Madar VS Code]');
     await expect(iframe).toBeVisible({ timeout: 20_000 });
 
     // Project picker is present
@@ -100,7 +100,7 @@ test.describe('Madar UI — tool entry points', () => {
     await page.goto(BASE);
     await page.evaluate(() => { window.location.hash = '/opencode'; });
 
-    const iframe = page.locator('iframe.opencode-frame[title="Madar opencode"]');
+    const iframe = page.locator('iframe.opencode-frame[title=Madar opencode]');
     await expect(iframe).toBeVisible({ timeout: 20_000 });
 
     // Project picker is present
@@ -123,7 +123,7 @@ test.describe('Madar UI — tool entry points', () => {
     await expect(page.locator('.qa-tile').first()).toBeVisible({ timeout: 15_000 });
     await page.evaluate(() => { window.location.hash = '/opencode'; });
     await expect(page.locator('#oc-project-select')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('iframe.opencode-frame[title="Madar opencode"]')).toBeVisible();
+    await expect(page.locator('iframe.opencode-frame[title=Madar opencode]')).toBeVisible();
   });
 
   /* -- e. /#/ide?folder=… — the picker names the folder actually open ----- */
@@ -157,6 +157,17 @@ test.describe('Madar UI — tool entry points', () => {
     await page.evaluate((f) => { window.location.hash = `/ide?folder=${encodeURIComponent(f)}`; }, sibling);
     await expect(select).toHaveValue('', { timeout: 10_000 });
     await expect.poll(() => page.url()).toContain(`folder=${encodeURIComponent(sibling)}`);
+    // Boundary: prefix match must not happen (slugX prefix of slugY) - proves whole-segment match
+    if (slug && slug.includes("-")) {
+      const prefix = slug.split("-")[0];
+      const other = `/workspaces/${prefix}/src`;
+      await page.evaluate((f) => { window.location.hash = `/ide?folder=${encodeURIComponent(f)}`; }, other);
+      await expect(select).toHaveValue("", { timeout: 10_000 });
+      await expect.poll(() => page.url()).toContain(`folder=${encodeURIComponent(other)}`);
+      // restore
+      await page.evaluate((f) => { window.location.hash = `/ide?folder=${encodeURIComponent(f)}`; }, deep);
+      await expect(select).toHaveValue(slug, { timeout: 10_000 });
+    }
 
     // A ?folder= we will not open is stripped, not left claiming in the address
     // bar to be the open folder.
@@ -249,3 +260,50 @@ test.describe('tool picker helpers (pure)', () => {
     expect(pickedFolderSlug('/workspaces/ghost', [])).toBe(null);
   });
 });
+
+
+  /* -- R5. Viewer: sidebar opencode ? in-app needsEditor state (no raw proxy 401) -- */
+  test('R5) viewer: sidebar opencode lands in-app and shows needsEditor', async ({ page }) => {
+    await injectAuthAs(page, 'viewer');
+    await page.goto(BASE);
+    await expect(page.locator('.sidebar-nav').locator('.nav-btn').first()).toBeVisible({ timeout: 20_000 });
+
+    await page.locator('.nav-btn', { hasText: 'opencode' }).first().click();
+    await expect(page).toHaveURL(/#\/opencode$/);
+    // Must be in-app (single page)
+    expect(page.context().pages().length).toBe(1);
+    // Shows editor-gate state (needsEditor) instead of showing raw proxy 401 content
+    await expect(page.locator('h1', { hasText: 'opencode' })).toBeVisible({ timeout: 10_000 });
+    const status = page.locator('.opencode-toolbar span.term-title[role="status"]');
+    await expect(status).toContainText('editor access', { timeout: 20_000 });
+    // No raw "401" text on page
+    await expect(page.locator('body')).not.toContainText('401');
+  });
+
+
+  /* -- R4. Titles and route segment-safety -- */
+  test('R4) document.title for tool routes; segment-safety for near-misses', async ({ page }) => {
+    await injectAuth(page);
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/ide'; });
+    await expect(page.locator('iframe.opencode-frame[title="Madar VS Code"]')).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => page.title()).toBe('VS Code — Madar');
+    await page.evaluate(() => { window.location.hash = '/opencode'; });
+    await expect(page.locator('iframe.opencode-frame[title="Madar opencode"]')).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => page.title()).toBe('opencode — Madar');
+    await page.evaluate(() => { window.location.hash = '/opencode/L3dvcmtzcGFjZXMveW91dHViZQ/session'; });
+    await expect(page.locator('iframe.opencode-frame[title="Madar opencode"]')).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => page.title()).toBe('opencode — Madar');
+    await page.evaluate(() => { window.location.hash = '/idea'; });
+    await expect(page).toHaveURL(/#\/idea$/);
+    
+    await expect(page.locator('iframe.opencode-frame[title="Madar VS Code"]')).not.toBeVisible();
+  });
+
+
+
+
+
+
+
+
