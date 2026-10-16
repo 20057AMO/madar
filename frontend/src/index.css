@@ -2020,6 +2020,24 @@ textarea.agent-prompt-input {
 .quick-select { min-width: 0; }
 .quick-select select { min-width: 90px; font-size: 0.7rem; padding: 4px 6px; }
 
+/* Phone-width hardening (≤700px) — must stay after the rules above.
+   1) The agents toolbar could not shrink below its own content: with
+      min-width: auto the two quick-select labels' min-content sized the
+      wrapper to 417px inside a 360px viewport, which scrolled the whole
+      page sideways and clipped the toolbar. min-width: 0 lets the wrapper
+      honour its 100% flex-basis, and the selects then fill their labels
+      instead of imposing a 90px floor.
+   2) Icon-only controls get the same 44px treatment as
+      .btn-ghost.sm.icon-only above (WCAG 2.5.8). `.btn-icon` is scoped to
+      .team-row because Chat reuses the class inside .btn/.btn-sm. */
+@media (max-width: 700px) {
+  .agents-topbar-right { min-width: 0; max-width: 100%; }
+  .agents-topbar-right .chat-settings-label select { width: 100%; min-width: 0; }
+  .crash-dismiss,
+  .studio-action,
+  .team-row .btn-icon { min-width: 44px; min-height: 44px; }
+}
+
 /* Session search */
 .session-search-input {
   min-width: 80px; max-width: 120px;

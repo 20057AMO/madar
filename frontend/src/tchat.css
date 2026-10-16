@@ -1809,6 +1809,11 @@ mark.tchat-search-hit {
   .tchat-msg-side { opacity: 0.85; }
   .tchat-quick-reactions { display: none; } /* context menu via long-press instead */
   .tchat-pill-btn { min-width: 40px; min-height: 40px; }
+  /* WCAG 2.5.8 floor only — NOT 44px like the rest of this block: the
+     avatars are a -6px overlap stack (.tchat-presence-avatars >
+     .tchat-presence-avatar), so a 44px box would space them 38px apart and
+     destroy the stack. */
+  .tchat-presence-avatar { min-width: 24px; }
   .tchat-send-fab { width: 46px; height: 46px; }
   .lightbox-nav { width: 44px; height: 44px; }
 }
