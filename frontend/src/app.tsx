@@ -34,7 +34,6 @@ import {
   clearProvidersUnlock,
   avatarUrl,
   UNLOCK_KEY,
-  getOpencodeStatus,
   getUpdates,
 } from './api';
 import { UPDATE_RUNNING_STATES } from './views/settings-shared';
@@ -213,13 +212,11 @@ const NavButton = ({
   label,
   icon: Icon,
   onClick,
-  newTabUrl,
 }: {
   href?: string;
   label: string;
   icon: any;
   onClick?: () => void;
-  newTabUrl?: string;
 }) => {
   const [location] = useHashLocation();
   const active = href ? location === href || (href !== '/' && (location.startsWith(href) || (href === '/projects' && location.startsWith('/project/')))) : false;
@@ -227,11 +224,9 @@ const NavButton = ({
     <button
       class={`nav-btn ${active ? 'active' : ''}`}
       onClick={
-        newTabUrl
-          ? () => window.open(newTabUrl, '_blank', 'noopener')
-          : href
-            ? () => navigate(href)
-            : onClick
+        href
+          ? () => navigate(href)
+          : onClick
       }
     >
       <Icon width={16} height={16} class="icon" />
@@ -341,18 +336,7 @@ function ProvidersUnlockBadge() {
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t, lang, toggleLang } = useI18n();
   const { user, logout } = useAuth();
-  // The embedded-surface PROXY port (getOpencodeStatus confirms it). opencode's
-  // own 4096 is loopback-only and no longer published.
-  const [ocPort, setOcPort] = useState(4097);
   const [updatesFlag, setUpdatesFlag] = useState<'none' | 'available' | 'applying'>('none');
-
-  useEffect(() => {
-    getOpencodeStatus()
-      .then((s) => {
-        if (s?.port) setOcPort(s.port);
-      })
-      .catch(() => {});
-  }, []);
 
   // Update notification dot — admin only. Probed on mount, every 15 min and
   // whenever the tab becomes visible again (pageshow/visibilitychange, same
@@ -399,7 +383,6 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
     };
   }, [user?.role, updatesFlag]);
 
-  const toolBase = `${window.location.protocol === 'https:' ? 'https' : 'http'}://${window.location.hostname}`;
   return (
     <aside class={`sidebar${open ? ' open' : ''}`}>
       <div
@@ -430,7 +413,10 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <NavButton href="/ide" label={t('nav.vscode')} icon={VSCodeIcon} />
         <div class="nav-group-label">{t('nav.groupCollaborate')}</div>
         <NavButton href="/chat" label={t('nav.teamChat')} icon={MessageCircle} />
-        <NavButton label="opencode" icon={OpencodeIcon} newTabUrl={`${toolBase}:${ocPort}/`} />
+        {/* In-app, like every other sidebar item: the raw proxy origin 401s a
+            viewer (the embed cookie is editor+ only), which is exactly the
+            designed needsEditor state the /#/opencode page already shows. */}
+        <NavButton href="/opencode" label="opencode" icon={OpencodeIcon} />
         {user?.role === 'admin' && <NavButton href="/opencode-studio" label={t('nav.ocStudio')} icon={OpencodeIcon} />}
         {user?.role === 'admin' && (
           <>
@@ -952,9 +938,9 @@ function OpencodeKeepAlive() {
  *
  * code-server and opencode web are only reachable through the authenticated
  * Madar proxy, which reads an HttpOnly cookie minted by POST /api/embed/session.
- * The two tool pages need it before their frames mount, but the sidebar
- * "opencode" button opens the surface in a NEW TAB directly at the proxy —
- * which would 401 for a user who has not visited either page yet. One exchange
+ * The two tool pages need it before their frames mount, and the first frame can
+ * arrive from an in-app navigation, a keep-alive warm-up or a pasted tool deep
+ * link — none of which the app can predict. One exchange
  * per page load, for editor+ only, closes that gap and warms the proxy hop at
  * the same time: the exchange is a module-level single flight, so this warm-up,
  * the hidden /ide layer and the hidden /opencode layer all share the one answer

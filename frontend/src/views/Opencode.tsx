@@ -396,7 +396,7 @@ export function Opencode() {
               <RefreshCw width={13} height={13} class="icon" /> {t('common.retry')}
             </button>
           </div>
-          <code class="mono" style="display:block;margin-top:8px">docker compose logs app</code>
+          {!embed.forbidden && <code class="mono" style="display:block;margin-top:8px">docker compose logs app</code>}
         </div>
       ) : (
         <>

@@ -12,27 +12,17 @@
  *    container; the only published route is the authenticated embed proxy
  *    on :4097.
  *  - VS Code opens IN-APP at /#/ide (embedded, keep-alive).
- *  - The sidebar opencode button pops up the PROXY root (:4097).
+ *  - The sidebar opencode button ALSO opens IN-APP at /#/opencode — no
+ *    popup, no raw proxy origin (that 401s for a viewer, since the embed
+ *    cookie is editor+ only; the page itself shows the honest needsEditor
+ *    state instead).
  *  - Dashboard quick-action tiles navigate IN-APP (/#/ide, /#/opencode).
  *  - Both embedded pages keep their project picker, honest status line and
  *    an "Open in new tab" anchor pointing at the proxy — never a raw
  *    upstream port.
  */
-import { test, expect, type Page } from './fixtures';
+import { test, expect } from './fixtures';
 import { BASE, injectAuth } from './helpers';
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
-
-/** Click a locator and capture the popup it opens, returning its URL. */
-async function popupUrl(page: Page, click: () => Promise<void>): Promise<string> {
-  const popupPromise = page.waitForEvent('popup');
-  await click();
-  const popup = await popupPromise;
-  await popup.waitForLoadState('domcontentloaded');
-  return popup.url();
-}
 
 /* ------------------------------------------------------------------ */
 /*  Tests                                                             */
@@ -40,8 +30,8 @@ async function popupUrl(page: Page, click: () => Promise<void>): Promise<string>
 
 test.describe('Madar UI — tool entry points', () => {
 
-  /* -- a. Sidebar: VS Code navigates in-app; opencode pops up the proxy -- */
-  test('a) sidebar VS Code goes in-app to #/ide; opencode pops up the proxy :4097', async ({ page }) => {
+  /* -- a. Sidebar: BOTH tool buttons navigate in-app (no popups) --------- */
+  test('a) sidebar VS Code → #/ide; opencode → in-app #/opencode (no popup)', async ({ page }) => {
     await injectAuth(page);
     await page.goto(BASE);
     await expect(page.locator('.sidebar-nav').locator('.nav-btn').first()).toBeVisible({ timeout: 20_000 });
@@ -55,10 +45,13 @@ test.describe('Madar UI — tool entry points', () => {
     await page.evaluate(() => { window.location.hash = '/'; });
     await expect(page.locator('.nav-btn', { hasText: 'opencode' })).toBeVisible({ timeout: 15_000 });
 
-    const ocUrl = await popupUrl(page, () =>
-      page.locator('.nav-btn', { hasText: 'opencode' }).first().click()
-    );
-    expect(ocUrl).toMatch(/^http:\/\/localhost:4097\/?/);
+    await page.locator('.nav-btn', { hasText: 'opencode' }).first().click();
+    await expect(page).toHaveURL(/#\/opencode$/);
+    await expect(page.locator('#oc-project-select')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('iframe.opencode-frame[title="Madar opencode"]')).toBeVisible({ timeout: 20_000 });
+
+    // In-app means in-app: the click must never spawn a second page.
+    expect(page.context().pages().length).toBe(1);
   });
 
   /* -- b. Dashboard tiles: both navigate IN-APP (no popups) -------------- */
