@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'preact/hooks';
 import { SquareTerminal, FolderOpen, RefreshCw, TriangleAlert } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { canOpenProjectWorkspace, getOpencodeStatus, openOpencodeProject, listProjects } from '../api';
+import { OpencodeIcon } from '../components/brand-icons';
 import { useAuth } from '../auth';
 import { useI18n } from '../i18n';
 import { useDocumentVisible } from '../lib/visibility';
@@ -306,8 +307,10 @@ export function Opencode() {
   return (
     <main class="opencode-page" id="opencode-main" tabIndex={-1}>
       <div class="opencode-toolbar">
-        <h1 class="sr-only">opencode</h1>
         <button class="btn-ghost sm" onClick={() => setLocation('/')}>‹ {t('common.back')}</button>
+        <h1 style="display:inline-flex;align-items:center;gap:6px;margin-left:8px;font-weight:600;font-size:0.9rem">
+          <OpencodeIcon width={15} height={15} /> opencode
+        </h1>
         {embed.ready && running !== null && (
           <a class="btn-ghost sm" href={url} target="_blank" rel="noreferrer">
             {t('opencode.openNewTab')}
@@ -350,6 +353,11 @@ export function Opencode() {
                       ? frameStatus
                       : t('opencode.checking')}
         </span>
+        {embed.ready && running === true && frameState !== 'error' && (
+          <button class="btn-ghost sm" onClick={() => remount()}>
+            <RefreshCw width={13} height={13} class="icon" /> {t('common.reload')}
+          </button>
+        )}
       </div>
       {openErr && (
         <div
@@ -431,6 +439,7 @@ export function Opencode() {
               <button class="btn-ghost sm" style="margin-top:12px" onClick={retry}>
                 <RefreshCw width={13} height={13} class="icon" /> {t('common.retry')}
               </button>
+              <code class="mono" style="display:block;margin-top:8px">docker compose logs app</code>
             </div>
           )}
         </>

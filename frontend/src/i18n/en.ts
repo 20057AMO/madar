@@ -24,6 +24,7 @@ export const en = {
     start: 'Start',
     stop: 'Stop',
     restart: 'Restart',
+    reload: 'Reload',
     back: 'Back',
     search: 'Search',
     none: '—',
@@ -522,6 +523,7 @@ export const en = {
     allProjects: 'All Projects…',
     needsEditor:
       'VS Code runs inside the app container with full access, so it needs editor access or above.',
+    checking: 'VS Code: …',
     offline: 'VS Code offline',
     offlineBody:
       'VS Code is not answering inside the app container. It runs as a supervised background service, so no project needs to be running — it usually comes back on its own within a few seconds.',

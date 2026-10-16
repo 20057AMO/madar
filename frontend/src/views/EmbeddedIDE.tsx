@@ -311,8 +311,13 @@ export function EmbeddedIDE() {
                 ? t('ide.needsEditor')
                 : running
                   ? frameStatus
-                  : ''}
-      </span>
+                  : t('ide.checking')}
+        </span>
+        {embed.ready && running === true && frameState !== 'error' && (
+          <button class="btn-ghost sm" onClick={() => remount()}>
+            <RefreshCw width={13} height={13} class="icon" /> {t('common.reload')}
+          </button>
+        )}
       </div>
       {embed.error ? (
         <div class="empty-state" style="margin: 60px auto; max-width: 480px" role="alert">
@@ -385,6 +390,7 @@ export function EmbeddedIDE() {
               <button class="btn-ghost sm" style="margin-top:12px" onClick={retry}>
                 <RefreshCw width={13} height={13} class="icon" /> {t('common.retry')}
               </button>
+              <code class="mono" style="display:block;margin-top:8px">docker compose logs app</code>
             </div>
           )}
         </>

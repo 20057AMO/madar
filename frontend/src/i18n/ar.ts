@@ -26,6 +26,7 @@ export const ar: Dict = {
     start: 'تشغيل',
     stop: 'إيقاف',
     restart: 'إعادة تشغيل',
+    reload: 'إعادة تحميل',
     back: 'رجوع',
     search: 'بحث',
     none: '—',
@@ -523,6 +524,7 @@ export const ar: Dict = {
     folderLabel: 'مجلد المشروع الذي سيُفتح في VS Code',
     allProjects: 'كل المشاريع…',
     needsEditor: 'محرر VS Code يعمل داخل الحاوية بدور وصول كامل، ويحتاج صلاحيات محرّر أو أعلى.',
+    checking: '‏VS Code: …',
     offline: '‏VS Code غير متصل',
     offlineBody:
       '‏VS Code لا يستجيب داخل حاوية التطبيق. يعمل كخدمة خلفية مُراقَبة، فلا يلزم أن يكون أي مشروع قيد التشغيل — ويعود للعمل تلقائيًا خلال ثوانٍ عادةً.',
