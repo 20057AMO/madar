@@ -43,24 +43,47 @@ if (!JWT_SECRET) {
   );
 }
 
-/** Resolve a session token for a REAL user that exists in the running container. */
-let cachedToken: string | null = null;
-export function sessionToken(): string {
-  if (cachedToken) return cachedToken;
+type ContainerUser = { id?: string; username?: string; role?: string; tokenVersion?: number };
+
+/**
+ * Read the real user list from the running container's data/users.json.
+ * Single copy: both `sessionToken()` and `injectAuthAs()` resolve identities
+ * through here, so the read/sign logic can never drift between them.
+ */
+function readUsers(): ContainerUser[] {
   const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
   const users = JSON.parse(
     execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], { encoding: 'utf8' }),
   );
-  const list: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> = users.users || [];
-  const user = list.find((entry) => entry.role === 'admin') || list.find((entry) => entry.id);
-  if (!user?.id) {
+  const list: ContainerUser[] = users.users || [];
+  if (!list.some((entry) => entry.id)) {
     throw new Error('No existing user is available in the running container');
   }
-  cachedToken = jwt.sign(
+  return list;
+}
+
+/** Sign a 24h session JWT for a real container user. */
+function signSession(user: ContainerUser): string {
+  if (!user.id) {
+    throw new Error('Cannot sign a session for a user without an id');
+  }
+  return jwt.sign(
     { id: user.id, username: user.username, role: user.role, tv: user.tokenVersion || 0, jti: 'e2e-session' },
     JWT_SECRET,
     { expiresIn: '24h' },
   );
+}
+
+/** Resolve a session token for a REAL user that exists in the running container. */
+let cachedToken: string | null = null;
+export function sessionToken(): string {
+  if (cachedToken) return cachedToken;
+  const list = readUsers();
+  const user = list.find((entry) => entry.role === 'admin') || list.find((entry) => entry.id)!;
+  if (!user?.id) {
+    throw new Error('No existing admin (or any) user is available in the running container');
+  }
+  cachedToken = signSession(user);
   return cachedToken;
 }
 
@@ -74,24 +97,24 @@ export async function injectAuth(page: Page): Promise<void> {
 }
 
 /**
- * Inject auth token for a specific real user role (e.g. 'viewer') into localStorage.
- * Falls back to admin if the requested role is not present.
+ * Inject an auth token for a REAL user holding the given system role.
+ *
+ * Strict by design: if the container has no user with `role`, this THROWS
+ * naming the missing role (and the roles it did find) instead of silently
+ * substituting admin or any other account — a fallback would let a role-gated
+ * assertion pass vacuously while running under a different role than intended.
  */
 export async function injectAuthAs(page: Page, role: 'admin' | 'editor' | 'viewer'): Promise<void> {
-  const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
-  const users = JSON.parse(
-    execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], { encoding: 'utf8' }),
-  );
-  const list: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> = users.users || [];
-  const user = list.find((entry) => entry.role === role) || list.find((entry) => entry.role === 'admin') || list.find((entry) => entry.id);
+  const list = readUsers();
+  const user = list.find((entry) => entry.role === role);
   if (!user?.id) {
-    throw new Error('No existing user is available in the running container');
+    const found = [...new Set(list.map((entry) => entry.role || '<no role>'))].join(', ') || '<none>';
+    throw new Error(
+      `injectAuthAs: no user with role '${role}' exists in the running container ` +
+      `(roles present: ${found}). Refusing to fall back to a different role.`,
+    );
   }
-  const token = jwt.sign(
-    { id: user.id, username: user.username, role: user.role, tv: user.tokenVersion || 0, jti: 'e2e-session' },
-    JWT_SECRET,
-    { expiresIn: '24h' },
-  );
+  const token = signSession(user);
   await page.addInitScript((value) => {
     localStorage.setItem('wsd.token', value);
     localStorage.setItem('wsd.lang', 'en');
