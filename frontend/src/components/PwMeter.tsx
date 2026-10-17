@@ -1,6 +1,10 @@
 import { JSX } from 'preact';
+import { useI18n } from '../i18n';
 
-const PW_LABELS = ['Too short', 'Weak', 'Okay', 'Good', 'Strong'];
+/* Localized per score: the meter sits inside Arabic UI (Settings / Profile /
+   Login setup) where hardcoded English labels like "Okay" leaked through. */
+const PW_LABELS_AR = ['قصيرة جداً', 'ضعيفة', 'مقبولة', 'جيدة', 'قوية'];
+const PW_LABELS_EN = ['Too short', 'Weak', 'Okay', 'Good', 'Strong'];
 const PW_COLORS = ['var(--red)', 'var(--red)', 'var(--yellow)', 'var(--green)', 'var(--green)'];
 
 /** Simple password strength heuristic (0-4): length plus character variety. */
@@ -17,9 +21,12 @@ function passwordStrength(pw: string): number {
 
 /** Live strength meter shown under new-password inputs. */
 export function PwMeter({ pw }: { pw: string }): JSX.Element {
+  const { t2 } = useI18n();
   const score = passwordStrength(pw);
+  const ar = PW_LABELS_AR[score];
+  const en = PW_LABELS_EN[score];
   return (
-    <div class="pw-meter" title={`Password strength: ${PW_LABELS[score]}`}>
+    <div class="pw-meter" title={t2(`قوة كلمة المرور: ${ar}`, `Password strength: ${en}`)}>
       {[0, 1, 2, 3].map((i) => (
         <span
           key={i}
@@ -27,7 +34,7 @@ export function PwMeter({ pw }: { pw: string }): JSX.Element {
           style={i < score ? `background:${PW_COLORS[score]}` : undefined}
         />
       ))}
-      <span class="pw-label">{PW_LABELS[Math.max(score, 0)]}</span>
+      <span class="pw-label">{t2(ar, en)}</span>
     </div>
   );
 }

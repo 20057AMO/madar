@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'preact/hooks';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { Users, UserPlus, Trash2, Crown } from 'lucide-preact';
+import { ROLE_ORDER, membershipRoleMeta } from '../lib/role-meta';
 import { useAuth } from '../auth';
 import {
   listProjectMembers,
@@ -25,23 +26,42 @@ interface Props {
   onlineUsers?: PresenceUser[];
 }
 
-const ROLE_HIERARCHY: Record<string, number> = { admin: 3, editor: 2, viewer: 1 };
-
-const ROLE_LABELS_AR: Record<string, string> = { admin: 'مدير', editor: 'محرر', viewer: 'عارض' };
+/**
+ * Icon + tinted pill for a role — the same visual language as the /team page.
+ * Module-level (not declared inside TeamPanel) so Preact never remounts it on
+ * an unrelated parent re-render.
+ */
+function RoleBadge({ role, title, ar }: { role: string; title?: string; ar: boolean }) {
+  const meta = membershipRoleMeta(role);
+  const Ico = meta.Icon;
+  return (
+    <span
+      class="team-role-badge"
+      style={{ '--rc': meta.color } as any}
+      title={title ?? (ar ? meta.hintAr : meta.hintEn)}
+    >
+      <Ico size={11} aria-hidden="true" />
+      {ar ? meta.labelAr : meta.labelEn}
+    </span>
+  );
+}
 
 export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   const [, setLocation] = useHashLocation();
   const { user: currentUser } = useAuth();
   const { t2, lang } = useI18n();
   const ar = lang === 'ar';
-  const roleLabel = (role: string) => (ar ? ROLE_LABELS_AR[role] || role : role);
+  const roleLabel = (role: string) => {
+    const meta = membershipRoleMeta(role);
+    return ar ? meta.labelAr : meta.labelEn;
+  };
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [allUsers, setAllUsers] = useState<TeamUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const onlineIds = new Set(onlineUsers.map(u => u.id));
 
-  // The parent polls ownerId on a 5s cycle — keep a local copy so the crown
+  // The parent polls ownerId on a 5s cycle — keep a local copy so the role
   // badge + manage gates update the instant a transfer completes, without
   // waiting for the next poll racing the backend write.
   const [ownerId, setOwnerId] = useState<string | undefined>(project?.ownerId);
@@ -98,7 +118,9 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   const nonMembers = allUsers.filter((u) => !isMember(u.id));
 
   // Role-aware ordering: admins first, then editors, then viewers.
-  const sortedMembers = [...members].sort((a, b) => (ROLE_HIERARCHY[b.role] || 0) - (ROLE_HIERARCHY[a.role] || 0));
+  const sortedMembers = [...members].sort(
+    (a, b) => (ROLE_ORDER[b.role as UserRole] || 0) - (ROLE_ORDER[a.role as UserRole] || 0)
+  );
 
   const handleAdd = async () => {
     if (!selectedUserId) return;
@@ -234,20 +256,32 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                     <div class="member-details">
                       <span class="member-name">
                         {m.displayName || m.username}
-                        {isOwner && <Crown class="icon icon-sm" style={{ color: '#f59e0b', marginLeft: '4px' }} />}
+                        <RoleBadge
+                          role={m.role}
+                          ar={ar}
+                          title={isOwner
+                            ? t2('المالك — يحمل دائماً صلاحية مدير', 'Owner — always holds admin access')
+                            : undefined}
+                        />
                       </span>
-                      <span class="member-meta">{t2('أُضيف في', 'Added')} {new Date(m.addedAt).toLocaleDateString()}</span>
+                      <span class="member-meta">
+                        {t2('أُضيف في', 'Added')} {new Date(m.addedAt).toLocaleDateString()}
+                        {isOwner && (
+                          <>
+                            {' '}<span aria-hidden="true">·</span> {t2('مالك المشروع', 'Project owner')}
+                          </>
+                        )}
+                      </span>
                     </div>
                   </div>
                   <div class="member-actions">
                     {isOwner ? (
                       // The owner's role is fixed — the ownership check in
                       // checkProjectAccess outranks any member role, so a
-                      // changeable select here would be a lie. Show it as-is.
-                      <span class="member-meta" style="textTransform:capitalize" title={t2('المالك يحمل دائماً صلاحية مدير', 'The owner always holds admin access')}>
-                        <Crown class="icon icon-sm" style={{ color: '#f59e0b', verticalAlign: '-2px', marginRight: '3px' }} />
-                        {t2('مالك · مدير', 'Owner · Admin')}
-                      </span>
+                      // changeable select here would be a lie. The role badge
+                      // next to the name already says "admin"; nothing more to
+                      // render (the crown badge was retired).
+                      null
                     ) : canManage ? (
                       <select
                         class="select-dark select-sm"
@@ -260,7 +294,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                         <option value="admin">{t2('مدير', 'Admin')}</option>
                       </select>
                     ) : (
-                      <span class="member-meta" style="textTransform:capitalize">{roleLabel(m.role)}</span>
+                      <span class="member-meta"><RoleBadge role={m.role} ar={ar} /></span>
                     )}
                     {canManage && !isOwner && (
                       <>

@@ -4,6 +4,10 @@ import {
   UserPlus,
   Trash2,
   Loader2,
+  Search,
+  X,
+  CalendarDays,
+  FolderKanban,
 } from 'lucide-preact';
 import { useAuth } from '../auth';
 import {
@@ -19,22 +23,7 @@ import { Avatar } from '../components/Avatar';
 import { ReAuthModal } from '../components/ReAuthModal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { useI18n } from '../i18n';
-
-const ROLE_CONFIG: Record<UserRole, { labelAr: string; labelEn: string; color: string; hintAr: string; hintEn: string }> = {
-  admin: { labelAr: 'مدير', labelEn: 'Admin', color: '#f59e0b', hintAr: 'وصول كامل — المستخدمون والإعدادات والمزوّدون وكل المشاريع.', hintEn: 'Full access — users, settings, providers and all projects.' },
-  editor: {
-    labelAr: 'محرر',
-    labelEn: 'Editor',
-    color: '#58a6ff',
-    hintAr: 'محرر عام — يكتب في كل مشروع؛ لا يدير المستخدمين أو الإعدادات أو المزوّدين أو يحذف مشاريع الآخرين.',
-    hintEn: 'Global editor — writes to every project; cannot manage users, settings, providers, or delete others’ projects.',
-  },
-  viewer: { labelAr: 'عارض', labelEn: 'Viewer', color: '#9ca3af', hintAr: 'قراءة فقط على المشاريع المُضاف إليها.', hintEn: 'Read-only on the projects they are added to.' },
-};
-
-const ROLE_ORDER: Record<UserRole, number> = { admin: 3, editor: 2, viewer: 1 };
-
-const NEW_ROLE_ORDER: UserRole[] = ['admin', 'editor', 'viewer'];
+import { ROLE_CONFIG, ROLE_ORDER, NEW_ROLE_ORDER, membershipRoleMeta } from '../lib/role-meta';
 
 export function Team() {
   const { user: currentUser } = useAuth();
@@ -55,6 +44,8 @@ export function Team() {
   const [roleError, setRoleError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<UserRole | null>(null);
   const roleRefs = useRef<Record<UserRole, HTMLButtonElement | null>>({ admin: null, editor: null, viewer: null });
 
   useEffect(() => {
@@ -158,247 +149,349 @@ export function Team() {
       String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
   );
 
+  const roleCounts: Record<UserRole, number> = { admin: 0, editor: 0, viewer: 0 };
+  for (const u of users) roleCounts[u.role] += 1;
+
+  // Roster search: display name, username, role label and project names.
+  const needle = query.trim().toLowerCase();
+  const visible = sortedUsers.filter((u) => {
+    if (roleFilter && u.role !== roleFilter) return false;
+    if (!needle) return true;
+    const cfg = ROLE_CONFIG[u.role];
+    const hay = [
+      u.username,
+      u.profile?.displayName || '',
+      ar ? cfg.labelAr : cfg.labelEn,
+      ...(u.memberships || []).map((m) => m.name),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(needle);
+  });
+
+  const filtersActive = !!needle || !!roleFilter;
+
   if (loading) {
     return (
-      <div
-        class="page-container"
-        role="status"
-        aria-label={t2('جارٍ التحميل', 'Loading')}
-        style={{ display: 'flex', justifyContent: 'center', paddingTop: '4rem' }}
-      >
-        <Loader2 class="icon spin" size={32} aria-hidden="true" />
+      <div class="team-page" role="status" aria-label={t2('جارٍ تحميل الفريق', 'Loading team')}>
+        <div class="team-skel" style={{ marginBottom: 18, padding: '16px 18px' }}>
+          <div class="team-skel-av" style={{ width: 46, height: 46, borderRadius: 13 }} />
+          <div style={{ flex: 1 }}>
+            <div class="skel-line w40" style={{ marginBottom: 8 }} />
+            <div class="skel-line w60" style={{ marginBottom: 0, height: 10 }} />
+          </div>
+        </div>
+        {[0, 1, 2].map((i) => (
+          <div class="team-skel" key={i} style={{ marginBottom: 8 }}>
+            <div class="team-skel-av" />
+            <div style={{ flex: 1 }}>
+              <div class="skel-line w40" style={{ marginBottom: 8 }} />
+              <div class="skel-line w60" style={{ marginBottom: 0, height: 10 }} />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
 
   return (
-    <div class="page-container" style={{ maxWidth: 800, margin: '0 auto', padding: '1.5rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Users size={24} />
-          <h1 style={{ margin: 0, fontSize: '1.5rem' }}>{t2('الفريق', 'Team')}</h1>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t2(`${users.length} مستخدم`, `${users.length} user(s)`)}</span>
+    <div class="team-page">
+      <div class="team-hero">
+        <div class="team-hero-l">
+          <span class="team-hero-ico" aria-hidden="true">
+            <Users size={22} />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <h1>{t2('الفريق', 'Team')}</h1>
+            <div class="team-hero-sub">
+              <span>{t2('الأعضاء والصلاحيات عبر المنصة', 'Members and roles across the workspace')}</span>
+              <span class="sep" aria-hidden="true">·</span>
+              <span>{t2(`${users.length} عضو`, `${users.length} member(s)`)}</span>
+            </div>
+          </div>
         </div>
         {isAdmin && (
           <button
-            class="btn btn-primary"
+            class="btn-primary"
             onClick={() => setShowAdd(!showAdd)}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
+            aria-expanded={showAdd}
           >
             <UserPlus size={16} />
-            {t2('إضافة مستخدم', 'Add User')}
+            {showAdd ? t2('إغلاق', 'Close') : t2('إضافة مستخدم', 'Add User')}
           </button>
         )}
       </div>
 
       {error && (
-        <div role="alert" style={{
-          background: 'rgba(248,81,73,0.1)',
-          border: '1px solid rgba(248,81,73,0.3)',
-          borderRadius: 8,
-          padding: '0.75rem 1rem',
-          marginBottom: '1rem',
-          color: 'var(--red)',
-          fontSize: '0.875rem',
-        }}>
+        <div class="notice error" role="alert" style={{ marginBottom: '1rem', textAlign: 'start' }}>
           {error}
         </div>
       )}
 
-      {showAdd && (
-        <div style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 12,
-          padding: '1.25rem',
-          marginBottom: '1rem',
-        }}>
-          <h2 style={{ margin: '0 0 1rem', fontSize: '1.17rem' }}>{t2('إضافة مستخدم جديد', 'Add New User')}</h2>
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
-            <input
-              type="text"
-              aria-label={t2('اسم المستخدم', 'Username')}
-              autocomplete="username"
-              placeholder={t2('اسم المستخدم', 'Username')}
-              value={newUsername}
-              onInput={(e) => setNewUsername((e.target as HTMLInputElement).value)}
-              style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-control)', background: 'var(--bg)', color: 'var(--text)' }}
-            />
-            <input
-              type="password"
-              aria-label={t2('كلمة المرور', 'Password')}
-              autocomplete="new-password"
-              placeholder={t2('كلمة المرور (6 أحرف على الأقل)', 'Password (min 6 characters)')}
-              value={newPassword}
-              onInput={(e) => setNewPassword((e.target as HTMLInputElement).value)}
-              style={{ padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-control)', background: 'var(--bg)', color: 'var(--text)' }}
-            />
-            <div role="radiogroup" aria-label={t2('دور المستخدم الجديد', 'New user role')} style={{ display: 'flex', gap: '0.5rem' }}>
-              {NEW_ROLE_ORDER.map((r) => {
-                const cfg = ROLE_CONFIG[r];
-                return (
-                  <button
-                    key={r}
-                    ref={(el) => { roleRefs.current[r] = el; }}
-                    type="button"
-                    role="radio"
-                    aria-checked={newRole === r}
-                    tabIndex={newRole === r ? 0 : -1}
-                    onKeyDown={(e: KeyboardEvent) => handleRoleKeyDown(e, r)}
-                    onClick={() => setNewRole(r)}
-                    style={{
-                      padding: '0.375rem 0.75rem',
-                      borderRadius: 6,
-                      border: `1px solid ${newRole === r ? cfg.color : 'var(--border)'}`,
-                      background: newRole === r ? `${cfg.color}20` : 'transparent',
-                      color: newRole === r ? 'var(--text)' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontSize: '0.8125rem',
-                      fontWeight: newRole === r ? 600 : 400,
-                    }}
-                  >
-                    {ar ? cfg.labelAr : cfg.labelEn}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{ar ? ROLE_CONFIG[newRole].hintAr : ROLE_CONFIG[newRole].hintEn}</div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+      {isAdmin && users.length > 0 && (
+        <div class="team-roles">
+          {NEW_ROLE_ORDER.map((r) => {
+            const cfg = ROLE_CONFIG[r];
+            const Ico = cfg.Icon;
+            const active = roleFilter === r;
+            return (
               <button
-                class="btn btn-primary"
-                onClick={handleCreate}
-                disabled={creating || !newUsername.trim() || newPassword.trim().length < 6}
+                key={r}
+                type="button"
+                class="team-role-tile"
+                aria-pressed={active}
+                style={{ '--rc': cfg.color } as any}
+                onClick={() => setRoleFilter(active ? null : r)}
+                title={ar ? cfg.hintAr : cfg.hintEn}
               >
-                {creating ? <Loader2 class="icon spin" size={14} /> : t2('إنشاء', 'Create')}
+                <span class="ico" aria-hidden="true">
+                  <Ico size={17} />
+                </span>
+                <span style={{ minWidth: 0 }}>
+                  <span class="num">{roleCounts[r]}</span>
+                  <span class="lbl">{ar ? cfg.labelAr : cfg.labelEn}</span>
+                </span>
               </button>
-              <button class="btn" onClick={() => setShowAdd(false)}>{t2('إلغاء', 'Cancel')}</button>
-            </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div class="team-toolbar">
+        <div class="team-search">
+          <Search class="icon" size={15} aria-hidden="true" />
+          <input
+            type="search"
+            class="modern-input"
+            aria-label={t2('بحث في الفريق', 'Search the team')}
+            placeholder={t2('ابحث بالاسم أو المشروع…', 'Search by name or project…')}
+            value={query}
+            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          />
+          {query && (
+            <button
+              type="button"
+              class="team-search-clear"
+              onClick={() => setQuery('')}
+              aria-label={t2('مسح البحث', 'Clear search')}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        {filtersActive && (
+          <button
+            type="button"
+            class="btn-ghost"
+            onClick={() => { setQuery(''); setRoleFilter(null); }}
+          >
+            <X size={14} />
+            {t2('إلغاء التصفية', 'Clear filters')}
+          </button>
+        )}
+      </div>
+
+      {showAdd && isAdmin && (
+        <div class="team-add">
+          <h2>{t2('إضافة مستخدم جديد', 'Add New User')}</h2>
+          <div class="team-fields">
+            <label style={{ display: 'block' }}>
+              <span class="field-label" style={{ display: 'block', marginTop: 0 }}>
+                {t2('اسم المستخدم', 'Username')}
+              </span>
+              <input
+                type="text"
+                class="modern-input"
+                autocomplete="username"
+                placeholder={t2('اسم المستخدم', 'Username')}
+                value={newUsername}
+                onInput={(e) => setNewUsername((e.target as HTMLInputElement).value)}
+                style={{ marginTop: 6 }}
+              />
+            </label>
+            <label style={{ display: 'block' }}>
+              <span class="field-label" style={{ display: 'block', marginTop: 0 }}>
+                {t2('كلمة المرور', 'Password')}
+              </span>
+              <input
+                type="password"
+                class="modern-input"
+                autocomplete="new-password"
+                placeholder={t2('6 أحرف على الأقل', 'Min 6 characters')}
+                value={newPassword}
+                onInput={(e) => setNewPassword((e.target as HTMLInputElement).value)}
+                style={{ marginTop: 6 }}
+              />
+            </label>
+          </div>
+
+          <div class="field-label" style={{ display: 'block', marginTop: 14 }}>
+            {t2('دور المستخدم', 'User role')}
+          </div>
+          <div role="radiogroup" aria-label={t2('دور المستخدم الجديد', 'New user role')} class="team-role-opts" style={{ marginTop: 6 }}>
+            {NEW_ROLE_ORDER.map((r) => {
+              const cfg = ROLE_CONFIG[r];
+              const Ico = cfg.Icon;
+              return (
+                <button
+                  key={r}
+                  ref={(el) => { roleRefs.current[r] = el; }}
+                  type="button"
+                  role="radio"
+                  aria-checked={newRole === r}
+                  tabIndex={newRole === r ? 0 : -1}
+                  onKeyDown={(e: KeyboardEvent) => handleRoleKeyDown(e, r)}
+                  onClick={() => setNewRole(r)}
+                  class="team-role-opt"
+                  style={{ '--rc': cfg.color } as any}
+                >
+                  <span class="ico" aria-hidden="true"><Ico size={16} /></span>
+                  <span style={{ minWidth: 0 }}>
+                    <span class="tt">{ar ? cfg.labelAr : cfg.labelEn}</span>
+                    <span class="hh">{ar ? cfg.hintAr : cfg.hintEn}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div class="team-add-actions">
+            <button
+              class="btn-primary"
+              onClick={handleCreate}
+              disabled={creating || !newUsername.trim() || newPassword.trim().length < 6}
+            >
+              {creating ? <Loader2 class="icon spin" size={14} /> : <UserPlus size={15} />}
+              {t2('إنشاء', 'Create')}
+            </button>
+            <button class="btn-ghost" onClick={() => setShowAdd(false)}>{t2('إلغاء', 'Cancel')}</button>
           </div>
         </div>
       )}
 
-      <div style={{ display: 'grid', gap: '0.5rem' }}>
-        {sortedUsers.map((u) => {
-          const isMe = u.id === currentUser?.id;
-          const cfg = ROLE_CONFIG[u.role];
-          return (
-            <div
-              key={u.id}
-              className="team-row"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '1rem',
-                padding: '0.875rem 1rem',
-                background: isMe ? 'rgba(59,130,246,0.06)' : 'var(--surface)',
-                border: `1px solid ${isMe ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`,
-                borderRadius: 10,
-              }}
-            >
-              <a
-                href={`#/user/${u.id}`}
-                onClick={(e) => e.stopPropagation()}
-                title={t2(`عرض ملف ${u.profile?.displayName || u.username}`, `View ${u.profile?.displayName || u.username}'s profile`)}
-                style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1, minWidth: 0, color: 'inherit', textDecoration: 'none' }}
+      {users.length === 0 ? (
+        <div class="empty-state">
+          <div class="big"><Users size={30} aria-hidden="true" /></div>
+          <div>{t2('لا يوجد أعضاء بعد.', 'No members yet.')}</div>
+          {isAdmin && (
+            <button class="btn-primary" style={{ marginTop: 14 }} onClick={() => setShowAdd(true)}>
+              <UserPlus size={15} />
+              {t2('إضافة أول مستخدم', 'Add the first user')}
+            </button>
+          )}
+        </div>
+      ) : visible.length === 0 ? (
+        <div class="empty-state">
+          <div class="big"><Search size={28} aria-hidden="true" /></div>
+          <div>{t2('لا نتائج مطابقة.', 'No matching members.')}</div>
+          <button
+            class="btn-ghost"
+            style={{ marginTop: 14 }}
+            onClick={() => { setQuery(''); setRoleFilter(null); }}
+          >
+            <X size={14} />
+            {t2('إلغاء التصفية', 'Clear filters')}
+          </button>
+        </div>
+      ) : (
+        <div class="team-list">
+          {visible.map((u) => {
+            const isMe = u.id === currentUser?.id;
+            const cfg = ROLE_CONFIG[u.role] || ROLE_CONFIG.viewer;
+            const RoleIco = cfg.Icon;
+            const name = u.profile?.displayName || u.username;
+            const joined = (() => {
+              const d = new Date(u.createdAt);
+              return isNaN(d.getTime()) ? '' : d.toLocaleDateString(ar ? 'ar' : undefined);
+            })();
+            return (
+              <div
+                key={u.id}
+                className={`team-row${isMe ? ' is-me' : ''}`}
               >
-                        <Avatar name={u.profile?.displayName || u.username} avatar={avatarUrl(u.id, u.profile?.avatarExt)} size={36} decorative />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{u.profile?.displayName || u.username}</span>
-                    {isMe && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>({t2('أنت', 'you')})</span>}
-                    <span style={{
-                      fontSize: '0.6875rem',
-                      padding: '0.125rem 0.375rem',
-                      borderRadius: 4,
-                      background: `${cfg.color}20`,
-                      color: cfg.color,
-                      fontWeight: 600,
-                    }}>
-                      {ar ? cfg.labelAr : cfg.labelEn}{u.role === 'editor' ? (ar ? ' · عام' : ' · global') : ''}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>
-                    {ar ? cfg.hintAr : cfg.hintEn}
-                  </div>
-                  <div style={{ fontSize: '0.6875rem', color: 'rgba(255,255,255,0.55)', marginTop: '0.125rem' }}>
-                    {t2('انضم في', 'Joined')} {new Date(u.createdAt).toLocaleDateString(ar ? 'ar' : undefined)}
-                  </div>
-                  {u.memberships && u.memberships.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', marginTop: '0.5rem' }}>
-                      {u.memberships.map((m) => (
-                        <span
-                          key={m.slug}
-                          title={m.isOwner ? t2(`مالك ${m.name}`, `Owner of ${m.name}`) : t2(`${m.role} على ${m.name}`, `${m.role} on ${m.name}`)}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.25rem',
-                            fontSize: '0.6875rem',
-                            padding: '0.125rem 0.4375rem',
-                            borderRadius: 999,
-                            background: 'rgba(59,130,246,0.08)',
-                            border: '1px solid rgba(59,130,246,0.18)',
-                            color: 'var(--text-secondary)',
-                            maxWidth: 220,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          {m.isOwner && <span style={{ color: '#f59e0b' }}>★</span>}
-                          {m.name}
-                          <span style={{
-                            fontSize: '0.625rem',
-                            padding: '0 0.25rem',
-                            borderRadius: 4,
-                            background: 'rgba(59,130,246,0.14)',
-                            color: '#60a5fa',
-                            fontWeight: 600,
-                            textTransform: 'capitalize',
-                          }}>
-                            {m.isOwner ? (ar ? 'مالك' : 'owner') : m.role}
-                          </span>
-                        </span>
-                      ))}
+                <a
+                  href={`#/user/${u.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  class="team-row-link"
+                  title={t2(`عرض ملف ${name}`, `View ${name}'s profile`)}
+                >
+                  <Avatar name={name} avatar={avatarUrl(u.id, u.profile?.avatarExt)} size={40} decorative />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div class="team-row-name">
+                      <span class="nm">{name}</span>
+                      {isMe && <span class="team-me-pill">{t2('أنت', 'you')}</span>}
+                      <span
+                        class="team-role-badge"
+                        style={{ '--rc': cfg.color } as any}
+                        title={ar ? cfg.hintAr : cfg.hintEn}
+                      >
+                        <RoleIco size={11} aria-hidden="true" />
+                        {ar ? cfg.labelAr : cfg.labelEn}
+                        {u.role === 'editor' ? (ar ? ' · عام' : ' · global') : ''}
+                      </span>
                     </div>
-                  )}
-                </div>
-              </a>
-              {isAdmin && !isMe && (
-                <div style={{ display: 'flex', gap: '0.375rem', flexShrink: 0 }}>
-                  <select
-                    aria-label={t2(`تغيير دور ${u.profile?.displayName || u.username}`, `Change role for ${u.profile?.displayName || u.username}`)}
-                    value={u.role}
-                    onClick={(e: Event) => e.stopPropagation()}
-                    onChange={(e) => handleRoleChangeRequested(u.id, (e.target as HTMLSelectElement).value as UserRole)}
-                    style={{
-                      padding: '0.25rem 0.5rem',
-                      borderRadius: 6,
-                      border: '1px solid var(--border-control)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '0.8125rem',
-                    }}
-                  >
-                    <option value="admin">{t2('مدير', 'Admin')}</option>
-                    <option value="editor">{t2('محرر (عام)', 'Editor (Global)')}</option>
-                    <option value="viewer">{t2('عارض', 'Viewer')}</option>
-                  </select>
-                  <button
-                    class="btn-icon"
-                    onClick={(e: Event) => { e.stopPropagation(); setDeleteError(null); setConfirmDelete(u); }}
-                    title={t2('إزالة المستخدم', 'Remove user')}
-                    aria-label={t2(`إزالة المستخدم ${u.username}`, `Remove user ${u.username}`)}
-                    style={{ color: 'var(--red)' }}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                    <div class="team-row-sub">
+                      <span class="mono">@{u.username}</span>
+                      {joined && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <CalendarDays class="icon" size={12} aria-hidden="true" />
+                          <span>{t2('انضم في', 'Joined')} {joined}</span>
+                        </>
+                      )}
+                    </div>
+                    {u.memberships && u.memberships.length > 0 && (
+                      <div class="team-chips">
+                        {u.memberships.map((m) => {
+                          const mrc = membershipRoleMeta(m.role);
+                          const MrcIco = mrc.Icon;
+                          return (
+                            <span
+                              key={m.slug}
+                              class="team-chip"
+                              title={t2(`${ar ? mrc.labelAr : mrc.labelEn} على ${m.name}`, `${mrc.labelEn} on ${m.name}`)}
+                            >
+                              <FolderKanban class="icon" size={11} aria-hidden="true" />
+                              <span class="nm">{m.name}</span>
+                              <span class="rl" style={{ '--rc': mrc.color } as any}>
+                                <MrcIco size={9} aria-hidden="true" />
+                                {ar ? mrc.labelAr : mrc.labelEn}
+                              </span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </a>
+                {isAdmin && !isMe && (
+                  <div class="team-actions">
+                    <select
+                      class="select-dark select-sm"
+                      aria-label={t2(`تغيير دور ${name}`, `Change role for ${name}`)}
+                      value={u.role}
+                      onClick={(e: Event) => e.stopPropagation()}
+                      onChange={(e) => handleRoleChangeRequested(u.id, (e.target as HTMLSelectElement).value as UserRole)}
+                    >
+                      <option value="admin">{t2('مدير', 'Admin')}</option>
+                      <option value="editor">{t2('محرر (عام)', 'Editor (Global)')}</option>
+                      <option value="viewer">{t2('عارض', 'Viewer')}</option>
+                    </select>
+                    <button
+                      class="btn-ghost sm icon-only danger-icon"
+                      onClick={(e: Event) => { e.stopPropagation(); setDeleteError(null); setConfirmDelete(u); }}
+                      title={t2('إزالة المستخدم', 'Remove user')}
+                      aria-label={t2(`إزالة المستخدم ${u.username}`, `Remove user ${u.username}`)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <ConfirmModal
         open={!!confirmDelete}
