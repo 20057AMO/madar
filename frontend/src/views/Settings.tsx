@@ -1290,11 +1290,10 @@ export function Settings() {
                 type="file"
                 accept=".json,application/json"
                 class="sr-only"
-                aria-label={t2('ملف نسخة احتياطية للاستيراد (.json)', 'Backup file to import (.json)')}
                 onChange={(e: any) => setImportName(e.currentTarget.files?.[0]?.name || '')}
               />
               <label class="btn-ghost sm" for="import-file">
-                <span class="icon-wrap"><Upload width={13} height={13} /></span> {t2('اختر ملفاً', 'Choose file')}
+                <span class="icon-wrap"><Upload width={13} height={13} /></span> {t2('اختر ملف نسخة احتياطية', 'Choose backup file')}
               </label>
               <span class={`file-chip mono${importName ? '' : ' empty'}`} title={importName || undefined}>
                 {importName || t2('لم يُختر ملف', 'No file chosen')}

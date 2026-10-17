@@ -2477,6 +2477,9 @@ button.tag-chip.active {
   transition: background 0.12s;
 }
 .audit-row:hover { background: var(--panel-2); }
+/* On the darker hover surface --text-3 drops to 4.30:1 — lift ip/time to
+   --text-2 (6.34:1) so the hover state keeps AA. */
+.audit-row:hover .audit-ip, .audit-row:hover .audit-time { color: var(--text-2); }
 .audit-row:last-child { border-bottom: none; }
 .audit-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
