@@ -13,10 +13,14 @@
  * `canvasEditedAt` enrichment) — is built first and only then swapped into the
  * cache: partial data is never observable.
  *
- * `invalidateProjectsCache()` is called by every lifecycle point that already
- * invalidates the storage cache (create / duplicate / start / stop / recreate
- * / delete in docker-manager.ts; create / duplicate / import / restore /
- * delete in index.ts), so a mutation is visible to the next list call.
+ * `invalidateProjectsCache()` is called by every lifecycle point that changes
+ * the project set (create / duplicate / start / stop / recreate / delete in
+ * docker-manager.ts; create / duplicate / import / restore / delete in
+ * index.ts), so a mutation is visible to the next list call. Note the
+ * asymmetry: docker-manager invalidates ONLY this cache — the storage-metrics
+ * cache is invalidated at the route layer (the index.ts paths above) and by
+ * archive-manager, so a docker-manager-driven lifecycle change may leave
+ * GET /api/storage numbers stale for up to the storage TTL (45 s).
  */
 
 import { createProjectsCache, PROJECTS_CACHE_DEFAULT_TTL_MS, PROJECTS_CACHE_MIN_TTL_MS, type ProjectsCache } from './projects-cache-core';

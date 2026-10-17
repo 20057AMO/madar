@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
 import {
   Loader2,
   Lock,
@@ -18,6 +19,7 @@ import {
   TriangleAlert,
   ScrollText,
   Gauge,
+  Info,
 } from 'lucide-preact';
 import { useAuth } from '../auth';
 import {
@@ -153,7 +155,7 @@ function WhRow({ w, onChanged, onDelete }: WhRowProps) {
   };
 
   return (
-    <div style="border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px;">
+    <div class="wh-card">
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <input class="modern-input" style="max-width:190px" placeholder={t2('الاسم', 'Name')} value={name} onInput={(e: any) => setName(e.currentTarget.value)} />
         <input class="modern-input" style="flex:1; min-width:260px" placeholder="https://…" value={url} onInput={(e: any) => setUrl(e.currentTarget.value)} />
@@ -162,11 +164,11 @@ function WhRow({ w, onChanged, onDelete }: WhRowProps) {
         </label>
         <button class="btn-ghost sm" onClick={test} disabled={busy}>{t2('اختبار', 'Test')}</button>
         <button class="btn-primary sm" onClick={save} disabled={busy}>{busy ? t2('جارٍ الحفظ…', 'Saving…') : t('common.save')}</button>
-        <button class="btn-ghost sm" style="color: var(--red)" onClick={onDelete} title={t2('حذف الويب هوك', 'Delete webhook')} aria-label={t2('حذف الويب هوك', 'Delete webhook')}>
+        <button class="btn-ghost sm danger-icon" onClick={onDelete} title={t2('حذف الويب هوك', 'Delete webhook')} aria-label={t2('حذف الويب هوك', 'Delete webhook')}>
           <Trash2 width={13} height={13} class="icon" />
         </button>
       </div>
-      <div style="margin-top:8px; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+      <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
         {WEBHOOK_EVENTS.map((ev) => (
           <label class="wh-event-label" key={ev}>
             <input type="checkbox" checked={events.includes(ev)} onChange={toggleEvent(ev)} /> {ev}
@@ -307,31 +309,82 @@ function PerfPanel() {
   }, []);
   const shell = perf?.shell[perf.shell.length - 1];
   return (
-    <div class="panel settings-section">
-      <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
-        <span><span class="icon-wrap"><Gauge width={14} height={14} /></span> {t2('قياسات الأداء', 'Performance measurements')}</span>
-        <button
-          class="btn-ghost sm"
-          onClick={() => {
-            clearPerfMetrics();
-            setPerf(readPerfMetrics());
-          }}
-        >
-          <Trash2 width={13} height={13} class="icon" /> {t('common.delete')}
-        </button>
-      </h2>
-      <p class="settings-hint">
-        {t2(
+    <section class="panel settings-section" id="sec-perf">
+      <SectionHead
+        icon={<Gauge width={15} height={15} />}
+        title={t2('قياسات الأداء', 'Performance measurements')}
+        desc={t2(
           'توقيتات حقيقية من هذا المتصفح: أزمنة التنقل للغلاف، وزمن انتظار تحميل إطاري VS Code و opencode (من الاستقصاء حتى جاهزية الإطار). تُخزَّن محليًا فقط ولا تُرسل لأي مكان.',
           'Real timings from this browser: Navigation Timing for the shell, and the wait for the VS Code / opencode frames to load (status probe → frame ready). Stored locally only — never sent anywhere.',
         )}
-      </p>
+        action={
+          <button
+            class="btn-ghost sm"
+            onClick={() => {
+              clearPerfMetrics();
+              setPerf(readPerfMetrics());
+            }}
+          >
+            <Trash2 width={13} height={13} class="icon" /> {t('common.delete')}
+          </button>
+        }
+      />
       <div style="margin-top:12px">
         <ShellRow shell={shell} t2={t2} />
         <FrameTable title="VS Code" rows={perf?.ide ?? []} t2={t2} />
         <FrameTable title="opencode" rows={perf?.opencode ?? []} t2={t2} />
       </div>
+    </section>
+  );
+}
+
+/** Icon tile + title + description — the shared header of every settings section. */
+function SectionHead({
+  icon,
+  title,
+  desc,
+  action,
+}: {
+  icon: ComponentChildren;
+  title: string;
+  desc?: ComponentChildren;
+  action?: ComponentChildren;
+}) {
+  return (
+    <div class="set-head">
+      <span class="set-head-icon" aria-hidden="true">{icon}</span>
+      <div class="set-head-text">
+        <h2 class="set-title">{title}</h2>
+        {desc && <div class="set-desc">{desc}</div>}
+      </div>
+      {action && <div class="set-head-action">{action}</div>}
     </div>
+  );
+}
+
+interface NavItem {
+  id: string;
+  icon: ComponentChildren;
+  label: string;
+}
+
+/** Sticky in-page section nav — the admin page is long; this keeps it reachable. */
+function SettingsNav({ items, active, onGo }: { items: NavItem[]; active: string; onGo: (id: string) => void }) {
+  const { t2 } = useI18n();
+  return (
+    <nav class="set-subnav" aria-label={t2('أقسام الإعدادات', 'Settings sections')}>
+      {items.map((s) => (
+        <button
+          key={s.id}
+          class={active === s.id ? 'active' : ''}
+          aria-current={active === s.id ? 'true' : undefined}
+          onClick={() => onGo(s.id)}
+        >
+          <span class="icon-wrap" aria-hidden="true">{s.icon}</span>
+          {s.label}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -347,6 +400,96 @@ export function Settings() {
     if (user && user.role !== 'admin') window.location.hash = '/profile';
   }, [user]);
 
+  // ── Sticky section nav: which section is currently in view ──
+  const SETTINGS: NavItem[] = [
+    { id: 'sec-security', icon: <KeyRound width={13} height={13} class="icon" />, label: t2('الأمان', 'Security') },
+    { id: 'sec-webhooks', icon: <BellRing width={13} height={13} class="icon" />, label: t2('التنبيهات', 'Alerts') },
+    { id: 'sec-storage', icon: <HardDrive width={13} height={13} class="icon" />, label: t2('التخزين', 'Storage') },
+    { id: 'sec-backup', icon: <DownloadCloud width={13} height={13} class="icon" />, label: t2('النسخ الاحتياطي', 'Backup') },
+    { id: 'sec-activity', icon: <ScrollText width={13} height={13} class="icon" />, label: t2('النشاط', 'Activity') },
+    { id: 'sec-updates', icon: <RefreshCw width={13} height={13} class="icon" />, label: t2('التحديثات', 'Updates') },
+    { id: 'sec-perf', icon: <Gauge width={13} height={13} class="icon" />, label: t2('الأداء', 'Performance') },
+    { id: 'sec-about', icon: <Info width={13} height={13} class="icon" />, label: t2('حول', 'About') },
+  ];
+
+  const [activeSec, setActiveSec] = useState('sec-security');
+  useEffect(() => {
+    if (!isAdmin) return;
+    const main = document.querySelector('.main');
+    const els = SETTINGS.map((s) => document.getElementById(s.id)).filter((el): el is HTMLElement => !!el);
+    if (!els.length || !main) return;
+    const visible = new Set<string>();
+    // Probe design (both breakpoints): sections land at 72px via scroll-margin
+    // INSIDE .main, so the observer roots at .main. rootMargin's TOP sign is
+    // load-bearing: NEGATIVE shrinks the root (band starts at +70 = just above
+    // the 72px landing line, below the ≈46px sticky bar); a positive value
+    // would EXPAND it to -70 and decouple the event boundary from the area
+    // band below — entries then never change at rest and the last-reported
+    // section stayed highlighted. The band must stay identical to the area
+    // constants (70 … clientHeight*0.45) or selection goes stale.
+    // Selection is by LARGEST share inside the band: "first still
+    // intersecting" kept the highlight on a tall predecessor's tail while the
+    // next section filled the whole screen.
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) visible.add(e.target.id);
+          else visible.delete(e.target.id);
+        }
+        // At the very bottom the LAST section can never reach the probe line
+        // (the pane clamps before it gets there), so without this branch the
+        // highlight froze on the previous section after clicking it.
+        const atBottom =
+          main.scrollHeight - main.scrollTop - main.clientHeight < 40;
+        let pick: NavItem | null = null;
+        if (atBottom) {
+          pick = SETTINGS[SETTINGS.length - 1];
+        } else {
+          const rootTop = main.getBoundingClientRect().top;
+          const bandTop = 70;
+          const bandBottom = main.clientHeight * 0.45;
+          let bestArea = 0;
+          for (const s of SETTINGS) {
+            if (!visible.has(s.id)) continue;
+            const el = document.getElementById(s.id);
+            if (!el) continue;
+            const r = el.getBoundingClientRect();
+            const top = r.top - rootTop;
+            const area = Math.min(bandBottom, top + r.height) - Math.max(bandTop, top);
+            if (area > bestArea) {
+              bestArea = area;
+              pick = s;
+            }
+          }
+        }
+        if (pick) setActiveSec(pick.id);
+      },
+      { root: main, rootMargin: '-70px 0px -55% 0px' }
+    );
+    els.forEach((el) => io.observe(el));
+    // The observer alone can miss the bottom: once the pane clamps, no
+    // intersection CHANGES again, so its atBottom branch may never re-run.
+    // A passive scroll listener closes that gap (same-value setState bails).
+    const onScroll = () => {
+      if (main.scrollHeight - main.scrollTop - main.clientHeight < 40) {
+        setActiveSec(SETTINGS[SETTINGS.length - 1].id);
+      }
+    };
+    main.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      io.disconnect();
+      main.removeEventListener('scroll', onScroll);
+    };
+  }, [isAdmin]);
+
+  const gotoSection = (id: string) => {
+    setActiveSec(id);
+    const el = document.getElementById(id);
+    if (!el) return;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  };
+
   // ── Providers security lock ──
   const [lockEnabled, setLockEnabled] = useState<boolean | null>(null);
   const [lockFetchError, setLockFetchError] = useState(false);
@@ -357,6 +500,7 @@ export function Settings() {
 
   // ── Backup ──
   const [backupMsg, setBackupMsg] = useState<Msg>(null);
+  const [importName, setImportName] = useState('');
   const pendingImportRef = useRef<BackupFile | null>(null);
 
   // ── Notifications / Webhooks ──
@@ -371,6 +515,26 @@ export function Settings() {
   const [storage, setStorage] = useState<StorageMetrics | null>(null);
   const [storageRefreshing, setStorageRefreshing] = useState(false);
   const [storageMsg, setStorageMsg] = useState<Msg>(null);
+  const [storageAnnounce, setStorageAnnounce] = useState('');
+
+  // An aria-live region only announces content that CHANGED, so two identical
+  // consecutive outcomes set the same string and Preact bails out with zero
+  // DOM mutations → nothing is announced. Clear first, then set the text on
+  // the next macrotask: two renders, two announcements. setTimeout, not
+  // queueMicrotask (Preact batches those into one render) and not rAF (it
+  // never fires in a background tab). Mirrors DigestPanel's announce().
+  const storageAnnounceTimerRef = useRef<number | null>(null);
+  const announceStorage = (text: string) => {
+    if (storageAnnounceTimerRef.current !== null) window.clearTimeout(storageAnnounceTimerRef.current);
+    setStorageAnnounce('');
+    storageAnnounceTimerRef.current = window.setTimeout(() => {
+      storageAnnounceTimerRef.current = null;
+      setStorageAnnounce(text);
+    }, 60);
+  };
+  useEffect(() => () => {
+    if (storageAnnounceTimerRef.current !== null) window.clearTimeout(storageAnnounceTimerRef.current);
+  }, []);
 
   useEffect(() => {
     listWebhooks()
@@ -386,7 +550,10 @@ export function Settings() {
     getStorageMetrics()
       .then((r) => { if (!cancelled) setStorage(r); })
       .catch((err: any) => {
-        if (!cancelled) setStorageMsg({ type: 'err', text: err.message || t2('فشل تحميل إحصاءات التخزين', 'Failed to load storage metrics') });
+        if (cancelled) return;
+        const text = err.message || t2('فشل تحميل إحصاءات التخزين', 'Failed to load storage metrics');
+        setStorageMsg({ type: 'err', text });
+        announceStorage(text);
       });
     return () => { cancelled = true; };
   }, []);
@@ -398,8 +565,13 @@ export function Settings() {
     try {
       const r = await getStorageMetrics(true);
       setStorage(r);
+      const text = t2('تم تحديث إحصاءات التخزين', 'Storage refreshed');
+      setStorageMsg({ type: 'ok', text });
+      announceStorage(text);
     } catch (err: any) {
-      setStorageMsg({ type: 'err', text: err.message || t2('فشل تحديث التخزين', 'Failed to refresh storage') });
+      const text = err.message || t2('فشل تحديث التخزين', 'Failed to refresh storage');
+      setStorageMsg({ type: 'err', text });
+      announceStorage(text);
     } finally {
       setStorageRefreshing(false);
     }
@@ -417,7 +589,7 @@ export function Settings() {
   const [updLogLoading, setUpdLogLoading] = useState(false);
   const [updLogError, setUpdLogError] = useState<string | null>(null);
   const pendingUpdateComponent = useRef<'opencode' | 'code-server' | 'all'>('opencode');
-  const updatesPanelRef = useRef<HTMLDivElement | null>(null);
+  const updatesPanelRef = useRef<HTMLElement | null>(null);
   const updLogAlive = useRef(true);
   const lastUpdLogFetch = useRef(0);
   useEffect(() => () => { updLogAlive.current = false; }, []);
@@ -797,6 +969,7 @@ export function Settings() {
           });
           const input = document.getElementById('import-file') as HTMLInputElement | null;
           if (input) input.value = '';
+          setImportName('');
           pendingImportRef.current = null;
           break;
         }
@@ -861,15 +1034,16 @@ export function Settings() {
         <p class="hero-sub">{t2('إعدادات المدير — الأمان والويب هوكات والتخزين والنسخ الاحتياطي.', 'Admin settings — security, webhooks, storage, backups.')}</p>
       </div>
 
+      <SettingsNav items={SETTINGS} active={activeSec} onGo={gotoSection} />
+
       {/* Providers Security Lock — two-step flow */}
-      <div class="panel settings-section">
-        <h2 class="panel-title">
-          <span class="icon-wrap"><KeyRound width={14} height={14} /></span> {t2('أمان المزوّدين', 'Providers Security')}
-        </h2>
-        <p class="settings-hint">
-          {t2('كلمة مرور ثانية اختيارية تحرس صفحة المزوّدين.', 'Optional second-layer password guarding the Providers page.')}
-        </p>
-        <div class="settings-row">
+      <section class="panel settings-section" id="sec-security">
+        <SectionHead
+          icon={<KeyRound width={15} height={15} />}
+          title={t2('أمان المزوّدين', 'Providers Security')}
+          desc={t2('كلمة مرور ثانية اختيارية تحرس صفحة المزوّدين.', 'Optional second-layer password guarding the Providers page.')}
+        />
+        <div class="set-status">
           <span class="field-label">{t2('الحالة', 'Status')}</span>
           {lockFetchError ? (
             <span class="badge-off"><Loader2 width={11} height={11} class="icon spin" /> {t2('تعذّر التحقق — حاول التحديث', 'Could not check — try refreshing')}</span>
@@ -883,26 +1057,31 @@ export function Settings() {
         </div>
 
         <form onSubmit={beginSaveLock}>
-          <label class="field-label">
-            {lockEnabled ? t2('كلمة مرور المزوّدين الجديدة', 'New Providers password') : t2('ضبط كلمة مرور المزوّدين', 'Set Providers password')}
-          </label>
-          <input
-            class="modern-input"
-            type="password"
-            placeholder={t2('6 أحرف على الأقل', 'Min 6 characters')}
-            value={lockNewPw}
-            onInput={(e: any) => setLockNewPw(e.currentTarget.value)}
-          />
-          {lockNewPw && <PwMeter pw={lockNewPw} />}
-
-          <label class="field-label">{t2('تأكيد كلمة مرور المزوّدين', 'Confirm Providers password')}</label>
-          <input
-            class="modern-input"
-            type="password"
-            placeholder={t2('أعد كتابة كلمة مرور المزوّدين', 'Repeat providers password')}
-            value={lockConfirmPw}
-            onInput={(e: any) => setLockConfirmPw(e.currentTarget.value)}
-          />
+          <div class="set-grid2">
+            <div>
+              <label class="field-label">
+                {lockEnabled ? t2('كلمة مرور المزوّدين الجديدة', 'New Providers password') : t2('ضبط كلمة مرور المزوّدين', 'Set Providers password')}
+              </label>
+              <input
+                class="modern-input"
+                type="password"
+                placeholder={t2('6 أحرف على الأقل', 'Min 6 characters')}
+                value={lockNewPw}
+                onInput={(e: any) => setLockNewPw(e.currentTarget.value)}
+              />
+              {lockNewPw && <PwMeter pw={lockNewPw} />}
+            </div>
+            <div>
+              <label class="field-label">{t2('تأكيد كلمة مرور المزوّدين', 'Confirm Providers password')}</label>
+              <input
+                class="modern-input"
+                type="password"
+                placeholder={t2('أعد كتابة كلمة مرور المزوّدين', 'Repeat providers password')}
+                value={lockConfirmPw}
+                onInput={(e: any) => setLockConfirmPw(e.currentTarget.value)}
+              />
+            </div>
+          </div>
 
           {lockMsg && (
             <div class={lockMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-top: 8px" role={lockMsg.type === 'ok' ? 'status' : 'alert'}>
@@ -938,12 +1117,15 @@ export function Settings() {
             {t2('ستؤكد هويتك بكلمة مرور حسابك في الخطوة التالية.', 'You will confirm your identity with your account password in the next step.')}
           </p>
         </form>
-      </div>
+      </section>
 
       {/* Notifications / Webhooks */}
-      <div class="panel settings-section">
-        <h2 class="panel-title"><span class="icon-wrap"><BellRing width={14} height={14} /></span> {t2('التنبيهات والويب هوكات', 'Notifications & Webhooks')}</h2>
-        <p class="settings-hint">
+      <section class="panel settings-section" id="sec-webhooks">
+        <SectionHead
+          icon={<BellRing width={15} height={15} />}
+          title={t2('التنبيهات والويب هوكات', 'Notifications & Webhooks')}
+        />
+        <p class="settings-hint" style="margin-top:0">
           {t2('حوّل أحداث دورة حياة الحاويات والأعطال إلى رابط خارجي (Slack أو Discord أو Telegram أو صفحة حالة…). الخادم يكشف الأعطال حتى بلا متصفح مفتوح. عند ضبط سر توقيع، يحمل كل POST ترويسة ', 'Forward container lifecycle and crash events to an external URL (Slack, Discord, Telegram, a status page…). Crashes are detected by the server even when no browser is open. When a signing secret is set, every POST carries an ')}
           <code>X-Madar-Signature</code>
           {t2(' HMAC ليستطيع المستقبِلون التحقق من المرسل.', ' HMAC header so receivers can verify the sender.')}
@@ -956,7 +1138,7 @@ export function Settings() {
         )}
 
         <>
-          <div style="display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; align-items: center;">
+          <div class="set-addbar">
             <input
               class="modern-input"
               placeholder={t2('اسم الويب هوك', 'Webhook name')}
@@ -977,35 +1159,39 @@ export function Settings() {
           </div>
 
           {webhooks === null ? (
-            <div class="dim" style="margin-top: 12px" role="status">{t2('جارٍ تحميل الويب هوكات…', 'Loading webhooks…')}</div>
+            <div class="dim" role="status">{t2('جارٍ تحميل الويب هوكات…', 'Loading webhooks…')}</div>
           ) : webhooks.length === 0 ? (
-            <div class="dim" style="margin-top: 12px">
-              {t2('لا ويب هوكات — تظهر الأعطال وأحداث دورة الحياة داخل التطبيق رغم ذلك.', 'No webhooks — crashes and lifecycle events are still shown in-app.')}
+            <div class="set-empty">
+              <BellRing width={18} height={18} class="icon" />
+              <span>{t2('لا ويب هوكات — تظهر الأعطال وأحداث دورة الحياة داخل التطبيق رغم ذلك.', 'No webhooks — crashes and lifecycle events are still shown in-app.')}</span>
             </div>
           ) : (
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 12px;">
+            <div class="wh-list">
               {webhooks.map((w) => (
                 <WhRow key={w.id} w={w} onChanged={(msg) => void whRefresh(msg)} onDelete={() => setWhDelete(w)} />
               ))}
             </div>
           )}
         </>
-      </div>
+      </section>
 
       {/* Storage / disk usage */}
-      <div class="panel settings-section">
-        <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
-          <span>{t2('التخزين', 'Storage')}</span>
-          <button class="btn-ghost sm" onClick={refreshStorage} disabled={storageRefreshing}>
-            {storageRefreshing ? <Loader2 width={13} height={13} class="icon spin" /> : <RefreshCw width={13} height={13} class="icon" />}
-            {t2('تحديث', 'Refresh')}
-          </button>
-        </h2>
-        <p class="settings-hint">
-          {t2('استخدام القرص عبر مساحات العمل وأرشيف اللقطات وDocker. لقطة للقراءة فقط — التحديث يجبر إعادة مسح.', 'Disk usage across workspaces, snapshot archives and Docker. Read-only snapshot — refresh forces a rescan.')}
-        </p>
+      <section class="panel settings-section" id="sec-storage">
+        <SectionHead
+          icon={<HardDrive width={15} height={15} />}
+          title={t2('التخزين', 'Storage')}
+          desc={t2('استخدام القرص عبر مساحات العمل وأرشيف اللقطات وDocker. لقطة للقراءة فقط — التحديث يجبر إعادة مسح.', 'Disk usage across workspaces, snapshot archives and Docker. Read-only snapshot — refresh forces a rescan.')}
+          action={
+            <button class="btn-ghost sm" onClick={refreshStorage} disabled={storageRefreshing}>
+              {storageRefreshing ? <Loader2 width={13} height={13} class="icon spin" /> : <RefreshCw width={13} height={13} class="icon" />}
+              {t2('تحديث', 'Refresh')}
+            </button>
+          }
+        />
+        {/* Storage refresh outcomes are announced here (single AT path). */}
+        <span class="sr-only" role="status" aria-live="polite">{storageAnnounce}</span>
         {storageMsg && (
-          <div class={storageMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom:8px" role={storageMsg.type === 'ok' ? 'status' : 'alert'}>{storageMsg.text}</div>
+          <div class={storageMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom:8px">{storageMsg.text}</div>
         )}
         {storage == null ? (
           <div class="dim" role="status">{t2('جارٍ تحميل إحصاءات التخزين…', 'Loading storage metrics…')}</div>
@@ -1020,11 +1206,11 @@ export function Settings() {
                 <div class="storage-total"><span>{t2('إجمالي Docker', 'Docker total')}</span><b>{fmtBytes(storage.docker.system.totalBytes)}</b></div>
               )}
             </div>
-            <div class="dim" style="font-size:0.75rem;margin:14px 0 6px">{t2('حسب المشروع', 'Per project')}</div>
+            <div class="set-caption">{t2('حسب المشروع', 'Per project')}</div>
             <div class="table-scroll">
               <table class="storage-table">
               <thead>
-                <tr><th>{t2('المشروع', 'Project')}</th><th>{t2('مساحة العمل', 'Workspace')}</th><th>{t2('اللقطات', 'Snapshots')}</th><th>{t2('الحاوية', 'Container')}</th></tr>
+                <tr><th scope="col">{t2('المشروع', 'Project')}</th><th scope="col">{t2('مساحة العمل', 'Workspace')}</th><th scope="col">{t2('اللقطات', 'Snapshots')}</th><th scope="col">{t2('الحاوية', 'Container')}</th></tr>
               </thead>
               <tbody>
                 {storage.projects.length === 0 && (
@@ -1033,7 +1219,12 @@ export function Settings() {
                 {storage.projects.map((p) => (
                   <tr key={p.slug}>
                     <td class="storage-name"><HardDrive width={12} height={12} class="icon" /> {p.name}<span class="dim">{p.slug}</span></td>
-                    <td>{fmtBytes(p.workspaceBytes)}</td>
+                    <td>{fmtBytes(p.workspaceBytes)}{p.workspaceTruncated && (
+                      <>
+                        <span class="dim" style="margin-left:4px;font-size:0.7rem" title={t2('المسح توقّف قبل الانتهاء — الرقم تقريبي', 'Scan stopped early — size is a lower bound')} aria-hidden="true">{t2('جزئي', 'partial')}</span>
+                        <span class="sr-only">{t2('المسح توقّف قبل الانتهاء — الرقم تقريبي', 'Scan stopped early — size is a lower bound')}</span>
+                      </>
+                    )}</td>
                     <td>{fmtBytes(p.snapshotBytes)}</td>
                     <td>{p.container ? fmtBytes(p.container.writableBytes) : '—'}</td>
                   </tr>
@@ -1041,6 +1232,9 @@ export function Settings() {
               </tbody>
             </table>
             </div>
+            {storage.projects.some((p) => p.workspaceTruncated) && (
+              <p class="dim" style="font-size:0.72rem;margin-top:8px">{t2('مسح مساحة عمل ما توقّف قبل الانتهاء — الأحجام المعروضة أصغر من الحقيقية (حد أدنى).', 'At least one workspace scan stopped early — the sizes shown are lower bounds.')}</p>
+            )}
             {storage.docker.system && (
               <p class="settings-hint" style="font-size:0.72rem;margin-top:10px">
                 {t2('إجماليات Docker — الصور ', 'Docker totals — images ')}
@@ -1050,15 +1244,15 @@ export function Settings() {
             )}
           </>
         )}
-      </div>
+      </section>
 
       {/* Backup / Restore */}
-      <div class="panel settings-section">
-        <h2 class="panel-title">{t2('النسخ الاحتياطي والاستعادة', 'Backup & Restore')}</h2>
-        <p class="settings-hint">
-          {t2('صدّر الوكلاء والجلسات وإعدادات المزوّدين وتفضيلات المحادثة كملف JSON.', 'Export agents, sessions, provider configs and chat preferences as JSON.')}
-          <strong> {t2('مفاتيح API لا تُضمّن أبداً.', 'API keys are never included.')}</strong> {t2('الاستيراد يدمج العناصر الجديدة فقط.', 'Import merges new items only.')}
-        </p>
+      <section class="panel settings-section" id="sec-backup">
+        <SectionHead
+          icon={<DownloadCloud width={15} height={15} />}
+          title={t2('النسخ الاحتياطي والاستعادة', 'Backup & Restore')}
+          desc={t2('صدّر الوكلاء والجلسات وإعدادات المزوّدين وتفضيلات المحادثة كملف JSON.', 'Export agents, sessions, provider configs and chat preferences as JSON.')}
+        />
 
         {backupMsg && (
           <div class={backupMsg.type === 'ok' ? 'chat-save-msg' : 'login-error'} style="margin-bottom: 8px" role={backupMsg.type === 'ok' ? 'status' : 'alert'}>
@@ -1066,49 +1260,104 @@ export function Settings() {
           </div>
         )}
 
-        <div style="display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; align-items: center;">
-          <button class="btn-primary sm" onClick={beginExport}>
-            <span class="icon-wrap"><Download width={13} height={13} /></span> {t2('تصدير نسخة احتياطية', 'Export backup')}
-          </button>
-          <form onSubmit={beginImport} style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-            <label for="import-file" class="sr-only">{t2('ملف نسخة احتياطية للاستيراد (.json)', 'Backup file to import (.json)')}</label>
-            <input id="import-file" type="file" accept=".json,application/json" class="modern-file" />
-            <button class="btn-ghost sm" type="submit">
-              <span class="icon-wrap"><Upload width={13} height={13} /></span> {t2('استيراد', 'Import')}
+        <div class="set-cards2">
+          <div class="set-card">
+            <div class="set-card-head">
+              <span class="set-card-icon"><Download width={14} height={14} /></span>
+              <div>
+                <div class="set-card-title">{t2('تصدير', 'Export')}</div>
+                <div class="set-card-desc">{t2('ملف JSON جاهز للحفظ — يُستعاد لاحقاً عبر الاستيراد.', 'A JSON file you can keep — restore it later via Import.')}</div>
+              </div>
+            </div>
+            <button class="btn-primary sm" onClick={beginExport} style="align-self:flex-start">
+              <span class="icon-wrap"><Download width={13} height={13} /></span> {t2('تصدير نسخة احتياطية', 'Export backup')}
             </button>
-          </form>
+          </div>
+          <div class="set-card">
+            <div class="set-card-head">
+              <span class="set-card-icon"><Upload width={14} height={14} /></span>
+              <div>
+                <div class="set-card-title">{t2('استيراد', 'Import')}</div>
+                <div class="set-card-desc">{t2('الاستيراد يدمج العناصر الجديدة فقط ويحافظ على الموجودة.', 'Import merges new items only — existing ones are kept.')}</div>
+              </div>
+            </div>
+            <form onSubmit={beginImport} style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              {/* The native control renders English UA strings ("Choose File" /
+                  "No file chosen") inside the Arabic UI — a visible label drives
+                  this hidden input instead; the name is echoed as a chip. */}
+              <input
+                id="import-file"
+                type="file"
+                accept=".json,application/json"
+                class="sr-only"
+                aria-label={t2('ملف نسخة احتياطية للاستيراد (.json)', 'Backup file to import (.json)')}
+                onChange={(e: any) => setImportName(e.currentTarget.files?.[0]?.name || '')}
+              />
+              <label class="btn-ghost sm" for="import-file">
+                <span class="icon-wrap"><Upload width={13} height={13} /></span> {t2('اختر ملفاً', 'Choose file')}
+              </label>
+              <span class={`file-chip mono${importName ? '' : ' empty'}`} title={importName || undefined}>
+                {importName || t2('لم يُختر ملف', 'No file chosen')}
+              </span>
+              <button
+                class="btn-primary sm"
+                type="submit"
+                disabled={!importName}
+                title={importName ? undefined : t2('اختر ملفاً أولاً', 'Choose a file first')}
+              >
+                {t2('استيراد', 'Import')}
+              </button>
+            </form>
+          </div>
         </div>
-      </div>
+
+        <p class="settings-hint" style="margin-bottom:0">
+          <strong>{t2('مفاتيح API لا تُضمّن أبداً.', 'API keys are never included.')}</strong>
+        </p>
+      </section>
 
       {/* Security Activity */}
-      <div class="panel settings-section">
-        <h2 class="panel-title">{t2('النشاط الأمني', 'Security Activity')}</h2>
-        <p class="settings-hint">{t2('أحدث الأحداث المتعلقة بالأمان (الأحدث أولاً، آخر 50).', 'Recent security-related events (newest first, last 50).')}</p>
+      <section class="panel settings-section" id="sec-activity">
+        <SectionHead
+          icon={<ScrollText width={15} height={15} />}
+          title={t2('النشاط الأمني', 'Security Activity')}
+          desc={t2('أحدث الأحداث المتعلقة بالأمان (الأحدث أولاً، آخر 50).', 'Recent security-related events (newest first, last 50).')}
+        />
         {audit === null ? (
           <div class="inline-loading" role="status"><Loader2 width={12} height={12} class="icon spin" /> {t('common.loading')}</div>
         ) : audit.length === 0 ? (
-          <div class="settings-hint">{t2('لا نشاط مسجّل بعد.', 'No activity recorded yet.')}</div>
+          <div class="set-empty">
+            <ScrollText width={18} height={18} class="icon" />
+            <span>{t2('لا نشاط مسجّل بعد.', 'No activity recorded yet.')}</span>
+          </div>
         ) : (
           <AuditLog entries={audit} total={auditTotal} loadingMore={auditLoadingMore} onLoadMore={loadMoreAudit} />
         )}
-      </div>
+      </section>
 
       {/* Updates (opencode + code-server) */}
-      <div class="panel settings-section" ref={updatesPanelRef} tabIndex={-1}>
-        <h2 class="panel-title" style="display:flex;align-items:center;justify-content:space-between">
-          <span><span class="icon-wrap"><DownloadCloud width={14} height={14} /></span> {t2('التحديثات', 'Updates')}</span>
-          <button class="btn-ghost sm" onClick={doCheckUpdates} disabled={updatesChecking || applyInFlight}>
-            {updatesChecking ? <Loader2 width={13} height={13} class="icon spin" /> : <RefreshCw width={13} height={13} class="icon" />}
-            {t2('تحقق الآن', 'Check now')}
-          </button>
-        </h2>
-        <p class="settings-hint">
+      <section class="panel settings-section" id="sec-updates" ref={updatesPanelRef} tabIndex={-1}>
+        <SectionHead
+          icon={<DownloadCloud width={15} height={15} />}
+          title={t2('التحديثات', 'Updates')}
+          action={
+            <button class="btn-ghost sm" onClick={doCheckUpdates} disabled={updatesChecking || applyInFlight}>
+              {updatesChecking ? <Loader2 width={13} height={13} class="icon spin" /> : <RefreshCw width={13} height={13} class="icon" />}
+              {t2('تحقق الآن', 'Check now')}
+            </button>
+          }
+        />
+        <p class="settings-hint" style="margin-top:0">
           {t2('حدّث opencode أو VS Code (code-server) في مكانه. تحديث المكوّن يعيد تشغيله فقط (~ثوانٍ) وتتصل جلساتك تلقائياً من جديد. التحديثات محفوظة وتُعاد تطبيقها تلقائياً بعد إعادة بناء الصورة (', 'Update opencode or VS Code (code-server) in place. Updating a component only restarts it (~seconds) — your sessions reconnect automatically. Updates are persisted and re-applied automatically after an image rebuild (')}
           <code>docker compose build</code>
           {t2(').', ').')}
           {updates && (
             <span style="display:block;margin-top:4px">
-              {t2('آخر تحقق:', 'Last checked:')} <span class="mono">{updates.checkedAt ? new Date(updates.checkedAt).toLocaleTimeString(lang === 'ar' ? 'ar' : undefined) : '—'}</span>
+              {updates.checkedAt ? (
+                <>{t2('آخر تحقق:', 'Last checked:')} <span class="mono">{new Date(updates.checkedAt).toLocaleTimeString(lang === 'ar' ? 'ar' : undefined)}</span></>
+              ) : (
+                t2('لم يُفحص بعد — اضغط «تحقق الآن».', 'Not checked yet — press “Check now”.')
+              )}
             </span>
           )}
         </p>
@@ -1152,7 +1401,7 @@ export function Settings() {
                         ? t2('محدّث بالفعل', 'Already up to date')
                         : t2('حدّث هذا المكوّن', 'Update this component');
               return (
-                <div class="settings-row" style="flex-wrap:wrap;" key={c.id}>
+                <div class="upd-card" key={c.id}>
                   <span class="upd-name">
                     <span class={`upd-dot ${c.upToDate === true ? 'good' : c.upToDate === false ? 'warn' : 'unknown'}`} />
                     {c.id === 'opencode' ? 'opencode' : 'VS Code'}
@@ -1237,7 +1486,7 @@ export function Settings() {
                     ? t2('قناة أحد المكوّنات مقيّدة', 'A component channel is locked')
                     : t2('طبّق كل التحديثات المتاحة', 'Apply every available update');
               return (
-                <div class="settings-row" style="flex-wrap:wrap; border-bottom:none;">
+                <div class="upd-card" style="margin-bottom:0;">
                   <span class="upd-name"><DownloadCloud width={13} height={13} class="icon" style="opacity:.6" /> {t2('كل المكوّنات', 'All components')}</span>
                   <span class="dim" style="font-size:0.72rem">{t2('طبّق كل التحديثات المتاحة', 'Apply every available update')}</span>
                   <div style="flex:1" />
@@ -1282,23 +1531,37 @@ export function Settings() {
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {/* Performance measurements — real Navigation Timing + frame loads */}
       <PerfPanel />
 
       {/* About */}
-      <div class="panel settings-section">
-        <h2 class="panel-title">{t2('حول', 'About')}</h2>
-        <div class="settings-row">
-          <span class="field-label">{t2('الإصدار', 'Version')}</span>
-          <span class="mono beta-chip" title={t2('برنامج تجريبي — الميزات وصيغة البيانات قد تتغير', 'Beta software — features and data format may change')}>{APP_VERSION}</span>
+      <section class="panel settings-section" id="sec-about">
+        <SectionHead icon={<Info width={15} height={15} />} title={t2('حول', 'About')} />
+        <div class="set-cards2">
+          <div class="set-card">
+            <div class="set-card-head">
+              <span class="set-card-icon"><SettingsIcon width={14} height={14} /></span>
+              <div>
+                <div class="set-card-title">{t2('إصدار Madar', 'Madar version')}</div>
+                <div class="set-card-desc">{t2('برنامج تجريبي — الميزات وصيغة البيانات قد تتغير', 'Beta software — features and data format may change')}</div>
+              </div>
+            </div>
+            <span class="mono beta-chip" style="align-self:flex-start">{APP_VERSION}</span>
+          </div>
+          <div class="set-card">
+            <div class="set-card-head">
+              <span class="set-card-icon"><ScrollText width={14} height={14} /></span>
+              <div>
+                <div class="set-card-title">{t2('الرخصة', 'License')}</div>
+                <div class="set-card-desc">{t2('مفتوح المصدر — استخدمه وطوّره بحرية.', 'Open source — use it and build on it freely.')}</div>
+              </div>
+            </div>
+            <span class="mono meta-chip" style="align-self:flex-start">MIT</span>
+          </div>
         </div>
-        <div class="settings-row">
-          <span class="field-label">{t2('الرخصة', 'License')}</span>
-          <span style="color: var(--text-2)">MIT</span>
-        </div>
-      </div>
+      </section>
 
       {/* Delete webhook confirm modal */}
       <ConfirmModal

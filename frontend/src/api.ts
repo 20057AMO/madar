@@ -1624,20 +1624,6 @@ export const testWebhook = (body: { id?: string; url?: string }) =>
     body: JSON.stringify(body),
   });
 
-// ── Storage cleanup ────────────────────────────────────────────
-export interface StorageCleanupResult {
-  archived: string[];
-  purged: string[];
-  containersRemoved: number;
-  dockerPruned: boolean;
-}
-export const cleanupStorage = (docker?: boolean) =>
-  api<StorageCleanupResult>('/api/storage/cleanup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ docker }),
-  });
-
 // ── Trash Bin (./.archive) ─────────────────────────────────────
 /** One archived (deleted-project) workspace in the trash. */
 export interface ArchivedProject {

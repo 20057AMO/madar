@@ -8,14 +8,13 @@
  *  - Nested trees sum file bytes; symlinks count their link entry only
  *    (a symlink to a big file must NOT pull in the target's bytes).
  *  - A soft budget stops the walk early and reports truncated=true.
- *  - sumBytes ignores junk/negatives and returns 0 for empty.
  */
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { dirSize, sumBytes, cleanSlug } from '../src/services/storage-core.ts';
+import { dirSize } from '../src/services/storage-core.ts';
 
 const roots: string[] = [];
 
@@ -104,22 +103,5 @@ describe('dirSize', () => {
     // Same fake clock but a generous budget → full result, not truncated.
     const full = dirSize(root, { budgetMs: 60_000, now });
     assert.deepStrictEqual(full, { size: 300, truncated: false });
-  });
-});
-
-describe('sumBytes', () => {
-  test('empty → 0', () => {
-    assert.strictEqual(sumBytes([]), 0);
-  });
-  test('ignores negatives and zero', () => {
-    assert.strictEqual(sumBytes([-5, 0, 10, 20]), 30);
-  });
-});
-
-describe('cleanSlug', () => {
-  test('strips unsafe path characters, keeps dots/dashes (parity with saveMeta)', () => {
-    assert.strictEqual(cleanSlug('a-b_c.d'), 'a-b_c.d');
-    assert.strictEqual(cleanSlug('../etc/passwd'), '..etcpasswd');
-    assert.strictEqual(cleanSlug('x/y?!z'), 'xyz');
   });
 });

@@ -145,6 +145,19 @@ select.modern-input { appearance: none; cursor: pointer; }
 .btn-danger:hover { background: rgba(248,81,73,0.2); }
 .btn-danger.sm { padding: 6px 12px; font-size: 0.75rem; }
 
+/* The main button trio never had a disabled treatment — a disabled
+   .btn-primary looked identical to an enabled one (Settings' Import button
+   disables until a file is chosen, Check-now disables while checking, webhook
+   rows disable while saving), so clicks read as dead. Scoped components
+   (qa-tile, pagination, header-menu…) always had their own; these three did not. */
+.btn-primary:disabled,
+.btn-ghost:disabled,
+.btn-danger:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
 /* The keyboard focus ring for every control lives further down with the rest
    of the effects layer (`:focus-visible` → --focus-ring). */
 
@@ -248,7 +261,12 @@ select.modern-input { appearance: none; cursor: pointer; }
 .sys-dot.ok { background: var(--green); box-shadow: 0 0 6px rgba(63,185,80,0.6); }
 .sys-dot.bad { background: var(--red); }
 /* Main */
-.main { flex: 1; min-width: 0; overflow-y: auto; padding: 28px 32px 60px; }
+/* position:relative is load-bearing: .sr-only / any absolute child with auto
+   offsets would otherwise take the VIEWPORT as its containing block, escaping
+   this pane's overflow clip and inflating documentElement.scrollHeight by its
+   depth — the whole shell then scrolled as one page (scrollIntoView dragged
+   the window up and the sticky bar flew off). Anchored here, the pane clips it. */
+.main { flex: 1; min-width: 0; overflow-y: auto; padding: 28px 32px 60px; position: relative; }
 .view { max-width: 1080px; margin: 0 auto; }
 
 /* Mobile shell — topbar + drawer backdrop (hidden on desktop) */
@@ -503,13 +521,24 @@ select.modern-input { appearance: none; cursor: pointer; }
 .card-footer { display: flex; gap: 8px; }
 .card-footer .btn-ghost { flex: 1; justify-content: center; }
 
-/* Webhook row (Settings) */
+/* Webhook event toggle (Settings) — checkbox rendered as a chip, checked or
+   not; the native input stays in the DOM (keyboard + screen-reader honest). */
 .wh-event-label {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 0.74rem; color: var(--text-2); cursor: pointer;
-  user-select: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.7rem; color: var(--text-2); cursor: pointer;
+  user-select: none; white-space: nowrap;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
-.wh-event-label input[type='checkbox'] { accent-color: var(--accent, #3b82f6); cursor: pointer; }
+.wh-event-label:hover { border-color: var(--text-3); color: var(--text); }
+.wh-event-label:has(input:checked) {
+  color: var(--text); background: var(--panel-2); border-color: var(--border-2);
+}
+.wh-event-label input[type='checkbox'] {
+  width: 12px; height: 12px; margin: 0;
+  accent-color: var(--accent, #3b82f6); cursor: pointer;
+}
 
 /* Empty state */
 .empty-state { text-align: center; color: var(--text-3); padding: 60px 20px; border: 1px dashed var(--border-2); border-radius: var(--radius); }
@@ -2151,6 +2180,170 @@ textarea.agent-prompt-input {
   margin: 6px 0 12px; line-height: 1.5;
 }
 
+/* ── Settings page — sticky section nav, section heads, cards ── */
+/* Same identity (mono accent, panel/border tokens, Inter+Naskh); the layout
+   upgrade is structure only: a sticky in-page nav so the long admin page is
+   navigable, section headers with an icon tile, and card-based sub-blocks. */
+.settings-section { scroll-margin-top: 72px; }
+
+/* top is negative: sticky sticks to the scrollport's PADDING edge in
+   Chromium (measured), and .main carries padding-top — so a bare `top:0`
+   would float the bar 28px down with content visibly scrolling above it. */
+.set-subnav {
+  position: sticky; top: -28px; z-index: 40;
+  display: flex; gap: 3px; padding: 5px;
+  margin-bottom: 18px;
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+}
+.set-subnav::-webkit-scrollbar { display: none; }
+.set-subnav button {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 0.75rem; font-weight: 500; color: var(--text-3);
+  white-space: nowrap; flex-shrink: 0;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.set-subnav button .icon { transition: color 0.15s; }
+.set-subnav button:hover { color: var(--text); background: var(--panel-2); }
+.set-subnav button.active {
+  color: var(--text); background: var(--panel-2); border-color: var(--border-2);
+}
+.set-subnav button.active .icon { color: var(--accent); }
+.set-subnav button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
+
+/* wrap is load-bearing: at ≤640px the action takes width:100% to move to its
+   own line — without wrap it stays inline, refuses to shrink (flex-shrink:0)
+   and crushes the title/description to one word per line. */
+.set-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.set-head-icon {
+  width: 32px; height: 32px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; background: var(--bg-2);
+  border: 1px solid var(--border); color: var(--text-2);
+}
+.set-head-text { flex: 1; min-width: 0; }
+.set-title {
+  font-size: 0.92rem; font-weight: 650; color: var(--text);
+  letter-spacing: -0.01em; line-height: 1.3; margin: 0;
+}
+.set-desc { font-size: 0.73rem; color: var(--text-3); line-height: 1.55; margin-top: 4px; }
+.set-head-action { flex-shrink: 0; margin-inline-start: auto; padding-top: 2px; }
+
+.set-caption {
+  font-size: 0.66rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-3); margin: 16px 0 8px;
+}
+
+.set-status {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.set-status .field-label { margin: 0; font-weight: 500; }
+
+.set-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+
+.set-cards2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.set-card {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg-2);
+  transition: border-color 0.15s;
+}
+.set-card:hover { border-color: var(--border-2); }
+.set-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.set-card-icon {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; background: var(--panel); border: 1px solid var(--border);
+  color: var(--text-2);
+}
+.set-card-title { font-size: 0.82rem; font-weight: 600; color: var(--text); }
+.set-card-desc { font-size: 0.72rem; color: var(--text-3); line-height: 1.5; margin-top: 3px; }
+
+.set-addbar {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-2); border-radius: var(--radius);
+  background: var(--bg-2); margin: 4px 0 12px;
+}
+
+.set-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  text-align: center; color: var(--text-3); font-size: 0.78rem; line-height: 1.5;
+  border: 1px dashed var(--border-2); border-radius: var(--radius);
+  padding: 24px 16px; margin-top: 12px;
+}
+.set-empty .icon { opacity: 0.55; }
+
+.wh-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+
+/* Backup file picker: the native control shows English UA strings
+   ("Choose File" / "No file chosen") inside the Arabic UI — a visible label
+   drives the hidden input instead, and the chosen name echoes as a chip. */
+label.btn-ghost { cursor: pointer; }
+#import-file:focus-visible + label[for='import-file'] {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.file-chip {
+  font-size: 0.72rem; color: var(--text-2);
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 10px;
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file-chip.empty { color: var(--text-3); border-style: dashed; }
+
+/* Inline code inside Arabic (RTL) hints: isolate the LTR run so the
+   surrounding reordering stays sane, and keep hyphenated tokens whole —
+   browsers wrapped X-Madar-Signature at the hyphen, splitting the phrase
+   across two lines mid-word. */
+.settings-hint code, .set-desc code {
+  unicode-bidi: isolate;
+  white-space: nowrap;
+}
+.wh-card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; background: var(--bg-2);
+  transition: border-color 0.15s;
+}
+.wh-card:hover { border-color: var(--border-2); }
+
+.upd-card {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-2); transition: border-color 0.15s;
+}
+.upd-card:hover { border-color: var(--border-2); }
+/* Status/progress lines inside an update card always wrap to their own row.
+   The warn pill is deliberately NOT in this list: with the spacer it settles
+   next to the versions when there is room, and wraps before the button when
+   there is not — stretching it full-width just made every card taller. */
+.upd-card > .upd-msg-ok,
+.upd-card > .upd-msg-err,
+.upd-card > .upd-msg-warn,
+.upd-card > .upd-track { flex-basis: 100%; }
+
+@media (max-width: 860px) {
+  /* .main's padding-top drops to 18px at this breakpoint (shell rule) —
+     re-anchor the sticky bar so it still sticks flush at y=0, not -10. */
+  .set-subnav { top: -18px; }
+}
+
+@media (max-width: 640px) {
+  .set-grid2, .set-cards2 { grid-template-columns: 1fr; }
+  .set-head { gap: 10px; }
+  .set-head-action { width: 100%; margin-inline-start: 0; }
+}
+
 span.tag-chip {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 6px; border-radius: 4px;
@@ -2204,19 +2397,11 @@ button.tag-chip.active {
   color: var(--text-3); padding: 4px 8px; border-bottom: 1px solid var(--border);
 }
 .storage-table td { padding: 7px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.storage-table tbody tr { transition: background 0.12s; }
+.storage-table tbody tr:hover td { background: var(--panel-2); }
 .table-scroll { overflow-x: auto; }
 .storage-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .storage-name .dim { font-weight: 400; margin-left: 2px; font-size: 0.72rem; }
-.storage-offenders { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
-.storage-offender {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 7px 10px; border-radius: var(--radius);
-  background: var(--bg, rgba(128, 128, 128, 0.05));
-  cursor: pointer;
-}
-.storage-offender:hover { background: color-mix(in srgb, var(--accent, #6ea8fe) 8%, var(--bg, transparent)); }
-.storage-offender-name { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; }
-.storage-offender-size { font-size: 0.82rem; font-weight: 600; color: var(--text-2); }
 
 /* ── Beta chip ── */
 .beta-chip {
@@ -2285,9 +2470,13 @@ button.tag-chip.active {
 .audit-list { display: flex; flex-direction: column; }
 .audit-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 6px 0; border-bottom: 1px solid var(--border);
+  padding: 7px 8px; margin-inline: -8px;
+  border-radius: var(--radius-sm);
+  border-bottom: 1px solid var(--border);
   font-size: 0.75rem;
+  transition: background 0.12s;
 }
+.audit-row:hover { background: var(--panel-2); }
 .audit-row:last-child { border-bottom: none; }
 .audit-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -2526,6 +2715,158 @@ iframe[data-kbd-focus] {
   50%      { opacity: 0.13; }
 }
 
+/* ── Team page (admin roster at /team) ─────────────────────── */
+/* Keeps the same tokens as every other page (--panel/--border/--radius,
+   role colors from ROLE_CONFIG passed as --rc); the roles are told apart by
+   an icon + tinted pill instead of bare text. */
+.team-page { max-width: 940px; margin: 0 auto; padding: 1.5rem; }
+
+.team-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.team-hero-l { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.team-hero-ico {
+  width: 46px; height: 46px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 13px;
+  color: var(--text);
+}
+.team-hero h1 { margin: 0; font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+.team-hero-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; color: var(--text-3); font-size: 0.78rem; }
+.team-hero-sub .sep { opacity: 0.5; }
+
+/* Role summary tiles — double as filters (aria-pressed) */
+.team-roles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.team-role-tile {
+  display: flex; align-items: center; gap: 11px; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  text-align: start; cursor: pointer; min-width: 0;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+}
+.team-role-tile:hover { border-color: var(--border-2); background: var(--panel-2); transform: translateY(-1px); }
+.team-role-tile[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--rc) 55%, transparent);
+  background: color-mix(in srgb, var(--rc) 9%, var(--panel));
+}
+.team-role-tile .ico {
+  width: 34px; height: 34px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--rc) 15%, transparent);
+  color: var(--rc);
+}
+.team-role-tile .num { font-size: 1.05rem; font-weight: 700; line-height: 1.15; color: var(--text); }
+.team-role-tile .lbl { font-size: 0.72rem; color: var(--text-2); display: flex; align-items: center; gap: 4px; }
+.team-role-tile .lbl .icon { color: var(--rc); }
+
+/* Search + actions toolbar */
+.team-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.team-search { position: relative; flex: 1 1 220px; min-width: 0; }
+.team-search > .icon {
+  position: absolute; inset-inline-start: 11px; top: 50%; transform: translateY(-50%);
+  color: var(--text-3); pointer-events: none;
+}
+.team-search .modern-input { padding-inline-start: 34px; }
+.team-search-clear {
+  position: absolute; inset-inline-end: 6px; top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 6px; color: var(--text-3); cursor: pointer;
+}
+.team-search-clear:hover { background: var(--border); color: var(--text); }
+
+/* Roster rows */
+.team-list { display: grid; gap: 8px; }
+.team-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 13px 15px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  transition: border-color 0.15s, background 0.15s;
+}
+.team-row:hover { border-color: var(--border-2); background: var(--panel-2); }
+.team-row.is-me {
+  background: color-mix(in srgb, var(--blue) 6%, var(--panel));
+  border-color: color-mix(in srgb, var(--blue) 30%, transparent);
+}
+.team-row-link { display: flex; align-items: center; gap: 13px; flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.team-row-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.team-row-name .nm { font-weight: 600; font-size: 0.9375rem; color: var(--text); }
+.team-me-pill {
+  font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 6px; border-radius: 5px;
+  background: color-mix(in srgb, var(--blue) 18%, transparent); color: var(--blue);
+}
+.team-row-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; font-size: 0.75rem; color: var(--text-3); }
+.team-row-sub .icon { width: 12px; height: 12px; }
+
+.team-role-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.6875rem; font-weight: 600; white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--rc) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rc) 35%, transparent);
+  color: var(--rc);
+}
+
+/* Project membership chips — role only (the owner badge was retired; the
+   backend already reports an owner's membership role as 'admin'). */
+.team-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.team-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 240px; font-size: 0.6875rem;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-2);
+  white-space: nowrap;
+}
+.team-chip > .icon { color: var(--text-3); flex-shrink: 0; }
+.team-chip .nm { overflow: hidden; text-overflow: ellipsis; }
+.team-chip .rl {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 0.625rem; font-weight: 700; padding: 1px 5px; border-radius: 4px;
+  background: color-mix(in srgb, var(--rc) 15%, transparent); color: var(--rc);
+}
+
+.team-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-inline-start: auto; }
+
+/* Add-user card */
+.team-add { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
+.team-add h2 { margin: 0 0 14px; font-size: 1rem; font-weight: 600; }
+.team-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.team-role-opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.team-role-opt {
+  display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
+  text-align: start; cursor: pointer; min-width: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.team-role-opt:hover { border-color: var(--border-2); }
+.team-role-opt[aria-checked='true'] {
+  border-color: var(--rc);
+  background: color-mix(in srgb, var(--rc) 10%, var(--bg-2));
+}
+.team-role-opt .ico { color: var(--rc); flex-shrink: 0; margin-top: 1px; }
+.team-role-opt .tt { display: block; font-size: 0.8125rem; font-weight: 600; color: var(--text); }
+.team-role-opt .hh { display: block; font-size: 0.68rem; color: var(--text-3); line-height: 1.45; margin-top: 2px; }
+.team-add-actions { display: flex; gap: 8px; margin-top: 14px; }
+
+/* Loading skeleton for the roster */
+.team-skel {
+  display: flex; align-items: center; gap: 14px; padding: 13px 15px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  pointer-events: none;
+}
+.team-skel-av {
+  width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(90deg, var(--border) 25%, var(--border-2) 50%, var(--border) 75%);
+  background-size: 200% 100%; animation: skel-shimmer 1.4s ease infinite;
+}
+
+@media (max-width: 700px) {
+  .team-page { padding: 1rem; }
+  .team-roles { grid-template-columns: 1fr; gap: 8px; }
+  .team-fields, .team-role-opts { grid-template-columns: 1fr; }
+  .team-hero-ico { width: 40px; height: 40px; border-radius: 11px; }
+  .team-hero h1 { font-size: 1.2rem; }
+  .team-actions { width: 100%; justify-content: flex-end; }
+}
+
 /* ── Team Panel ────────────────────────────────────────────── */
 .team-panel { display: flex; flex-direction: column; gap: 12px; max-width: 720px; margin: 0 auto; padding: 14px 16px; }
 .team-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -2584,7 +2925,8 @@ iframe[data-kbd-focus] {
 }
 
 .member-details { display: flex; flex-direction: column; min-width: 0; }
-.member-name { font-weight: 500; font-size: 0.9rem; color: var(--text); display: flex; align-items: center; }
+.member-name { font-weight: 500; font-size: 0.9rem; color: var(--text); display: flex; align-items: center; gap: 8px; min-width: 0; }
+.member-name .team-role-badge { flex-shrink: 0; }
 .member-meta { font-size: 0.75rem; color: var(--text-3); }
 
 .member-actions {

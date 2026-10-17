@@ -44,7 +44,6 @@ export const AUDIT_LABELS_AR: Record<string, string> = {
   'archive-delete': 'حذف نهائي من سلة المحذوفات',
   'archive-empty': 'إفراغ سلة المحذوفات',
   'archive-restore': 'استعادة من سلة المحذوفات',
-  'storage-cleanup': 'تنظيف التخزين',
   'chat-channel-settings': 'تغيير صلاحيات الإرسال في القناة',
   'chat-channel-settings-failed': 'فشل تغيير صلاحيات القناة',
   'webhook-config-change': 'تغيير إعدادات الويب هوك',
@@ -73,6 +72,15 @@ export const AUDIT_LABELS_AR: Record<string, string> = {
   'agent-run': 'اكتمال تشغيل الوكيل',
   'agent-run-failed': 'فشل تشغيل الوكيل',
   'embed-session': 'فتح جلسة مساحة العمل المضمّنة',
+  'opencode-open': 'فتح opencode',
+  'opencode-open-failed': 'فشل فتح opencode',
+  'providers-unlock-cooldown': 'حُجبت محاولات فتح المزوّدين مؤقتاً',
+  'digest-config-change': 'تغيير جدولة الملخص',
+  'digest-generate': 'توليد ملخص المشروع',
+  'digest-delete': 'حذف ملخص المشروع',
+  'suggestion-dismiss': 'تجاهل اقتراح تخطيط',
+  'suggestion-accept': 'قبول اقتراح تخطيط',
+  'mount-audit': 'تدقيق مسار مساحات العمل المضيف',
 };
 
 /** EN label map for audit events. */
@@ -118,7 +126,6 @@ export const AUDIT_LABELS_EN: Record<string, string> = {
   'archive-delete': 'Trash item deleted for good',
   'archive-empty': 'Trash emptied',
   'archive-restore': 'Restored from Trash',
-  'storage-cleanup': 'Storage cleanup',
   'chat-channel-settings': 'Channel send permissions changed',
   'chat-channel-settings-failed': 'Channel send permissions change failed',
   'webhook-config-change': 'Webhook configuration changed',
@@ -147,6 +154,15 @@ export const AUDIT_LABELS_EN: Record<string, string> = {
   'agent-run': 'Agent run completed',
   'agent-run-failed': 'Agent run failed',
   'embed-session': 'Embedded workspace session opened',
+  'opencode-open': 'Opened opencode',
+  'opencode-open-failed': 'Opening opencode failed',
+  'providers-unlock-cooldown': 'Providers unlock temporarily blocked',
+  'digest-config-change': 'Digest schedule changed',
+  'digest-generate': 'Project digest generated',
+  'digest-delete': 'Project digest deleted',
+  'suggestion-dismiss': 'Planning suggestion dismissed',
+  'suggestion-accept': 'Planning suggestion accepted',
+  'mount-audit': 'Workspace host-path audit',
 };
 
 export type Msg = { type: 'ok' | 'err'; text: string } | null;

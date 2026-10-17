@@ -7,6 +7,9 @@
  * Compute is ON-DEMAND with a short TTL cache (storage changes rarely and is
  * not latency-sensitive) + a singleflight guard so simultaneous viewers share
  * one scan instead of fanning out duplicate `du`-style walks or Docker calls.
+ * The cache rules (TTL, singleflight, generation guard, fresh bypass) live in
+ * storage-cache-core.ts (import-free, like embedded-status-core.ts), so
+ * `node --test` drives the exact factory the server uses.
  * Cache is invalidated on project create / duplicate / delete / import /
  * restore (the moments a workspace or archive set appears or disappears).
  *
@@ -14,6 +17,7 @@
  */
 import path from 'path';
 
+import { createStorageCache } from './storage-cache-core';
 import { listMetaSlugs, loadMeta } from './projects-meta';
 import { dirSize } from './storage-core';
 import { getContainersStorage, getDockerSystemDF, type ProjectContainerStorage } from './storage-docker';
@@ -52,41 +56,31 @@ export interface StorageMetrics {
   projects: ProjectStorage[];
 }
 
-const CACHE_TTL_MS = 45_000;
+const DEFAULT_TTL_MS = 45_000;
 
-let cache: { at: number; data: StorageMetrics } | null = null;
-let inflight: Promise<StorageMetrics> | null = null;
+/** Env override for tests only; the default keeps the UI snappy. */
+const VOLATILE_TTL = process.env.WSD_TESTING === '1' ? 2_000 : DEFAULT_TTL_MS;
+const TTL_MS = Math.max(200, Number(process.env.WSD_STORAGE_TTL_MS) || VOLATILE_TTL);
+
+const cache = createStorageCache<StorageMetrics>({
+  ttlMs: TTL_MS,
+  load: compute,
+});
 
 /** Drop the cached snapshot — call after any workspace/archive lifecycle change. */
 export function invalidateStorageCache(): void {
-  cache = null;
-}
-
-/** Env override for tests only; the default keeps the UI snappy. */
-const VOLATILE_TTL = process.env.WSD_TESTING === '1' ? 2_000 : CACHE_TTL_MS;
-const TTL_MS = Math.max(200, Number(process.env.WSD_STORAGE_TTL_MS) || VOLATILE_TTL);
-
-export function getStorageCacheDebug(): { cacheAt: number | null; ttlMs: number } {
-  return { cacheAt: cache?.at ?? null, ttlMs: TTL_MS };
+  cache.invalidate();
 }
 
 /**
- * Compute (or serve cached) storage metrics. `fresh` bypasses the TTL but
- * still singleflights concurrent scans. Never throws: every per-item failure
- * degrades to a missing number rather than a 500.
+ * Compute (or serve cached) storage metrics. A non-fresh call shares the TTL
+ * window (and any in-flight scan) with its callers; `fresh` bypasses the
+ * cached snapshot and shares one fresh slot (generation-tagged) with other
+ * concurrent fresh callers — never joins a stale non-fresh scan. Never throws:
+ * every per-item failure degrades to a missing number rather than a 500.
  */
 export async function getStorageMetrics(opts?: { fresh?: boolean }): Promise<StorageMetrics> {
-  if (!opts?.fresh && cache && Date.now() - cache.at < TTL_MS) return cache.data;
-  if (inflight) return inflight;
-  inflight = compute()
-    .then((data) => {
-      cache = { at: Date.now(), data };
-      return data;
-    })
-    .finally(() => {
-      inflight = null;
-    });
-  return inflight;
+  return cache.get(opts);
 }
 
 async function compute(): Promise<StorageMetrics> {

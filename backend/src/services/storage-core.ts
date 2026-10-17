@@ -63,13 +63,3 @@ export function dirSize(
   walk(path.resolve(dir));
   return { size, truncated };
 }
-
-/** Sum a list of byte counts (0 for empty). */
-export function sumBytes(counts: number[]): number {
-  return counts.reduce((a, b) => a + (Number.isFinite(b) && b > 0 ? b : 0), 0);
-}
-
-/** Canonical slug form used for any path building (matches the meta store). */
-export function cleanSlug(slug: string): string {
-  return String(slug ?? '').replace(/[^a-z0-9._-]+/gi, '');
-}

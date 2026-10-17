@@ -110,7 +110,6 @@ import type { ComponentId } from './services/component-updates';
 import { reconcileRunningDelegations } from './services/opencode-delegate-store';
 import { getStorageMetrics, invalidateStorageCache } from './services/storage-metrics';
 import { getCachedProjects, invalidateProjectsCache } from './services/projects-cache';
-import { cleanupStorage } from './services/storage-cleanup';
 import {
   listArchives,
   deleteArchive,
@@ -1486,17 +1485,6 @@ app.get('/api/storage', async (req: any, res) => {
     res.json(await getStorageMetrics({ fresh }));
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to compute storage metrics' });
-  }
-});
-
-// Disk-usage cleanup (editor+): archive/purge orphaned workspaces, purge
-// snapshot archives, remove stale orphan containers, optional Docker build-cache prune.
-app.post('/api/storage/cleanup', requireRole('editor'), rateLimit('strict', RATE_WINDOW, RATE_STRICT_MAX), async (req: any, res) => {
-  try {
-    const docker = req.body?.docker === true;
-    res.json(await cleanupStorage({ docker }));
-  } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Cleanup failed' });
   }
 });
 

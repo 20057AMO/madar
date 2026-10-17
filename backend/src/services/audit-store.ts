@@ -51,7 +51,6 @@ export type AuditEvent =
   | 'serve-start-failed'
   | 'serve-stop'
   | 'workspace-janitor'
-  | 'storage-cleanup'
   | 'archive-delete'
   | 'archive-empty'
   | 'archive-restore'

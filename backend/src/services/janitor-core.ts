@@ -17,34 +17,6 @@ export function safeName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) && !name.startsWith('.');
 }
 
-/**
- * Purge EVERY entry under `<root>/.archive` regardless of age — used by the
- * on-demand "Clean up now" action (storage-cleanup), which must free storage
- * immediately instead of waiting for WSD_ARCHIVE_DAYS. `safeName` filters out
- * traversal/dot-dirs; unremovable entries are skipped, never fatal.
- */
-export function purgeArchiveEntries(root: string): string[] {
-  const purged: string[] = [];
-  const archiveDir = path.join(root, '.archive');
-  let entries: string[] = [];
-  try {
-    entries = fs.readdirSync(archiveDir);
-  } catch {
-    return purged; // no .archive — nothing to purge
-  }
-  for (const entry of entries) {
-    if (!safeName(entry)) continue;
-    const full = path.join(archiveDir, entry);
-    try {
-      fs.rmSync(full, { recursive: true, force: true });
-      purged.push(entry);
-    } catch {
-      /* unremovable (busy/permission) — skip, not fatal */
-    }
-  }
-  return purged;
-}
-
 export function sweepWorkspaces(
   root: string,
   live: Iterable<string>,

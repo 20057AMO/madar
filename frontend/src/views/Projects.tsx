@@ -57,13 +57,15 @@ function ProjectPeople({ p }: { p: Project }) {
 
 /** Workspace + snapshot disk usage for a project, rendered as a meta-chip. */
 function ProjectStorageChip({ slug, bySlug }: { slug: string; bySlug: Map<string, ProjectStorage> }) {
+  const { t2 } = useI18n();
   const s = bySlug.get(slug);
   if (!s) return null;
   const ws = fmtBytes(s.workspaceBytes);
   const snap = fmtBytes(s.snapshotBytes);
-  const snapNote = snap !== '—' ? ` · snapshots ${snap}` : '';
+  const snapNote = snap !== '—' ? ` · ${t2('لقطات', 'snapshots')} ${snap}` : '';
+  const truncNote = s.workspaceTruncated ? ` · ${t2('جزئي', 'partial')}` : '';
   return (
-    <span class="meta-chip storage" title={`Disk usage — workspace ${ws}${snapNote}`}>
+    <span class="meta-chip storage" title={`${t2('استخدام القرص — مساحة العمل', 'Disk usage — workspace')} ${ws}${snapNote}${truncNote}`}>
       <HardDrive width={11} height={11} class="icon" /> {ws}
     </span>
   );
