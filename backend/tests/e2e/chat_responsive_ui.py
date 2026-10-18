@@ -14,7 +14,9 @@ Run (host, container must be up):
     python backend/tests/e2e/chat_responsive_ui.py
 Exit codes: 0 = all checks passed, 1 = failures, 42 = skipped (no reachable server).
 """
+import json
 import os
+import subprocess
 import sys
 import time
 
@@ -66,20 +68,57 @@ def _api(path: str, method: str = "GET", body=None, token: str | None = None, ti
     )
 
 
+# The real admin's tokenVersion, read from users.json by _find_admin(); main()
+# must forge the browser session with it -- verifyToken rejects a stale tv.
+_ADMIN_TV = 0
+
+
 def _find_admin():
-    """Return (id, username) of the real admin via the API."""
-    probe = _token_for("e2e-unknown-probe", "probe", "admin", 0, _secret())
-    res = _api("/auth/status", token=probe)
+    """Return (id, username) of the real admin.
+
+    Since 2f272f5 (CWE-613, session<->live-account binding) every verifier
+    refuses a token whose subject is not in users.json, so a probe forged for
+    a fake identity can no longer list /users -- the real admin (and its
+    tokenVersion) is read from the server's data via docker exec instead."""
+    global _ADMIN_TV
+    container = os.environ.get("WSD_TEST_CONTAINER", "wsd-pro")
+    try:
+        raw = subprocess.run(
+            ["docker", "exec", container, "cat", "/app/data/users.json"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"could not read users.json from container '{container}': {exc}")
+    if raw.returncode != 0:
+        raise SystemExit(
+            f"could not read users.json from container '{container}': "
+            f"{(raw.stderr or '').strip()[:200]}")
+    try:
+        data = json.loads(raw.stdout)
+    except ValueError:
+        raise SystemExit("users.json in the container is not valid JSON")
+    users = data.get("users") if isinstance(data, dict) else data
+    admin = next(
+        (u for u in (users if isinstance(users, list) else [])
+         if isinstance(u, dict) and u.get("role") == "admin" and u.get("id")),
+        None,
+    )
+    if admin is None:
+        raise SystemExit("no admin user found in users.json")
+    tv = admin.get("tokenVersion", 0) or 0
+    token = _token_for(admin["id"], admin.get("username", ""), "admin", tv, _secret())
+    res = _api("/auth/status", token=token)
     if res.status_code != 200:
         raise SystemExit(f"server not healthy: {res.status_code} {res.text[:200]}")
     data = res.json()
     if not data.get("hasUser"):
         raise SystemExit("no user configured -- run setup first")
-    lst = _api("/users", token=probe)
+    lst = _api("/users", token=token)
     if lst.status_code != 200:
         raise SystemExit(f"could not list users: {lst.status_code}")
     for u in lst.json() or []:
         if u.get("role") == "admin":
+            _ADMIN_TV = tv
             return u["id"], u["username"]
     raise SystemExit("no admin user found")
 
@@ -123,7 +162,7 @@ def main() -> int:
         return 42
 
     admin_id, admin_name = _find_admin()
-    admin = _token_for(admin_id, admin_name, "admin", 0, secret)
+    admin = _token_for(admin_id, admin_name, "admin", _ADMIN_TV, secret)
     print(f". admin session forged for '{admin_name}'")
 
     # -- Create test channel + seed messages via API --------------------
@@ -171,7 +210,9 @@ def main() -> int:
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            init = f"localStorage.setItem('wsd.token', '{admin}');"
+            # The app defaults to Arabic on first visit (detectInitialLang);
+            # force English so the suite's English selectors match.
+            init = f"localStorage.setItem('wsd.token', '{admin}'); localStorage.setItem('wsd.lang', 'en');"
 
             # ===========================================================
             # DESKTOP (1440x900) -- full rail, day-sep, grouping, FAB
@@ -180,7 +221,7 @@ def main() -> int:
             pg = browser.new_page(viewport={"width": 1440, "height": 900})
             pg.add_init_script(init)
             console_errors: list[str] = []
-            pg.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+            pg.on("console", lambda msg: console_errors.append(f"{msg.text} @ {msg.location.get('url','')}") if msg.type == "error" else None)
 
             pg.goto(f"{_base()}/#/chat", wait_until="load")
 
@@ -504,11 +545,18 @@ def main() -> int:
             # ===========================================================
             # Console-error gate
             # ===========================================================
+            # Known, deliberately-unfixed noise: the hidden IDE keep-alive
+            # (IdeKeepAlive mounts ~3.5 s after sign-in on every page) triggers
+            # code-server's license validator to fetch vsda_bg.wasm / vsda.js,
+            # which the release simply does not ship — documented upstream
+            # breakage in AGENTS.md ("the vsda fail-open … not something to
+            # fake or vendor"), unrelated to the chat surface under test.
             real_errors = [
                 e for e in all_console_errors
                 if "WebSocket" not in e
                 and "ResizeObserver" not in e
                 and "favicon" not in e.lower()
+                and "vsda" not in e.lower()
             ]
             check(
                 "no new console errors across viewports",

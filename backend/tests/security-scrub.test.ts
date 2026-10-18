@@ -8,8 +8,18 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { register } from 'node:module';
 import { publicProject, publicProjects } from '../src/services/project-public.ts';
-import { isDangerousCommand } from '../src/services/agent-tools.ts';
+
+// project-public.ts is import-free (pure), so it stays a static import.
+// agent-tools.ts imports ./workspace-paths-core extensionless (since e2a13df),
+// which node's ESM loader cannot resolve — see tests/ts-ext-resolve.mjs.
+// Static imports are hoisted and resolved BEFORE register() runs, so the hook
+// must be installed first and the module pulled in dynamically (same pattern
+// as workspace-paths-core.test.ts / jwt-secret.test.ts).
+register(new URL('./ts-ext-resolve.mjs', import.meta.url).href);
+
+const { isDangerousCommand } = await import('../src/services/agent-tools.ts');
 
 describe('publicProject strips env from API payloads', () => {
   const withEnv = {

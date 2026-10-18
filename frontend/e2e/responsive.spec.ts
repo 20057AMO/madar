@@ -76,8 +76,8 @@ test.describe('Phone-width layout (360px)', () => {
     // Team — the per-row "Remove user" icon (16×44 before the fix).
     await page.goto(BASE);
     await page.evaluate(() => { window.location.hash = '/team'; });
-    await expect(page.locator('.team-row .btn-icon').first()).toBeVisible({ timeout: 20_000 });
-    for (const icon of (await page.locator('.team-row .btn-icon').all()).slice(0, 3)) {
+    await expect(page.locator('.team-row .btn-ghost.icon-only').first()).toBeVisible({ timeout: 20_000 });
+    for (const icon of (await page.locator('.team-row .btn-ghost.icon-only').all()).slice(0, 3)) {
       const box = await icon.boundingBox();
       expect(box).not.toBeNull();
       expect(box!.width).toBeGreaterThanOrEqual(44);

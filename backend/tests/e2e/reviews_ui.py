@@ -10,8 +10,10 @@ Exits 0 = all green, 1 = failures, 42 = skip.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 import sys
 import time
 import uuid
@@ -97,23 +99,57 @@ def _api(path: str, *, method: str = "GET", body: Any = None,
     return r
 
 
-def _find_admin(secret: str) -> tuple[str, str]:
-    """Return (id, username) of the real server admin via the live API.
+# The real admin's tokenVersion, read from users.json by _find_admin(); main()
+# must forge the browser session with it — verifyToken rejects a stale tv.
+_ADMIN_TV = 0
 
-    The server only checks the JWT signature on generic routes, so a probe
-    token forged for any identity passes authMiddleware; the admin-gated
-    /users endpoint then reveals the real admin (mirrors limits_ui)."""
-    probe = _token_for("e2e-unknown-probe", "probe", "admin", 0, secret)
-    res = _api("/auth/status", token=probe)
+
+def _find_admin(secret: str) -> tuple[str, str]:
+    """Return (id, username) of the real server admin.
+
+    Since 2f272f5 (CWE-613, session<->live-account binding) every verifier
+    refuses a token whose subject is not in users.json, so a probe forged
+    for a fake identity can no longer list /users — the real admin (and its
+    tokenVersion) is read from the server's data via docker exec instead
+    (mirrors limits_ui)."""
+    global _ADMIN_TV
+    container = os.environ.get("WSD_TEST_CONTAINER", "wsd-pro")
+    try:
+        raw = subprocess.run(
+            ["docker", "exec", container, "cat", "/app/data/users.json"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"could not read users.json from container '{container}': {exc}")
+    if raw.returncode != 0:
+        raise SystemExit(
+            f"could not read users.json from container '{container}': "
+            f"{(raw.stderr or '').strip()[:200]}")
+    try:
+        data = json.loads(raw.stdout)
+    except ValueError:
+        raise SystemExit("users.json in the container is not valid JSON")
+    users = data.get("users") if isinstance(data, dict) else data
+    admin = next(
+        (u for u in (users if isinstance(users, list) else [])
+         if isinstance(u, dict) and u.get("role") == "admin" and u.get("id")),
+        None,
+    )
+    if admin is None:
+        raise SystemExit("no admin user found in users.json")
+    tv = admin.get("tokenVersion", 0) or 0
+    token = _token_for(admin["id"], admin.get("username", ""), "admin", tv, secret)
+    res = _api("/auth/status", token=token)
     if res.status_code != 200:
         raise SystemExit(f"server not healthy: {res.status_code} {res.text[:200]}")
     if not res.json().get("hasUser"):
         raise SystemExit("no user configured in the server — run setup first")
-    lst = _api("/users", token=probe)
+    lst = _api("/users", token=token)
     if lst.status_code != 200:
         raise SystemExit(f"could not list users: {lst.status_code} {lst.text[:200]}")
     for u in lst.json() or []:
         if u.get("role") == "admin":
+            _ADMIN_TV = tv
             return u["id"], u["username"]
     raise SystemExit("no admin user found")
 
@@ -201,7 +237,7 @@ def main() -> int:
     secret, admin_uid, admin_user = _read_admin_secret_and_uid()
     checks.clear()
     slug = f"e2e-reviews-{uuid.uuid4().hex[:8]}"
-    admin = _token_for(admin_uid, admin_user, "admin", 0, secret)
+    admin = _token_for(admin_uid, admin_user, "admin", _ADMIN_TV, secret)
     print(f". admin session forged for '{admin_user}'")
 
     # Prune leftover e2e projects (from a previous aborted run)
@@ -233,7 +269,9 @@ def main() -> int:
             # context would re-fetch the whole asset bundle and burn the
             # container's per-IP global rate budget.
             context = browser.new_context()
-            init = f"localStorage.setItem('wsd.token', '{admin}');"
+            # The app defaults to Arabic on first visit (detectInitialLang);
+            # force English so the suite's English selectors match.
+            init = f"localStorage.setItem('wsd.token', '{admin}'); localStorage.setItem('wsd.lang', 'en');"
             reviews_url = f"{_base()}/#/project/{slug}?tab=reviews"
 
             # ===========================================================
@@ -497,46 +535,51 @@ def main() -> int:
                       add_mem.status_code in (200, 201),
                       f"status={add_mem.status_code}")
 
-            if viewer_user_id:
-                viewer_token = _token_for(viewer_user_id, vw_name, "viewer", 0, secret)
+            if not viewer_user_id:
+                # The creation check above already failed, so the suite will
+                # exit 1 regardless.  An unknown-id token is refused outright
+                # since 2f272f5 (CWE-613: sessions bind to live accounts), so
+                # loading the page with a fabricated identity would only burn
+                # a 15s selector timeout on the login redirect — skip the
+                # viewer surface honestly instead of faking a user.
+                print(". SKIP viewer read-only section: viewer user could not be created (see failed check above)")
             else:
-                viewer_token = _token_for("fake-viewer", "fake-viewer", "viewer", 0, secret)
+                viewer_token = _token_for(viewer_user_id, vw_name, "viewer", 0, secret)
+                viewer_init = f"localStorage.setItem('wsd.token', '{viewer_token}'); localStorage.setItem('wsd.lang', 'en');"
+                pg = _new_page(context, viewer_init, all_console_errors)
+                pg.goto(reviews_url, wait_until="load")
+                pg.wait_for_selector(".reviews-title", timeout=15000)
 
-            viewer_init = f"localStorage.setItem('wsd.token', '{viewer_token}');"
-            pg = _new_page(context, viewer_init, all_console_errors)
-            pg.goto(reviews_url, wait_until="load")
-            pg.wait_for_selector(".reviews-title", timeout=15000)
+                path_visible = pg.locator('input[aria-label="Review file path"]').count()
+                check("viewer: composer is hidden (no path input)", path_visible == 0)
 
-            path_visible = pg.locator('input[aria-label="Review file path"]').count()
-            check("viewer: composer is hidden (no path input)", path_visible == 0)
+                ro_msg = pg.get_by_text(re.compile(r"read-only", re.IGNORECASE))
+                deadline = time.time() + 10.0
+                ro_count = 0
+                while time.time() < deadline:
+                    ro_count = ro_msg.count()
+                    if ro_count >= 1:
+                        break
+                    pg.wait_for_timeout(300)
+                check("viewer: 'reviews are read-only' message shown", ro_count >= 1)
 
-            ro_msg = pg.get_by_text(re.compile(r"read-only", re.IGNORECASE))
-            deadline = time.time() + 10.0
-            ro_count = 0
-            while time.time() < deadline:
-                ro_count = ro_msg.count()
-                if ro_count >= 1:
-                    break
-                pg.wait_for_timeout(300)
-            check("viewer: 'reviews are read-only' message shown", ro_count >= 1)
+                thread_head_count = pg.locator("[data-review-head]").count()
+                check("viewer: thread list still renders", thread_head_count >= 1,
+                      f"visible threads={thread_head_count}")
 
-            thread_head_count = pg.locator("[data-review-head]").count()
-            check("viewer: thread list still renders", thread_head_count >= 1,
-                  f"visible threads={thread_head_count}")
+                resolve_count = pg.locator('button[aria-label="Resolve review"]').count()
+                reopen_count = pg.locator('button[aria-label="Reopen review"]').count()
+                check("viewer: no Resolve or Reopen buttons",
+                      resolve_count == 0 and reopen_count == 0,
+                      f"resolve={resolve_count} reopen={reopen_count}")
 
-            resolve_count = pg.locator('button[aria-label="Resolve review"]').count()
-            reopen_count = pg.locator('button[aria-label="Reopen review"]').count()
-            check("viewer: no Resolve or Reopen buttons",
-                  resolve_count == 0 and reopen_count == 0,
-                  f"resolve={resolve_count} reopen={reopen_count}")
+                reply_btn_count = pg.locator('button[aria-label="Send reply"]').count()
+                check("viewer: no Reply button", reply_btn_count == 0)
 
-            reply_btn_count = pg.locator('button[aria-label="Send reply"]').count()
-            check("viewer: no Reply button", reply_btn_count == 0)
+                del_btn_count = pg.locator('button[aria-label="Delete thread"]').count()
+                check("viewer: no Delete thread button", del_btn_count == 0)
 
-            del_btn_count = pg.locator('button[aria-label="Delete thread"]').count()
-            check("viewer: no Delete thread button", del_btn_count == 0)
-
-            pg.close()
+                pg.close()
 
             # ===========================================================
             # 8. Console-error gate
