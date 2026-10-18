@@ -2057,14 +2057,18 @@ textarea.agent-prompt-input {
       honour its 100% flex-basis, and the selects then fill their labels
       instead of imposing a 90px floor.
    2) Icon-only controls get the same 44px treatment as
-      .btn-ghost.sm.icon-only above (WCAG 2.5.8). `.btn-icon` is scoped to
-      .team-row because Chat reuses the class inside .btn/.btn-sm. */
+      .btn-ghost.sm.icon-only above (WCAG 2.5.8). The Team page's per-row
+      remove button carries `btn-ghost sm icon-only danger-icon`, so it is
+      keyed here as `.team-row .btn-ghost.icon-only` (`.sm` deliberately
+      omitted so a future size tweak never silently drops the floor). The
+      rule stays scoped to .team-row because Chat reuses `.btn-icon`
+      inside .btn/.btn-sm. */
 @media (max-width: 700px) {
   .agents-topbar-right { min-width: 0; max-width: 100%; }
   .agents-topbar-right .chat-settings-label select { width: 100%; min-width: 0; }
   .crash-dismiss,
   .studio-action,
-  .team-row .btn-icon { min-width: 44px; min-height: 44px; }
+  .team-row .btn-ghost.icon-only { min-width: 44px; min-height: 44px; }
 }
 
 /* Session search */
