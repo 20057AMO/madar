@@ -12,7 +12,10 @@
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
 import { uniqueId, req, reqAuth, initTestAuth, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
+
+const CONTAINER = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
 
 // A REAL account per role: verifyToken refuses an id that is not in users.json,
 // so a ghost id would turn each role row into a bare 401.
@@ -82,6 +85,46 @@ describe('Storage metrics (disk usage)', () => {
     const cont = data.docker?.perProject?.[slug];
     assert.ok(cont, 'container writable-layer entry expected for the project container');
     assert.strictEqual(typeof cont.writableBytes, 'number');
+  });
+
+  test('meta-only project (no container) is NOT listed — ghost-row guard', async (t) => {
+    // The listing must follow the MANAGED CONTAINER set (same as /api/projects),
+    // never the meta store. A meta.json with no container is a "ghost": reverted
+    // to listMetaSlugs(), compute() would list it (the reported bug).
+    const ghost = `st-ghost-${uniqueId('ws')}`;
+    const metaDir = `/app/data/projects/${ghost}`;
+    try {
+      execFileSync(
+        'docker',
+        ['exec', CONTAINER, 'sh', '-c',
+          `mkdir -p ${metaDir} && printf '%s' '{"name":"Ghost Probe","activity":[]}' > ${metaDir}/meta.json`],
+        { stdio: 'pipe', timeout: 30_000 },
+      );
+    } catch (err) {
+      t.skip(`docker CLI/container unavailable — ghost-row guard skipped (${(err as Error).message})`);
+      return;
+    }
+
+    try {
+      // The meta store really exists on disk, so a meta-set-driven listing WOULD
+      // have surfaced it — making the negative assertion below non-vacuous.
+      execFileSync('docker', ['exec', CONTAINER, 'test', '-f', `${metaDir}/meta.json`], {
+        stdio: 'pipe', timeout: 15_000,
+      });
+
+      const proj = await (await reqAuth('GET', '/projects')).json();
+      assert.ok(!proj.projects.some((p: any) => p.slug === ghost), 'meta-only entry is not a managed project');
+
+      const stor = await (await reqAuth('GET', '/storage?fresh=1')).json();
+      assert.ok(
+        !stor.projects.some((p: any) => p.slug === ghost),
+        'storage listing must follow managed containers, never the meta set (ghost row)',
+      );
+    } finally {
+      try {
+        execFileSync('docker', ['exec', CONTAINER, 'rm', '-rf', metaDir], { stdio: 'pipe', timeout: 15_000 });
+      } catch { /* best effort — the dir never held a container */ }
+    }
   });
 
   test('snapshot capture grows snapshotBytes', async () => {

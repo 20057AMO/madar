@@ -18,7 +18,7 @@
 import path from 'path';
 
 import { createStorageCache } from './storage-cache-core';
-import { listMetaSlugs, loadMeta } from './projects-meta';
+import { loadMeta } from './projects-meta';
 import { dirSize } from './storage-core';
 import { getContainersStorage, getDockerSystemDF, type ProjectContainerStorage } from './storage-docker';
 import { WORKSPACES_ROOT } from './docker-manager';
@@ -84,7 +84,6 @@ export async function getStorageMetrics(opts?: { fresh?: boolean }): Promise<Sto
 }
 
 async function compute(): Promise<StorageMetrics> {
-  const slugs = listMetaSlugs();
   const started = Date.now();
   // Hard outer ceiling: the whole scan must finish within ~60s even with many
   // projects; the per-walk budget inside dirSize enforces each individual walk.
@@ -98,6 +97,9 @@ async function compute(): Promise<StorageMetrics> {
   const projects: ProjectStorage[] = [];
   let totalWorkspaceBytes = 0;
   let totalSnapshotBytes = 0;
+
+  // Row slugs come from managed containers (Docker set) to avoid ghost rows from meta-only projects.
+  const slugs = Object.keys(containerMap).sort((a, b) => a.localeCompare(b));
 
   for (const slug of slugs) {
     if (Date.now() > outerDeadline) break;
