@@ -171,4 +171,50 @@ test.describe('Team Chat navigation and search', () => {
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBe(initialCount);
   });
+
+  test('the guide, code-block helper, and teammate mention picker work together', async ({ page }) => {
+    await page.route('**/api/users', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ id: 'guide-teammate', username: 'teammate', role: 'editor', createdAt: '2026-01-01T00:00:00.000Z' }]),
+      })
+    );
+    await injectAuth(page);
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/chat'; });
+
+    await page.getByRole('button', { name: 'Toggle channel list' }).click();
+    const projectChannel = page.locator('.tchat-channel-row').filter({ hasText: '# madar' }).first();
+    await expect(projectChannel).toBeVisible({ timeout: 20_000 });
+    await projectChannel.click();
+
+    const guideButton = page.getByRole('button', { name: 'Team Chat guide' });
+    await guideButton.click();
+    const guide = page.getByRole('dialog', { name: 'Team Chat guide' });
+    await expect(guide).toBeVisible();
+    await expect(guide).toContainText('Writing and sharing code');
+    await expect(guide).toContainText('Mention a teammate');
+    await guide.getByRole('button', { name: 'Close guide' }).click();
+    await expect(guide).toHaveCount(0);
+    await expect(guideButton).toBeFocused();
+
+    const composer = page.getByRole('textbox', { name: 'Type a message' });
+    await page.getByRole('button', { name: 'Insert code block' }).click();
+    await expect(composer).toHaveValue('```\n\n```');
+    await composer.fill('const count = 1;');
+    await composer.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(0, element.value.length));
+    await page.getByRole('button', { name: 'Insert code block' }).click();
+    await expect(composer).toHaveValue('```\nconst count = 1;\n```');
+
+    await composer.fill('@team');
+    const mention = page.getByRole('option', { name: /teammate @teammate/ });
+    await expect(mention).toBeVisible();
+    await composer.press('ArrowDown');
+    await composer.press('Enter');
+    await expect(composer).toHaveValue('@teammate ');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth))
+      .toBe(await page.evaluate(() => document.documentElement.clientWidth));
+  });
 });

@@ -47,6 +47,7 @@ import {
   Copy,
   MoreVertical,
   MessageSquareReply,
+  BookOpen,
 } from 'lucide-preact';
 import {
   listChatChannels,
@@ -98,6 +99,23 @@ interface ComposerState {
   text: string;
   replyTo?: TeamChatMessage;
   attachments: { id: string; name: string; size: number; kind: 'image' | 'file'; url?: string }[];
+}
+
+interface MentionDraft {
+  start: number;
+  end: number;
+  query: string;
+}
+
+function findMentionDraft(text: string, caret: number): MentionDraft | null {
+  const beforeCaret = text.slice(0, caret);
+  const match = /(^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]{0,49})?$/u.exec(beforeCaret);
+  if (!match) return null;
+  return {
+    start: beforeCaret.length - match[0].length + match[1].length,
+    end: caret,
+    query: match[2] || '',
+  };
 }
 
 function channelLabel(c: ChatChannel, me: { id: string }): string {
@@ -656,6 +674,9 @@ export function Chat() {
   const [typing, setTyping] = useState<{ id: string; username: string }[]>([]);
   const [presence, setPresence] = useState<Map<string, ChatPresenceUser>>(new Map());
   const [composer, setComposer] = useState<ComposerState>({ text: '', attachments: [] });
+  const [mentionDraft, setMentionDraft] = useState<MentionDraft | null>(null);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [viewerOnly, setViewerOnly] = useState(false);
   const [activeCanSend, setActiveCanSend] = useState<'everyone' | 'admins'>('everyone');
   const [canWrite, setCanWrite] = useState(true);
@@ -707,7 +728,7 @@ export function Chat() {
   const railRestoreRef = useRef<HTMLElement | null>(null);
   const burgerRef = useRef<HTMLButtonElement | null>(null);
   const modalsOpenRef = useRef(false);
-  modalsOpenRef.current = createOpen || directOpen;
+  modalsOpenRef.current = createOpen || directOpen || guideOpen;
   const messagesRef = useRef<TeamChatMessage[]>([]);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const unreadLocal = useRef<Map<string, Set<string>>>(new Map());
@@ -744,6 +765,8 @@ export function Chat() {
     pendingJumpRunRef.current = null;
     setPendingJump(null);
     setActiveId(id);
+    setMentionDraft(null);
+    setMentionActiveIndex(0);
     setLightbox(null);
     setEmojiPickerFor(null);
     setCtxMenu(null);
@@ -835,6 +858,10 @@ export function Chat() {
   // ── New-channel / direct-message dialog focus management
   const createDialogRef = useRef<HTMLDivElement | null>(null);
   const directDialogRef = useRef<HTMLDivElement | null>(null);
+  const guideDialogRef = useRef<HTMLDivElement | null>(null);
+  const guideCloseRef = useRef<HTMLButtonElement | null>(null);
+  const guideRestoreRef = useRef<HTMLElement | null>(null);
+  const guideBtnRef = useRef<HTMLButtonElement | null>(null);
   const dialogRestoreRef = useRef<HTMLElement | null>(null);
 
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -1543,6 +1570,19 @@ export function Chat() {
   }, [directOpen]);
 
   useEffect(() => {
+    if (!guideOpen) return;
+    guideRestoreRef.current = document.activeElement as HTMLElement | null;
+    guideCloseRef.current?.focus();
+    return () => {
+      requestAnimationFrame(() => {
+        const target = guideRestoreRef.current;
+        if (target?.isConnected) target.focus();
+        guideRestoreRef.current = null;
+      });
+    };
+  }, [guideOpen]);
+
+  useEffect(() => {
     if (createOpen || directOpen) return;
     dialogRestoreRef.current?.focus?.();
     dialogRestoreRef.current = null;
@@ -1594,6 +1634,7 @@ export function Chat() {
         attachments: atts,
       });
       setComposer({ text: '', attachments: [] });
+      setMentionDraft(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t2('فشل إرسال الرسالة', 'Failed to send message'));
     } finally {
@@ -1874,6 +1915,52 @@ export function Chat() {
   // for instant re-derivation on `channel_update`.
   const localCanWrite = () => !viewerOnly && (activeCanSend !== 'admins' || canManageChannel());
   const userCanWrite = () => canWrite;
+  const mentionSuggestions = useMemo(() => {
+    if (!mentionDraft || active?.kind === 'direct') return [];
+    const query = mentionDraft.query.toLocaleLowerCase();
+    return allUsers
+      .filter((candidate) => {
+        if (candidate.id === meId) return false;
+        const username = candidate.username.toLocaleLowerCase();
+        const displayName = candidate.profile?.displayName?.toLocaleLowerCase() || '';
+        return !query || username.includes(query) || displayName.includes(query);
+      })
+      .slice(0, 6);
+  }, [active?.kind, allUsers, meId, mentionDraft]);
+  const mentionOpen = userCanWrite() && !!mentionDraft && mentionSuggestions.length > 0;
+
+  const insertMention = (username: string) => {
+    if (!mentionDraft) return;
+    const text = composer.text;
+    const insertion = `@${username} `;
+    const next = text.slice(0, mentionDraft.start) + insertion + text.slice(mentionDraft.end);
+    const caret = mentionDraft.start + insertion.length;
+    setComposer((current) => ({ ...current, text: next }));
+    setMentionDraft(null);
+    setMentionActiveIndex(0);
+    requestAnimationFrame(() => {
+      taRef.current?.focus();
+      taRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
+  const insertCodeBlock = () => {
+    const textarea = taRef.current;
+    if (!textarea) return;
+    const text = composer.text;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = text.slice(start, end);
+    const insertion = selected ? `\`\`\`\n${selected}\n\`\`\`` : '```\n\n```';
+    const next = text.slice(0, start) + insertion + text.slice(end);
+    const caret = selected ? start + insertion.length : start + 4;
+    setComposer((current) => ({ ...current, text: next }));
+    setMentionDraft(null);
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(caret, caret);
+    });
+  };
 
   // Focus the composer when an empty channel invites the first message —
   // the textarea unmounts during recording, so focus falls back to the
@@ -2480,6 +2567,17 @@ export function Chat() {
                 }} aria-pressed={searchResults !== null} title={t2('بحث', 'Search')} aria-label={t2('البحث في رسائل هذه القناة', 'Search messages in this channel')}>
                   <Search width={14} height={14} /> {t2('بحث', 'Search')}
                 </button>
+                <button
+                  type="button"
+                  class="btn btn-icon btn-sm tchat-guide-trigger"
+                  ref={guideBtnRef}
+                  onClick={() => setGuideOpen(true)}
+                  aria-haspopup="dialog"
+                  aria-label={t2('دليل استخدام المحادثة', 'Team Chat guide')}
+                  title={t2('دليل استخدام المحادثة', 'Team Chat guide')}
+                >
+                  <BookOpen width={15} height={15} />
+                </button>
                 {active.kind === 'channel' && canManageChannel() && (
                   <div class="tchat-settings-wrap" ref={settingsWrapRef}>
                     <button
@@ -2731,6 +2829,16 @@ export function Chat() {
                      <button class="tchat-pill-btn" title={t2('إرفاق ملف', 'Attach file')} aria-label={t2('إرفاق ملف', 'Attach file')} onClick={() => fileInput.current?.click()}>
                        <Paperclip width={18} height={18} />
                      </button>
+                     <button
+                       type="button"
+                       class="tchat-pill-btn"
+                       title={t2('إدراج كتلة كود', 'Insert code block')}
+                       aria-label={t2('إدراج كتلة كود', 'Insert code block')}
+                       onMouseDown={(e: MouseEvent) => e.preventDefault()}
+                       onClick={insertCodeBlock}
+                     >
+                       <FileCode2 width={17} height={17} />
+                     </button>
                      <input
                        ref={fileInput}
                        type="file"
@@ -2758,6 +2866,10 @@ export function Chat() {
                          placeholder={t2('اكتب رسالة…', 'Type a message…')}
                          aria-label={t2('اكتب رسالة', 'Type a message')}
                          aria-describedby="tchat-composer-hint"
+                         aria-autocomplete="list"
+                         aria-controls="tchat-mention-list"
+                         aria-expanded={mentionOpen}
+                         aria-activedescendant={mentionOpen ? `tchat-mention-${mentionActiveIndex}` : undefined}
                          rows={1}
                          maxLength={5000}
                          value={composer.text}
@@ -2765,11 +2877,42 @@ export function Chat() {
                            const el = e.target as HTMLTextAreaElement;
                            const v = el.value;
                            setComposer((c) => ({ ...c, text: v }));
+                           setMentionDraft(findMentionDraft(v, el.selectionStart));
+                           setMentionActiveIndex(0);
                            if (v.trim()) sock.sendTyping(active.id);
                            el.style.height = 'auto';
                            el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
                          }}
+                         onClick={(e: MouseEvent) => {
+                           const el = e.currentTarget as HTMLTextAreaElement;
+                           setMentionDraft(findMentionDraft(el.value, el.selectionStart));
+                         }}
+                         onKeyUp={(e: KeyboardEvent) => {
+                           const el = e.currentTarget as HTMLTextAreaElement;
+                           setMentionDraft(findMentionDraft(el.value, el.selectionStart));
+                         }}
                          onKeyDown={(e: KeyboardEvent) => {
+                           if (mentionOpen && e.key === 'ArrowDown') {
+                             e.preventDefault();
+                             setMentionActiveIndex((index) => (index + 1) % mentionSuggestions.length);
+                             return;
+                           }
+                           if (mentionOpen && e.key === 'ArrowUp') {
+                             e.preventDefault();
+                             setMentionActiveIndex((index) => (index - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                             return;
+                           }
+                           if (mentionOpen && e.key === 'Enter' && !e.shiftKey) {
+                             e.preventDefault();
+                             const selected = mentionSuggestions[mentionActiveIndex];
+                             if (selected) insertMention(selected.username);
+                             return;
+                           }
+                           if (e.key === 'Escape' && mentionDraft) {
+                             e.preventDefault();
+                             setMentionDraft(null);
+                             return;
+                           }
                            if (e.key === 'Enter' && !e.shiftKey) {
                              e.preventDefault();
                              void doSend();
@@ -2778,6 +2921,34 @@ export function Chat() {
                        />
                      )}
                    </div>
+                   {mentionOpen && (
+                     <div
+                       id="tchat-mention-list"
+                       class="tchat-mention-menu"
+                       role="listbox"
+                       aria-label={t2('أعضاء الفريق', 'Team members')}
+                     >
+                       {mentionSuggestions.map((candidate, index) => {
+                         const displayName = candidate.profile?.displayName || candidate.username;
+                         return (
+                           <button
+                             type="button"
+                             id={`tchat-mention-${index}`}
+                             class={`tchat-mention-option${index === mentionActiveIndex ? ' active' : ''}`}
+                             role="option"
+                             aria-selected={index === mentionActiveIndex}
+                             key={candidate.id}
+                             onMouseDown={(e: MouseEvent) => e.preventDefault()}
+                             onClick={() => insertMention(candidate.username)}
+                           >
+                             <Avatar name={displayName} avatar={avatarUrl(candidate.id, candidate.profile?.avatarExt)} size={28} decorative={true} />
+                             <span class="tchat-mention-option-name">{displayName}</span>
+                             <span class="tchat-mention-option-user">@{candidate.username}</span>
+                           </button>
+                         );
+                       })}
+                     </div>
+                   )}
                    {isRecording ? (
                      <button class="tchat-send-fab stop" onClick={stopRecording} disabled={sending} title={t2('إيقاف وإرسال', 'Stop and send')} aria-label={t2('إيقاف وإرسال', 'Stop and send')}>
                        <span class="tchat-stop-square" aria-hidden="true" />
@@ -2834,6 +3005,9 @@ export function Chat() {
                 ? t2('لا توجد محادثات متاحة بعد. اطلب من مدير إنشاء قناة للفريق.', 'No conversations are available yet. Ask an admin to create a team channel.')
                 : t2('أنشئ قناة للفريق أو ابدأ رسالة مباشرة للعثور على محادثاتك هنا.', 'Create a team channel or start a direct message to find your conversations here.')}</p>
             <div class="tchat-empty-actions">
+              <button class="tchat-empty-btn" onClick={() => setGuideOpen(true)}>
+                <BookOpen width={15} height={15} /> {t2('دليل الاستخدام', 'Read the guide')}
+              </button>
               {user?.role !== 'viewer' && (
                 <>
                   <button class="tchat-empty-btn primary" onClick={() => setCreateOpen(true)}>
@@ -2930,6 +3104,65 @@ export function Chat() {
               <button class="btn-ghost sm" onClick={() => setDirectOpen(false)}>{t('common.close')}</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {guideOpen && (
+        <div
+          class="modal-overlay"
+          ref={guideDialogRef}
+          onMouseDown={(e: MouseEvent) => { if (e.target === e.currentTarget) setGuideOpen(false); }}
+          onKeyDown={(e: KeyboardEvent) => {
+            if (e.key === 'Escape') { e.stopPropagation(); setGuideOpen(false); }
+            trapTab(e, guideDialogRef.current);
+          }}
+        >
+          <section
+            class="modal-card tchat-guide-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tchat-guide-title"
+            dir={ar ? 'rtl' : 'ltr'}
+          >
+            <header class="tchat-guide-header">
+              <span class="tchat-guide-icon" aria-hidden="true"><BookOpen width={19} height={19} /></span>
+              <div>
+                <h2 id="tchat-guide-title">{t2('دليل دردشة الفريق', 'Team Chat guide')}</h2>
+                <p>{t2('اكتب رسائل واضحة وشارك الكود وأشر إلى زملائك بسهولة.', 'Write clear messages, share code, and mention teammates.')}</p>
+              </div>
+              <button
+                type="button"
+                class="btn btn-icon btn-sm tchat-guide-close"
+                ref={guideCloseRef}
+                onClick={() => setGuideOpen(false)}
+                aria-label={t2('إغلاق الدليل', 'Close guide')}
+              >
+                <X width={17} height={17} />
+              </button>
+            </header>
+
+            <section class="tchat-guide-section">
+              <h3><FileCode2 width={16} height={16} />{t2('كتابة ومشاركة الكود', 'Writing and sharing code')}</h3>
+              <p>{t2('استخدم زر </> لإدراج كتلة جاهزة، أو حدّد الكود أولاً لإحاطته بها. أضف اسم اللغة بعد العلامات الثلاث لتحسين القراءة.', 'Use the </> button to insert a ready code block, or select code first to wrap it. Add a language after the opening fence for readability.')}</p>
+              <pre class="tchat-guide-code" dir="ltr"><code>{'```ts\nconst ready = true;\n```'}</code></pre>
+              <p>{t2('للكود القصير داخل السطر، أحِطه بعلامة backtick واحدة مثل ', 'For short inline code, wrap it in single backticks, like ')}<code class="tchat-guide-inline-code">`src/app.ts`</code>{t2('. استخدم Shift+Enter لسطر جديد دون إرسال.', '. Use Shift+Enter for a new line without sending.')}</p>
+            </section>
+
+            <section class="tchat-guide-section">
+              <h3><UserIcon width={16} height={16} />{t2('الإشارة إلى عضو', 'Mention a teammate')}</h3>
+              <p>{t2('اكتب @ في قناة الفريق أو المشروع، ثم اختر العضو من القائمة أو تابع كتابة اسم المستخدم. أكّد الاختيار بـ Enter؛ وستظهر الإشارة مميزة في الرسالة.', 'Type @ in a team or project channel, then choose a teammate or continue typing their username. Press Enter to select; the mention is highlighted in the message.')}</p>
+              <div class="tchat-guide-example" dir="ltr">@username — please review this change</div>
+            </section>
+
+            <section class="tchat-guide-section tchat-guide-shortcuts">
+              <h3><MessageCircle width={16} height={16} />{t2('اختصارات سريعة', 'Quick tips')}</h3>
+              <ul>
+                <li>{t2('Enter يرسل الرسالة؛ Shift+Enter يضيف سطراً جديداً.', 'Enter sends; Shift+Enter adds a new line.')}</li>
+                <li>{t2('استخدم زر الرد لربط رسالتك برسالة سابقة.', 'Use Reply to link your message to an earlier one.')}</li>
+                <li>{t2('يمكنك إرفاق ملفات وصور من زر المشبك.', 'Attach files and images with the paperclip button.')}</li>
+              </ul>
+            </section>
+          </section>
         </div>
       )}
 
