@@ -8,14 +8,14 @@ export type Lang = 'ar' | 'en';
 
 export const LANG_KEY = 'wsd.lang';
 
-/** Read the persisted language preference (defaults to Arabic — first visit). */
+/** Read the persisted language preference (defaults to English — first visit). */
 export function detectInitialLang(): Lang {
   try {
     const stored = localStorage.getItem(LANG_KEY);
     if (stored === 'ar' || stored === 'en') return stored;
-    return 'ar';
+    return 'en';
   } catch {
-    return 'ar';
+    return 'en';
   }
 }
 
@@ -36,10 +36,10 @@ interface I18nState {
 }
 
 const I18nContext = createContext<I18nState>({
-  lang: 'ar',
-  dir: 'rtl',
+  lang: 'en',
+  dir: 'ltr',
   t: (k) => k,
-  t2: (a) => a,
+  t2: (_a, e) => e,
   setLang: () => {},
   toggleLang: () => {},
 });

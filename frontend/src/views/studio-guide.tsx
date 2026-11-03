@@ -105,7 +105,7 @@ const SECTIONS: Section[] = [
 ];
 
 export function StudioGuide() {
-  const [lang, setLang] = useState<Lang>(() => (localStorage.getItem(LS_KEY) === 'en' ? 'en' : 'ar'));
+  const [lang, setLang] = useState<Lang>(() => (localStorage.getItem(LS_KEY) === 'ar' ? 'ar' : 'en'));
   const [agents, setAgents] = useState<StudioItem[]>([]);
   const [skills, setSkills] = useState<StudioItem[]>([]);
 
