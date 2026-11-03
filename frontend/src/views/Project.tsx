@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit, Link2, Sparkles, Lightbulb } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit, Link2, Sparkles, Lightbulb, GitBranch, RefreshCw, Upload } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -13,6 +13,8 @@ import {
   setProjectPorts,
   setProjectLimits,
   cloneProject,
+  getProjectGit,
+  pushProjectGit,
   updateProjectTags,
   getProjectStats,
   checkProjectPorts,
@@ -47,6 +49,7 @@ import type {
   FileEntry,
   FilePreview,
   ChatContext,
+  ProjectGitRepository,
 } from '../api';
 import { NotesPanel } from '../components/NotesPanel';
 import { ReviewsPanel } from '../components/ReviewsPanel';
@@ -834,6 +837,13 @@ function OverviewPanel({
   const [cloneUrl, setCloneUrl] = useState('');
   const [cloning, setCloning] = useState(false);
   const [cloneMsg, setCloneMsg] = useState<string | null>(null);
+  const [gitRepositories, setGitRepositories] = useState<ProjectGitRepository[]>([]);
+  const [gitRepoPath, setGitRepoPath] = useState('');
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitPushing, setGitPushing] = useState(false);
+  const [gitMsg, setGitMsg] = useState<string | null>(null);
+  const [confirmGitPush, setConfirmGitPush] = useState(false);
+  const gitRequestRef = useRef(0);
 
   const [envText, setEnvText] = useState('');
   // Project payloads no longer carry env (secrets). Editors fetch the real
@@ -889,6 +899,46 @@ function OverviewPanel({
 
   // Quick-nav: exclusive overview tab — Links & health is the default; Danger zone stays pinned.
   const [activeSec, setActiveSec] = useState<string>('ov-links');
+  const selectedGitRepo = gitRepositories.find((repo) => repo.path === gitRepoPath) || gitRepositories[0] || null;
+
+  const refreshGitStatus = async (): Promise<boolean> => {
+    const requestId = ++gitRequestRef.current;
+    setGitLoading(true);
+    setGitMsg(null);
+    try {
+      const { repositories } = await getProjectGit(slug);
+      if (requestId !== gitRequestRef.current) return false;
+      setGitRepositories(repositories);
+      setGitRepoPath((current) => repositories.some((repo) => repo.path === current)
+        ? current
+        : (repositories[0]?.path ?? ''));
+      return true;
+    } catch (err: any) {
+      if (requestId === gitRequestRef.current) {
+        setGitMsg(err?.message || t('project.gitLoadFailed'));
+      }
+      return false;
+    } finally {
+      if (requestId === gitRequestRef.current) setGitLoading(false);
+    }
+  };
+
+  const pushGitChanges = async () => {
+    if (!selectedGitRepo) return;
+    setConfirmGitPush(false);
+    setGitPushing(true);
+    setGitMsg(null);
+    try {
+      await pushProjectGit(slug, selectedGitRepo.path);
+      if (await refreshGitStatus()) {
+        setGitMsg(t('project.gitPushSuccess', { branch: selectedGitRepo.branch || '' }));
+      }
+    } catch (err: any) {
+      setGitMsg(`${t('project.gitPushFailed')}: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setGitPushing(false);
+    }
+  };
 
   const visible = useDocumentVisible();
   const visibleRef = useRef(visible);
@@ -896,6 +946,11 @@ function OverviewPanel({
 
   // Prefer liveStats from WebSocket; fall back to polling
   const effectiveStats = liveStats || stats;
+
+  useEffect(() => {
+    if (activeSec === 'ov-links') void refreshGitStatus();
+    return () => { gitRequestRef.current++; };
+  }, [slug, activeSec]);
 
   useEffect(() => {
     if (project?.status !== 'running' || liveStats) {
@@ -1024,6 +1079,7 @@ function OverviewPanel({
       setCloneMsg(t('cfg.cloneOk', { target: r.target || t('cfg.cloneRoot') }));
       setCloneUrl('');
       onChanged();
+      await refreshGitStatus();
     } catch (err: any) {
       setCloneMsg(t('cfg.cloneFail', { error: err.message }));
     } finally {
@@ -1511,6 +1567,145 @@ function OverviewPanel({
             )
           )}
         </div>
+
+        <div class="git-panel">
+          <div class="git-panel-head">
+            <div class="git-panel-title">
+              <GitBranch width={15} height={15} class="icon" />
+              <span>{t('project.gitChanges')}</span>
+            </div>
+            <button
+              type="button"
+              class="btn-ghost sm icon-only"
+              aria-label={t('project.gitRefresh')}
+              title={t('project.gitRefresh')}
+              onClick={() => void refreshGitStatus()}
+              disabled={gitLoading || gitPushing}
+            >
+              {gitLoading
+                ? <Loader2 width={14} height={14} class="icon spin" />
+                : <RefreshCw width={14} height={14} class="icon" />}
+            </button>
+          </div>
+
+          {gitLoading && gitRepositories.length === 0 ? (
+            <div class="git-empty"><Loader2 width={14} height={14} class="icon spin" /> {t('project.gitLoading')}</div>
+          ) : gitRepositories.length === 0 ? (
+            <div class="git-empty">{t('project.gitNoRepository')}</div>
+          ) : (
+            <>
+              {gitRepositories.length > 1 && (
+                <select
+                  class="modern-input git-repo-select"
+                  aria-label={t('project.gitRepository')}
+                  value={selectedGitRepo?.path ?? ''}
+                  onChange={(e: any) => setGitRepoPath(e.target.value)}
+                >
+                  {gitRepositories.map((repo) => (
+                    <option key={repo.path} value={repo.path}>
+                      {repo.path || t('project.gitWorkspaceRoot')}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {selectedGitRepo && (
+                <>
+                  <div class="git-branch-row">
+                    <span class="git-branch-name">
+                      <GitBranch width={12} height={12} class="icon" />
+                      {selectedGitRepo.branch || t('project.gitDetached')}
+                    </span>
+                    {selectedGitRepo.upstream && (
+                      <span class="git-upstream">{selectedGitRepo.upstream}</span>
+                    )}
+                    <span class={`git-change-count${selectedGitRepo.changes.length ? ' dirty' : ''}`}>
+                      {selectedGitRepo.changes.length
+                        ? t('project.gitChangedCount', { count: selectedGitRepo.changes.length })
+                        : t('project.gitClean')}
+                    </span>
+                  </div>
+                  <div class="git-status-row">
+                    {selectedGitRepo.ahead > 0 && <span class="git-count ahead">{t('project.gitAhead', { count: selectedGitRepo.ahead })}</span>}
+                    {selectedGitRepo.behind > 0 && <span class="git-count behind">{t('project.gitBehind', { count: selectedGitRepo.behind })}</span>}
+                    {!selectedGitRepo.upstream && <span class="git-status-note">{t('project.gitNoUpstream')}</span>}
+                    {selectedGitRepo.changes.length > 0 && <span class="git-status-note">{t('project.gitCommitFirst')}</span>}
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        class="btn-primary sm git-push-button"
+                        onClick={() => setConfirmGitPush(true)}
+                        disabled={gitPushing || !selectedGitRepo.upstream || selectedGitRepo.ahead === 0 || selectedGitRepo.behind > 0}
+                      >
+                        {gitPushing
+                          ? <Loader2 width={13} height={13} class="icon spin" />
+                          : <Upload width={13} height={13} class="icon" />}
+                        {gitPushing ? t('project.gitPushing') : t('project.gitPush')}
+                      </button>
+                    )}
+                  </div>
+
+                  {selectedGitRepo.changes.length > 0 && (
+                    <div class="git-file-list" aria-label={t('project.gitChanges')}>
+                      {selectedGitRepo.changes.map((change) => (
+                        <div class="git-file-row" key={`${change.status}:${change.path}`}>
+                          <span class={`git-file-status ${
+                            change.status.includes('?') || change.status.includes('A')
+                              ? 'status-added'
+                              : change.status.includes('D')
+                                ? 'status-deleted'
+                                : change.status.includes('M')
+                                  ? 'status-modified'
+                                  : 'status-changed'
+                          }`}>{change.status}</span>
+                          <code title={change.path}>{change.path}</code>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {selectedGitRepo.diff && (
+                    <details class="git-diff">
+                      <summary>{t('project.gitViewDiff')}</summary>
+                      <pre>{selectedGitRepo.diff}</pre>
+                      {selectedGitRepo.diffTruncated && <span class="git-status-note">{t('project.gitDiffTruncated')}</span>}
+                    </details>
+                  )}
+                  {!selectedGitRepo.diff && selectedGitRepo.changes.length > 0 && (
+                    <div class="git-status-note">{t('project.gitNoTextDiff')}</div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+          {gitMsg && <div class="git-message" role="status">{gitMsg}</div>}
+
+          <div class="git-clone">
+            <div>
+              <div class="ov-section-label">{t('project.cloneFromGit')}</div>
+              <div class="ov-section-desc">{t('project.cloneDesc')}</div>
+            </div>
+            {readOnly ? (
+              <div class="git-status-note">{t('project.viewerReadOnly')}</div>
+            ) : (
+              <div class="ov-field git-clone-row">
+                <input
+                  class="modern-input"
+                  aria-label={t('project.cloneFromGit')}
+                  placeholder="https://github.com/org/repo.git"
+                  value={cloneUrl}
+                  onInput={(e: any) => setCloneUrl(e.target.value)}
+                  onKeyDown={(e: any) => e.key === 'Enter' && void doClone()}
+                />
+                <button class="btn-ghost sm" onClick={() => void doClone()} disabled={cloning || !cloneUrl.trim()}>
+                  {cloning
+                    ? <Loader2 width={13} height={13} class="icon spin" />
+                    : <GitBranch width={13} height={13} class="icon" />}
+                  {cloning ? t('project.cloning') : t('project.clone')}
+                </button>
+              </div>
+            )}
+            {cloneMsg && <div class="git-message" role="status">{cloneMsg}</div>}
+          </div>
+        </div>
       </div>
       )}
 
@@ -1628,30 +1823,6 @@ function OverviewPanel({
           <h2 class="panel-title">{t('project.secConfig')}</h2>
 
           <div class="ov-section">
-            <h3 class="ov-section-label">{t('project.cloneFromGit')}</h3>
-            <div class="ov-section-desc">{t('project.cloneDesc')}</div>
-            {readOnly ? (
-              <div class="ov-value ov-value-empty">{t('project.viewerReadOnly')}</div>
-            ) : (
-              <div class="ov-field">
-                <input
-                  class="modern-input"
-                  style="flex:1"
-                  aria-label={t('project.cloneFromGit')}
-                  placeholder="https://github.com/org/repo.git"
-                  value={cloneUrl}
-                  onInput={(e: any) => setCloneUrl(e.target.value)}
-                  onKeyDown={(e: any) => e.key === 'Enter' && doClone()}
-                />
-                <button class="btn-primary sm" onClick={doClone} disabled={cloning || !cloneUrl.trim()}>
-                  {cloning ? t('project.cloning') : t('project.clone')}
-                </button>
-              </div>
-            )}
-            {cloneMsg && <div class="terminal-line">{cloneMsg}</div>}
-          </div>
-
-          <div class="ov-section">
             <h3 class="ov-section-label">{t('project.envVars')}</h3>
             {editSection === 'env' ? (
               <>
@@ -1761,6 +1932,19 @@ function OverviewPanel({
           </div>
         </div>
         )}
+
+        <ConfirmModal
+          open={confirmGitPush}
+          danger={false}
+          title={t('project.gitPushConfirmTitle')}
+          message={t('project.gitPushConfirmMessage', {
+            branch: selectedGitRepo?.branch || '',
+            upstream: selectedGitRepo?.upstream || '',
+          })}
+          confirmLabel={t('project.gitPush')}
+          onConfirm={pushGitChanges}
+          onCancel={() => setConfirmGitPush(false)}
+        />
 
         {/* ── Activity ── */}
         {activeSec === 'ov-activity' && (

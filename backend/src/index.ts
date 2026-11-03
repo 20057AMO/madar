@@ -44,6 +44,7 @@ import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorksp
 import { resolveContainedPath, parseUploadPaths, uploadRelativePath, copyContainedFile, readContainedFile } from './services/workspace-paths-core';
 import { loadMeta, readMeta, updateMeta, listMetaSlugs, memberList, writableMemberList } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
+import { listProjectGitRepositories, pushProjectGit } from './services/project-git';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
 import { exportProjectZip } from './services/project-zip';
@@ -3110,6 +3111,30 @@ app.post('/api/projects/:slug/clone', requireProjectAccess('editor'), async (req
   }
 });
 
+app.get('/api/projects/:slug/git', requireProjectAccess('viewer'), async (req, res) => {
+  try {
+    const repositories = await listProjectGitRepositories(WORKSPACES_ROOT, req.params.slug);
+    res.json({ repositories });
+  } catch (err: any) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/git/push', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
+  try {
+    const result = await pushProjectGit(WORKSPACES_ROOT, req.params.slug, req.body?.path ?? '');
+    recordAudit('git-push', true, req.ip, req.user?.id, {
+      slug: req.params.slug,
+      branch: result.branch,
+      upstream: result.upstream,
+    });
+    res.json(result);
+  } catch (err: any) {
+    recordAudit('git-push', false, req.ip, req.user?.id, { slug: req.params.slug });
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // Runtime stats (CPU / memory / uptime)
 app.get('/api/projects/:slug/stats', requireProjectAccess('viewer'), async (req, res) => {
   try {
@@ -3449,5 +3474,4 @@ startAttachmentGcSweep();
 // host bind source for project containers and reports a broken mount instead of
 // letting every project file land in a directory nobody can see.
 startWorkspaceMountAudit();
-
 

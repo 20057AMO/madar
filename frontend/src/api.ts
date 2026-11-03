@@ -1345,6 +1345,29 @@ export const cloneProject = (slug: string, url: string) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
   });
+export interface ProjectGitChange {
+  path: string;
+  status: string;
+}
+export interface ProjectGitRepository {
+  path: string;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  changes: ProjectGitChange[];
+  diff: string;
+  diffTruncated: boolean;
+}
+export const getProjectGit = (slug: string) =>
+  api<{ repositories: ProjectGitRepository[] }>(`/api/projects/${slug}/git`);
+export const pushProjectGit = (slug: string, repoPath: string) =>
+  api<{ branch: string; upstream: string; output: string }>(`/api/projects/${slug}/git/push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: repoPath }),
+    signal: AbortSignal.timeout(130_000),
+  });
 export const getProjectStats = (slug: string) =>
   api<{ stats: ProjectStats }>(`/api/projects/${slug}/stats`);
 export const checkProjectPorts = (slug: string) =>

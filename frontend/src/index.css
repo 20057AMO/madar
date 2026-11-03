@@ -1789,7 +1789,116 @@ textarea.agent-prompt-input {
 .btn-row > .btn-primary, .btn-row > .btn-ghost, .btn-row > .btn-danger { margin: 0; }
 
 /* touch-friendly controls everywhere on the overview (also applies on phones) */
-.overview .modern-input, .overview textarea, .overview select { font-size: 0.85rem; }
+.overview .modern-input, .overview textarea, .overview select {
+  font-size: 0.85rem;
+  border-radius: 9px;
+  padding: 8px 10px;
+  border-color: color-mix(in srgb, var(--border-control) 74%, transparent);
+  background: color-mix(in srgb, var(--panel) 46%, var(--bg-2));
+}
+.overview .modern-input:focus,
+.overview textarea:focus,
+.overview select:focus {
+  border-color: color-mix(in srgb, var(--blue) 58%, var(--border-control));
+  background: var(--bg-2);
+}
+.git-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 70%, var(--bg-2)), var(--bg-2));
+}
+.git-panel-head, .git-panel-title, .git-branch-row, .git-status-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.git-panel-head { justify-content: space-between; }
+.git-panel-title { font-size: 0.82rem; font-weight: 650; color: var(--text); }
+.git-panel-title .icon { color: var(--blue); }
+.git-repo-select { max-width: 100%; }
+.git-branch-row { min-width: 0; flex-wrap: wrap; }
+.git-branch-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+  font: 600 0.75rem var(--mono);
+}
+.git-branch-name .icon { color: var(--blue); }
+.git-upstream { color: var(--text-3); font: 0.68rem var(--mono); overflow-wrap: anywhere; }
+.git-change-count {
+  margin-inline-start: auto;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+.git-change-count.dirty { border-color: color-mix(in srgb, var(--yellow) 35%, var(--border)); color: var(--yellow); }
+.git-status-row { flex-wrap: wrap; }
+.git-count {
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+.git-count.ahead { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.git-count.behind { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 10%, transparent); }
+.git-status-note, .git-empty { color: var(--text-3); font-size: 0.7rem; line-height: 1.45; }
+.git-empty { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+.git-push-button { margin-inline-start: auto; }
+.git-push-button:disabled { opacity: 0.52; cursor: not-allowed; }
+.git-file-list {
+  max-height: 176px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+}
+.git-file-row {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+  padding: 6px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+}
+.git-file-row:last-child { border-bottom: 0; }
+.git-file-status { flex: 0 0 24px; color: var(--text-3); font: 600 0.65rem var(--mono); }
+.git-file-status.status-added { color: var(--green); }
+.git-file-status.status-modified { color: var(--yellow); }
+.git-file-status.status-deleted { color: var(--red); }
+.git-file-row code { min-width: 0; color: var(--text-2); font: 0.68rem var(--mono); overflow-wrap: anywhere; }
+.git-diff { border-top: 1px solid var(--border); padding-top: 10px; }
+.git-diff summary { color: var(--text-2); cursor: pointer; font-size: 0.7rem; }
+.git-diff pre {
+  max-height: 300px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-2);
+  font: 0.66rem/1.5 var(--mono);
+  white-space: pre;
+}
+.git-message { color: var(--text-2); font-size: 0.72rem; overflow-wrap: anywhere; }
+.git-clone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.git-clone-row { flex-wrap: nowrap; }
+.git-clone-row .modern-input { min-width: 0; }
 
 /* browser-surface dressing: focus rings + themed selection
    (scrollbar dressing lives once, at the top of this file) */

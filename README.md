@@ -108,6 +108,9 @@ opencode/             — وكلاء opencode + مهارات + أوامر مدم
 ### 🐳 حاويات مشروعة مستقلة — Isolated Project Containers
 كل مشروع يعمل في حاويته الخاصة (`wsd-<slug>`) بمنافذ مستقلة وملفات workspace مربوطة. يُشغّل `sleep infinity` — أنت تتحكم بتشغيل الخدمات من الطرفية.
 
+### 🔀 تكامل Git — Git Integration
+استنسخ المستودعات من قسم «روابط وصحة» في المشروع، واعرض الملفات المتغيرة والفروقات النصية وحالة الفرع. يمكن للمحررين دفع الـ commits المحلية إلى upstream آمن عبر HTTPS أو SSH؛ لا تُدفع التعديلات غير المسجلة في commit تلقائيًا.
+
 ### 💬 دردشة AI ذكية — AI Chat
 محادثة بسياق المشروع الكامل: ملفات المشروع والبيانات الوصفية تُحقَّن تلقائيًا في السياق. ردود متدفقة، مرفقات، جلسات محفوظة، وزر إيقاف.
 
@@ -157,6 +160,9 @@ code-server مدمج في واجهة الويب، وOpenCode Web UI، كلاهم
 | `POST /api/projects/:slug/start` | تشغيل حاوية |
 | `POST /api/projects/:slug/stop` | إيقاف حاوية |
 | `GET /api/projects/:slug/logs` | سجلات حية |
+| `GET /api/projects/:slug/git` | حالة مستودعات Git والتغييرات |
+| `POST /api/projects/:slug/git/push` | دفع commits إلى upstream عبر HTTPS أو SSH |
+| `POST /api/projects/:slug/clone` | استنساخ مستودع إلى مساحة العمل |
 | `GET /api/projects/:slug/export` | تصدير مشروع كملف `.tar.gz` |
 | `POST /api/projects/import` | استيراد مشروع من ملف |
 | `GET/PUT /api/projects/:slug/notes` | ملاحظات المشروع |
