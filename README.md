@@ -50,23 +50,12 @@
 git clone https://github.com/20057AMO/madar.git
 cd madar
 
-# 2. أنشئ ملف البيئة
-cp .env.example .env
-
-# 3. عدّل .env — كل شيء اختياري:
-#    JWT_SECRET: اتركه فارغًا ليولّد التطبيق سرًا عشوائيًا ويحفظه في
-#      data/jwt.secret (لا يمكن تزوير الجلسات، وتصمد بعد إعادة التشغيل).
-#      ولّد قيمة بنفسك فقط للتحكم/التدوير:
-#      node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-#    WSD_WORKSPACES_HOST_DIR: اتركه فارغًا (يُشتق تلقائيًا من mountinfo).
-#      اضبطه فقط لمشاركة UNC أو مسار WSL:
-#      ويندوز: D:/madar/workspaces
-#      لينكس:  /home/me/madar/workspaces
-
-# 4. ابنِ وشغّل
+# 2. ابنِ وشغّل
 docker compose up -d --build
+# انتظر بعض الوقت
 
-# 5. افتح اللوحة
+
+# 3. افتح اللوحة
 #    http://localhost:3000
 ```
 

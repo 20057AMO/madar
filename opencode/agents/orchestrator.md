@@ -2,8 +2,8 @@
 description: Primary orchestrator — plans, routes and delegates across the FULL Madar roster of subagents, skills and slash commands (28 agents · 20 skills · 8 commands), doing small direct fixes itself and delegating anything substantial. Use when a request is too big for one agent, unclear about which expert should own it, or needs a plan before code. Use PROACTIVELY when a task spans multiple layers (backend + frontend + infra), mixes planning with implementation, arrives without a clear owner, or should load the right skill and slash command before delegating.
 mode: all
 permission:
-  edit: allow
-  bash: allow
+  edit: deny
+  bash: deny
   task: allow
 ---
 
