@@ -377,13 +377,15 @@ export function Profile() {
           <div class="inline-loading"><Loader2 width={14} height={14} class="icon spin" /> {t('common.loading')}</div>
         ) : (
           <>
-            <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap;">
-              <Avatar
-                name={profile.displayName || user?.username || user?.id || 'user'}
-                avatar={user ? avatarUrl(user.id, profile.avatarExt) : null}
-                size={56}
-              />
-              <div style="display: flex; flex-direction: column; gap: 6px">
+            <div class="profile-avatar-row">
+              <div class="profile-avatar-frame">
+                <Avatar
+                  name={profile.displayName || user?.username || user?.id || 'user'}
+                  avatar={user ? avatarUrl(user.id, profile.avatarExt) : null}
+                  size={72}
+                />
+              </div>
+              <div class="profile-avatar-controls">
                 <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                   <button class="btn-ghost sm" type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarBusy}>
                     <span class="icon-wrap">
@@ -397,7 +399,7 @@ export function Profile() {
                     </button>
                   )}
                 </div>
-                <span class="settings-hint" style="margin: 0">{t2('PNG أو JPEG أو WebP · حتى 2 ميغابايت', 'PNG, JPEG or WebP · up to 2 MB')}</span>
+                <span class="settings-hint profile-avatar-hint">{t2('PNG أو JPEG أو WebP · حتى 2 ميغابايت', 'PNG, JPEG or WebP · up to 2 MB')}</span>
               </div>
               <input
                 ref={avatarInputRef}

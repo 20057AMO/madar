@@ -138,6 +138,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { id: 'page:/chat', path: '/chat', label: t('nav.teamChat'), section: 'pages', icon: MessageCircle, run: () => go('/chat'), order: 30 },
       { id: 'page:/planner', path: '/planner', label: t('nav.planner'), section: 'pages', icon: PencilRuler, run: () => go('/planner'), order: 40 },
       { id: 'page:/agents', path: '/agents', label: t('nav.agents'), section: 'pages', icon: Bot, run: () => go('/agents'), order: 50 },
+      { id: 'page:/opencode', path: '/opencode', label: 'opencode', section: 'pages', icon: OpencodeIcon, run: () => go('/opencode'), order: 55 },
       { id: 'page:/profile', path: '/profile', label: t('common.profile'), section: 'pages', icon: UserRound, run: () => go('/profile'), order: 60 },
     ];
     if (isAdmin) {

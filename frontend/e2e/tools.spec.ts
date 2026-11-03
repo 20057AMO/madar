@@ -31,6 +31,18 @@ import { pickedFolderSlug } from '../src/lib/tool-picker';
 
 test.describe('Madar UI — tool entry points', () => {
 
+  test('opencode is available in the command palette', async ({ page }) => {
+    await injectAuth(page);
+    await page.goto(BASE);
+    await expect(page.locator('.sidebar-nav').locator('.nav-btn').first()).toBeVisible({ timeout: 20_000 });
+    await page.locator('.palette-hint-row').click();
+
+    const option = page.getByRole('option', { name: 'opencode' });
+    await expect(option).toBeVisible();
+    await option.click();
+    await expect(page).toHaveURL(/#\/opencode$/);
+  });
+
   /* -- a. Sidebar: BOTH tool buttons navigate in-app (no popups) --------- */
   test('a) sidebar VS Code → #/ide; opencode → in-app #/opencode (no popup)', async ({ page }) => {
     await injectAuth(page);

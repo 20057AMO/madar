@@ -48,6 +48,7 @@ export function Avatar({ name, avatar, size = 28, title, decorative }: Props) {
     fontSize: Math.max(10, Math.round(size * 0.38)),
     flexShrink: 0,
     overflow: 'hidden',
+    aspectRatio: '1 / 1',
     userSelect: 'none',
   };
 
@@ -60,7 +61,7 @@ export function Avatar({ name, avatar, size = 28, title, decorative }: Props) {
         aria-hidden={decorative || undefined}
         loading="lazy"
         onError={() => setFailed(true)}
-        style={{ ...base, background: 'var(--bg)', textIndent: '-9999px' }}
+        style={{ ...base, background: 'var(--bg)', objectFit: 'cover', objectPosition: 'center', textIndent: '-9999px' }}
       />
     );
   }
