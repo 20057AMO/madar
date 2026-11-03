@@ -727,6 +727,8 @@ export function Chat() {
   const [globalQ, setGlobalQ] = useState('');
   const [globalResults, setGlobalResults] = useState<GlobalChatSearchResult[] | null>(null);
   const [globalLoading, setGlobalLoading] = useState(false);
+  const [globalError, setGlobalError] = useState(false);
+  const [channelFilter, setChannelFilter] = useState('');
   const globalReq = useRef(0);
   const globalDebounceRef = useRef<number | null>(null);
   const [pendingJump, setPendingJump] = useState<{ channelId: string; msgId: string } | null>(null);
@@ -1430,23 +1432,28 @@ export function Chat() {
 
   // ── Global search: debounced handler
   const doGlobalSearch = (q: string) => {
-    if (globalDebounceRef.current) clearTimeout(globalDebounceRef.current);
-    if (!q.trim()) {
+    if (globalDebounceRef.current !== null) clearTimeout(globalDebounceRef.current);
+    globalDebounceRef.current = null;
+    const reqId = ++globalReq.current;
+    const query = q.trim();
+    setGlobalResults(null);
+    setGlobalError(false);
+    if (query.length < 2) {
       setGlobalResults(null);
       setGlobalLoading(false);
       return;
     }
     setGlobalLoading(true);
     globalDebounceRef.current = window.setTimeout(() => {
-      const reqId = ++globalReq.current;
-      void searchAllChatMessages(q.trim())
+      globalDebounceRef.current = null;
+      void searchAllChatMessages(query)
         .then((res) => {
           if (reqId !== globalReq.current) return;
           setGlobalResults(res.results || []);
         })
         .catch(() => {
           if (reqId !== globalReq.current) return;
-          setGlobalResults([]);
+          setGlobalError(true);
         })
         .finally(() => {
           if (reqId === globalReq.current) setGlobalLoading(false);
@@ -1454,12 +1461,20 @@ export function Chat() {
     }, 250);
   };
 
+  const closeGlobalSearch = () => {
+    globalReq.current += 1;
+    if (globalDebounceRef.current !== null) clearTimeout(globalDebounceRef.current);
+    globalDebounceRef.current = null;
+    setGlobalOpen(false);
+    setGlobalQ('');
+    setGlobalResults(null);
+    setGlobalError(false);
+    setGlobalLoading(false);
+  };
+
   const toggleGlobalSearch = () => {
-    if (globalOpen) {
-      setGlobalOpen(false);
-      setGlobalQ('');
-      setGlobalResults(null);
-    } else {
+    if (globalOpen) closeGlobalSearch();
+    else {
       setGlobalOpen(true);
       requestAnimationFrame(() => searchBoxRef.current?.focus());
     }
@@ -1469,6 +1484,7 @@ export function Chat() {
   useEffect(() => {
     return () => {
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      if (globalDebounceRef.current !== null) clearTimeout(globalDebounceRef.current);
       const rec = mediaRecorderRef.current;
       discardRecordingRef.current = true;
       if (rec && rec.state !== 'inactive') {
@@ -2119,6 +2135,13 @@ export function Chat() {
   }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText, emojiPickerFor, newDividerId, lang, user?.role]);
 
   const pinned = useMemo(() => messages.filter((m) => m.pinned), [messages]);
+  const normalizedChannelFilter = channelFilter.trim().toLocaleLowerCase();
+  const visibleChannels = normalizedChannelFilter
+    ? channels.filter((channel) => (
+      [channelLabel(channel, { id: meId }), channelSub(channel, { id: meId }), channel.id]
+        .some((value) => value.toLocaleLowerCase().includes(normalizedChannelFilter))
+    ))
+    : channels;
 
   // ── render
   if (loading) {
@@ -2204,6 +2227,7 @@ export function Chat() {
             <input
               ref={searchBoxRef}
               class="input"
+              maxLength={200}
               placeholder={t2('ابحث في كل القنوات…', 'Search all channels…')}
               aria-label={t2('البحث في كل القنوات', 'Search all channels')}
               value={globalQ}
@@ -2214,14 +2238,18 @@ export function Chat() {
               }}
               onKeyDown={(e: KeyboardEvent) => {
                 if (e.key === 'Escape') {
-                  setGlobalOpen(false);
-                  setGlobalQ('');
-                  setGlobalResults(null);
+                  closeGlobalSearch();
                   globalSearchBtnRef.current?.focus();
                 }
               }}
             />
-            {globalLoading && <div class="tchat-global-status"><Loader2 width={12} height={12} class="icon spin" /> {t2('جارٍ البحث…', 'Searching…')}</div>}
+            {globalLoading && <div class="tchat-global-status" role="status"><Loader2 width={12} height={12} class="icon spin" /> {t2('جارٍ البحث…', 'Searching…')}</div>}
+            {!globalLoading && globalQ.trim().length === 1 && (
+              <div class="tchat-global-empty" role="status">{t2('أدخل حرفين على الأقل.', 'Enter at least 2 characters.')}</div>
+            )}
+            {!globalLoading && globalError && (
+              <div class="tchat-global-error" role="alert">{t2('تعذر البحث. حاول مجددًا.', 'Search failed. Try again.')}</div>
+            )}
             {globalResults !== null && !globalLoading && (
               <div class="tchat-global-results">
                 {globalResults.length === 0 && <div class="tchat-global-empty">{t2('لا نتائج.', 'No matches.')}</div>}
@@ -2282,8 +2310,34 @@ export function Chat() {
             </button>
           </div>
         )}
+        {channels.length > 1 && (
+          <div class="tchat-channel-filter">
+            <Search width={14} height={14} aria-hidden="true" />
+            <input
+              type="search"
+              maxLength={100}
+              aria-label={t2('تصفية القنوات', 'Filter channels')}
+              placeholder={t2('تصفية القنوات…', 'Filter channels…')}
+              value={channelFilter}
+              onInput={(e: Event) => setChannelFilter((e.target as HTMLInputElement).value)}
+            />
+            {channelFilter && (
+              <button
+                type="button"
+                class="tchat-channel-filter-clear"
+                aria-label={t2('مسح التصفية', 'Clear channel filter')}
+                onClick={() => setChannelFilter('')}
+              >
+                <X width={14} height={14} />
+              </button>
+            )}
+          </div>
+        )}
         <div class="tchat-channel-list" aria-label={t2('قائمة القنوات', 'Channel list')}>
-          {channels.map((c) => {
+          {visibleChannels.length === 0 && (
+            <div class="tchat-channel-empty" role="status">{t2('لا توجد قنوات مطابقة.', 'No matching channels.')}</div>
+          )}
+          {visibleChannels.map((c) => {
             const isActive = c.id === activeId;
             const onlineNow = c.kind === 'direct' && c.members.some((m) => m.userId !== meId && presence.has(m.userId));
             const label = channelLabel(c, { id: meId });

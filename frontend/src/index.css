@@ -1243,6 +1243,7 @@ textarea.agent-prompt-input {
   .mobile-topbar {
     display: flex; align-items: center; gap: 10px;
     height: 55px; padding: 0 12px; flex-shrink: 0;
+    position: relative; z-index: 100;
     background: var(--bg-2); border-bottom: 1px solid var(--border);
   }
   .mobile-topbar-brand { font-weight: 700; font-size: 0.95rem; }

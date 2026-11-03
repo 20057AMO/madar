@@ -75,6 +75,51 @@
   flex-direction: column;
   gap: 1px;
 }
+.tchat-channel-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 10px 4px;
+  padding: 0 10px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-3);
+  background: var(--bg);
+}
+.tchat-channel-filter:focus-within { border-color: var(--accent); }
+.tchat-channel-filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 7px 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 0.74rem;
+}
+.tchat-channel-filter input::placeholder { color: var(--text-3); }
+.tchat-channel-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-2);
+  background: transparent;
+  cursor: pointer;
+}
+.tchat-channel-filter-clear:hover { color: var(--text); background: var(--panel-2); }
+.tchat-channel-empty {
+  padding: 14px 12px;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  text-align: center;
+}
 
 /* ── WhatsApp-style channel row ─────────────────────────────── */
 .tchat-channel-item {
@@ -468,6 +513,7 @@ mark.tchat-search-hit {
 }
 .tchat-global-results { max-height: 320px; overflow-y: auto; }
 .tchat-global-empty { padding: 10px 12px; font-size: 0.72rem; color: var(--text-2); }
+.tchat-global-error { padding: 8px 12px; font-size: 0.72rem; color: var(--red); }
 .tchat-global-channel { display: flex; flex-direction: column; }
 .tchat-global-channel-header {
   display: flex;
@@ -1746,6 +1792,10 @@ mark.tchat-search-hit {
     z-index: 90;
     background: rgba(0, 0, 0, 0.5);
   }
+}
+@media (max-width: 860px) {
+  .tchat-rail { inset-block-start: 55px; }
+  .tchat-backdrop.open { inset-block-start: 55px; }
 }
 /* Tablet: the rail pins open unless explicitly collapsed */
 @media (min-width: 640px) and (max-width: 1023px) {

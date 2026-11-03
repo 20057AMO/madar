@@ -122,3 +122,53 @@ test.describe('Phone-width layout (360px)', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 });
+
+test.describe('Team Chat navigation and search', () => {
+  test('the app navigation remains clickable above the channel rail at tablet width', async ({ page }) => {
+    await injectAuth(page);
+    await page.setViewportSize({ width: 848, height: 742 });
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/chat'; });
+
+    const menu = page.getByRole('button', { name: 'Open menu' });
+    await expect(menu).toBeVisible();
+    await menu.click();
+    await expect(page.locator('.sidebar.open')).toBeVisible();
+  });
+
+  test('global search reports request failures instead of showing an empty result', async ({ page }) => {
+    await page.route('**/api/chat-team/search?*', (route) =>
+      route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Unavailable' }) })
+    );
+    await injectAuth(page);
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/chat'; });
+
+    await page.getByRole('button', { name: 'Search all channels' }).click();
+    await page.getByRole('textbox', { name: 'Search all channels' }).fill('unavailable');
+    await expect(page.locator('.tchat-global-error')).toHaveText('Search failed. Try again.');
+    await expect(page.locator('.tchat-global-empty')).toHaveCount(0);
+  });
+
+  test('the channel filter can narrow and restore the channel list', async ({ page }) => {
+    await injectAuth(page);
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.goto(BASE);
+    await page.evaluate(() => { window.location.hash = '/chat'; });
+
+    const filter = page.getByRole('searchbox', { name: 'Filter channels' });
+    await expect(filter).toBeVisible();
+    const rows = page.locator('.tchat-channel-row');
+    const initialCount = await rows.count();
+    expect(initialCount).toBeGreaterThan(0);
+
+    await filter.fill('channel-that-does-not-exist');
+    await expect(page.locator('.tchat-channel-empty')).toHaveText('No matching channels.');
+    expect(await rows.count()).toBe(0);
+
+    await page.getByRole('button', { name: 'Clear channel filter' }).click();
+    await expect(rows.first()).toBeVisible();
+    expect(await rows.count()).toBe(initialCount);
+  });
+});
