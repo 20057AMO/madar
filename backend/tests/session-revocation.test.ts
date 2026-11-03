@@ -66,7 +66,13 @@ describe('verifyToken — the subject must exist (offline)', () => {
     const admin = await makeUser('admin');
     const login = (await store.login(admin.username, PW)) as { token: string };
     const decoded = store.verifyToken(login.token);
-    assert.deepStrictEqual(decoded, { id: admin.id, username: admin.username, role: 'admin', jti: decoded?.jti });
+    assert.deepStrictEqual(decoded, {
+      id: admin.id,
+      username: admin.username,
+      role: 'admin',
+      permissions: { projectWrite: false, projectTeam: false },
+      jti: decoded?.jti,
+    });
     assert.strictEqual(typeof decoded?.jti, 'string', 'login mints a session-bound jti');
   });
 
@@ -152,11 +158,19 @@ describe('sibling verifiers — same rule, no embedded-identity fallback (offlin
 
   test('a 2FA challenge for a deleted user cannot complete into a session', async () => {
     const user = await makeUser('editor', uniqueId('pending'));
-    const pending = jwt.sign({ scope: '2fa-pending', id: user.id }, SECRET, { expiresIn: '5m' });
+    const pending = jwt.sign({ scope: '2fa-pending', id: user.id, tv: 0 }, SECRET, { expiresIn: '5m' });
     assert.strictEqual(store.verifyPending2faToken(pending), user.id, 'precondition: a live challenge resolves');
 
     store.deleteUser(user.id);
     assert.strictEqual(store.verifyPending2faToken(pending), null, 'a challenge for a ghost must not become a session');
+  });
+
+  test('resetting a password invalidates an in-flight 2FA challenge', async () => {
+    const user = await makeUser('editor', uniqueId('pendingreset'));
+    const pending = jwt.sign({ scope: '2fa-pending', id: user.id, tv: 0 }, SECRET, { expiresIn: '5m' });
+    assert.strictEqual(store.verifyPending2faToken(pending), user.id);
+    await store.resetUserPassword(user.id, `${PW}-new`);
+    assert.strictEqual(store.verifyPending2faToken(pending), null);
   });
 
   test('providers-unlock carries no user identity: it dies with the lock, not with a claim', async () => {

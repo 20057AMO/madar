@@ -24,7 +24,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { decideProjectAccess, type AccessRole } from '../src/services/access-core.ts';
+import { canManageProjectTeam, decideProjectAccess, type AccessRole } from '../src/services/access-core.ts';
 
 // Stable fake user ids (the gate trusts the id it receives from the verified JWT).
 const SYS_ADMIN = 'sys-admin';
@@ -66,6 +66,41 @@ describe('decideProjectAccess — legacy-project admin gate (the F14 cap)', () =
       const res = gate(SYS_ADMIN, 'admin', shape, 'admin');
       assert.strictEqual(res.allowed, true, `system admin must pass on ${shape.label}`);
     }
+  });
+
+  describe('delegated project permissions', () => {
+    const project = {
+      ownerId: 'owner',
+      members: [
+        { userId: 'writer', role: 'viewer' as const },
+        { userId: 'team-manager', role: 'viewer' as const },
+      ],
+    };
+
+    test('projectWrite grants editor-level access only to an existing member', () => {
+      const permissions = { projectWrite: true, projectTeam: false };
+      assert.strictEqual(decideProjectAccess('writer', 'viewer', project, 'editor', 'ok', permissions).allowed, true);
+      assert.strictEqual(decideProjectAccess('writer', 'viewer', project, 'viewer', 'ok', permissions).allowed, true);
+      assert.strictEqual(decideProjectAccess('outsider', 'viewer', project, 'editor', 'ok', permissions).allowed, false);
+    });
+
+    test('projectTeam grants team management only within the member project', () => {
+      const permissions = { projectWrite: false, projectTeam: true };
+      assert.strictEqual(canManageProjectTeam('team-manager', 'viewer', project, permissions), true);
+      assert.strictEqual(canManageProjectTeam('outsider', 'viewer', project, permissions), false);
+      assert.strictEqual(canManageProjectTeam('team-manager', 'viewer', null, permissions), false);
+    });
+
+    test('team management permission does not open the project admin gate', () => {
+      assert.strictEqual(
+        decideProjectAccess('team-manager', 'viewer', project, 'admin', 'ok', { projectWrite: false, projectTeam: true }).allowed,
+        false
+      );
+      assert.strictEqual(
+        decideProjectAccess('team-manager', 'viewer', project, 'editor', 'ok', { projectWrite: false, projectTeam: true }).allowed,
+        false
+      );
+    });
   });
 
   test('global editor (system role editor) is REFUSED the admin gate on every legacy shape', () => {

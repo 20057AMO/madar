@@ -1,10 +1,11 @@
 import { verifyToken, type UserRole } from '../services/user-store';
+import type { UserPermissions } from '../services/user-permissions-core';
 import { readMeta } from '../services/projects-meta';
-import { decideProjectAccess } from '../services/access-core';
+import { canManageProjectTeam, decideProjectAccess } from '../services/access-core';
 import { canonicalProjectSlug } from '../services/project-slug-core';
 
 export interface AuthRequest extends Express.Request {
-  user?: { id: string; username: string; role: UserRole; jti?: string };
+  user?: { id: string; username: string; role: UserRole; permissions: UserPermissions; jti?: string };
 }
 
 export function authMiddleware(req: any, res: any, next: any): void {
@@ -62,7 +63,8 @@ export function checkProjectAccess(
   userId: string,
   userRole: UserRole,
   slug: string,
-  minRole: 'admin' | 'editor' | 'viewer' = 'viewer'
+  minRole: 'admin' | 'editor' | 'viewer' = 'viewer',
+  permissions?: UserPermissions
 ): { allowed: boolean; memberRole?: string } {
   const canonical = canonicalProjectSlug(slug);
   // Fails closed on junk, on an empty fold, and on ANY non-canonical spelling.
@@ -70,7 +72,20 @@ export function checkProjectAccess(
   const read = readMeta(canonical);
   // Pass the read STATE, not just the doc: a CORRUPT meta store must never hit
   // the legacy "no membership data ⇒ open to all" fallback (see access-core).
-  return decideProjectAccess(userId, userRole, read.meta, minRole, read.state);
+  return decideProjectAccess(userId, userRole, read.meta, minRole, read.state, permissions);
+}
+
+export function canManageProjectTeamAccess(
+  userId: string,
+  userRole: UserRole,
+  slug: string,
+  permissions?: UserPermissions
+): boolean {
+  const canonical = canonicalProjectSlug(slug);
+  if (!canonical || canonical !== slug) return false;
+  const read = readMeta(canonical);
+  if (read.state === 'corrupt') return false;
+  return canManageProjectTeam(userId, userRole, read.meta, permissions);
 }
 
 /**
@@ -106,7 +121,7 @@ export function requireProjectAccess(minRole: 'admin' | 'editor' | 'viewer' = 'v
       return;
     }
     req.params.slug = canonical;
-    const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, minRole);
+    const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, minRole, req.user.permissions);
     if (!allowed) {
       res.status(403).json({ error: 'Access denied to this project' });
       return;

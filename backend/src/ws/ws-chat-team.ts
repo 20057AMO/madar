@@ -31,7 +31,7 @@
  */
 import { WebSocket } from 'ws';
 import type { UserRole } from '../services/user-store';
-import { getUserInfo } from '../services/user-store';
+import { getUserInfo, getUserPermissions } from '../services/user-store';
 import {
   getChannel,
   getMessages,
@@ -207,7 +207,12 @@ function refreshClientUser(client: Client): ChatUser | null {
     if (client.ws.readyState === WebSocket.OPEN) client.ws.close(1008, 'account unavailable');
     return null;
   }
-  client.user = { id: current.id, username: current.username, role: current.role };
+  client.user = {
+    id: current.id,
+    username: current.username,
+    role: current.role,
+    permissions: getUserPermissions(current.id),
+  };
   return client.user;
 }
 

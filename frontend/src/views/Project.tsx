@@ -202,8 +202,15 @@ export function Project({ params }: { params: { slug: string } }) {
 
   // Viewer members (and non-members) get a read-only board; owners/admins edit.
   // System editors are global writers — they pass even without membership.
-  const readOnly = !!project && !!user && user.role !== 'admin' && user.role !== 'editor' && project.ownerId !== user.id &&
-    (project.members?.find((m) => m.userId === user.id)?.role ?? 'viewer') === 'viewer';
+  const projectMember = project?.members?.find((m) => m.userId === user?.id);
+  const legacyProject = !!project && !project.ownerId && !(project.members?.length);
+  const readOnly = !!project && !!user &&
+    user.role !== 'admin' && user.role !== 'editor' &&
+    project.ownerId !== user.id &&
+    !legacyProject &&
+    projectMember?.role !== 'admin' &&
+    projectMember?.role !== 'editor' &&
+    !(projectMember && user.permissions?.projectWrite);
 
   // Opening a workspace calls the editor-gated POST /api/opencode/open, so a
   // viewer gets a disabled button instead of a button that can only 403. The

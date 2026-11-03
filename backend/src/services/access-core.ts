@@ -19,6 +19,11 @@ export interface AccessSnapshot {
   members?: AccessMember[];
 }
 
+export interface AccessPermissions {
+  projectWrite?: boolean;
+  projectTeam?: boolean;
+}
+
 const ROLE_LEVEL: Record<AccessRole, number> = { admin: 3, editor: 2, viewer: 1 };
 
 /**
@@ -46,7 +51,8 @@ export function decideProjectAccess(
   userRole: AccessRole,
   meta: AccessSnapshot | null | undefined,
   minRole: AccessRole,
-  metaState: 'ok' | 'absent' | 'corrupt' = meta ? 'ok' : 'absent'
+  metaState: 'ok' | 'absent' | 'corrupt' = meta ? 'ok' : 'absent',
+  permissions?: AccessPermissions
 ): { allowed: boolean; memberRole?: AccessRole } {
   if (userRole === 'admin') return { allowed: true, memberRole: 'admin' };
   if (userRole === 'editor' && minRole !== 'admin') {
@@ -78,9 +84,27 @@ export function decideProjectAccess(
   const member = members.find((m) => m.userId === userId);
   if (!member) return { allowed: false };
 
+  if (minRole === 'editor' && permissions?.projectWrite) {
+    return { allowed: true, memberRole: 'editor' };
+  }
+
   const hasLevel = ROLE_LEVEL[member.role] || 0;
   const needLevel = ROLE_LEVEL[minRole] || 0;
   return { allowed: hasLevel >= needLevel, memberRole: member.role };
+}
+
+export function canManageProjectTeam(
+  userId: string,
+  userRole: AccessRole,
+  meta: AccessSnapshot | null | undefined,
+  permissions?: AccessPermissions
+): boolean {
+  if (userRole === 'admin') return true;
+  if (!meta) return false;
+  if (meta.ownerId === userId) return true;
+  const member = Array.isArray(meta.members) ? meta.members.find((m) => m.userId === userId) : undefined;
+  if (!member) return false;
+  return member.role === 'admin' || permissions?.projectTeam === true;
 }
 
 /**

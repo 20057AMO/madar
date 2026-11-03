@@ -14,10 +14,13 @@ import {
   getTeamMemberships,
   createUser,
   updateUserRole,
+  updateUserPermissions,
+  resetUserPassword,
   deleteUser,
   avatarUrl,
   type TeamUserWithMemberships,
   type UserRole,
+  type UserPermissions,
 } from '../api';
 import { Avatar } from '../components/Avatar';
 import { ReAuthModal } from '../components/ReAuthModal';
@@ -42,6 +45,13 @@ export function Team() {
   const [pendingRole, setPendingRole] = useState<{ user: TeamUserWithMemberships; role: UserRole } | null>(null);
   const [roleSaving, setRoleSaving] = useState(false);
   const [roleError, setRoleError] = useState<string | null>(null);
+  const [pendingPermissions, setPendingPermissions] = useState<{ user: TeamUserWithMemberships; permissions: UserPermissions } | null>(null);
+  const [permissionsSaving, setPermissionsSaving] = useState(false);
+  const [permissionsError, setPermissionsError] = useState<string | null>(null);
+  const [pendingPasswordReset, setPendingPasswordReset] = useState<{ user: TeamUserWithMemberships; newPassword: string } | null>(null);
+  const [passwordResetSaving, setPasswordResetSaving] = useState(false);
+  const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
+  const [resetPasswordDrafts, setResetPasswordDrafts] = useState<Record<string, string>>({});
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -104,6 +114,37 @@ export function Team() {
       setRoleError(err.message || t2('فشل تحديث الدور', 'Failed to update role'));
     } finally {
       setRoleSaving(false);
+    }
+  }
+
+  async function handlePermissionsConfirmed(accountPassword: string) {
+    if (!pendingPermissions) return;
+    try {
+      setPermissionsSaving(true);
+      setPermissionsError(null);
+      await updateUserPermissions(pendingPermissions.user.id, pendingPermissions.permissions, accountPassword);
+      setPendingPermissions(null);
+      await loadUsers();
+    } catch (err: any) {
+      setPermissionsError(err.message || t2('فشل تحديث الصلاحيات', 'Failed to update permissions'));
+    } finally {
+      setPermissionsSaving(false);
+    }
+  }
+
+  async function handlePasswordResetConfirmed(accountPassword: string) {
+    if (!pendingPasswordReset) return;
+    try {
+      setPasswordResetSaving(true);
+      setPasswordResetError(null);
+      await resetUserPassword(pendingPasswordReset.user.id, pendingPasswordReset.newPassword, accountPassword);
+      setResetPasswordDrafts((prev) => ({ ...prev, [pendingPasswordReset.user.id]: '' }));
+      setPendingPasswordReset(null);
+      await loadUsers();
+    } catch (err: any) {
+      setPasswordResetError(err.message || t2('فشل إعادة تعيين كلمة المرور', 'Failed to reset password'));
+    } finally {
+      setPasswordResetSaving(false);
     }
   }
 
@@ -487,6 +528,78 @@ export function Team() {
                     </button>
                   </div>
                 )}
+                {isAdmin && (
+                  <details class="team-user-admin-tools">
+                    <summary>{t2('الصلاحيات وكلمة المرور', 'Permissions & password')}</summary>
+                    <div class="team-user-admin-content">
+                      <fieldset class="team-permission-list">
+                        <legend>{t2('صلاحيات المشروع', 'Project permissions')}</legend>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={u.permissions?.projectWrite === true}
+                            onChange={(e) => {
+                              const projectWrite = (e.target as HTMLInputElement).checked;
+                              setUsers((prev) => prev.map((item) => item.id === u.id
+                                ? { ...item, permissions: { projectWrite, projectTeam: item.permissions?.projectTeam === true } }
+                                : item));
+                            }}
+                          />
+                          <span>{t2('الكتابة في المشاريع التي ينتمي إليها', 'Write in projects the user belongs to')}</span>
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={u.permissions?.projectTeam === true}
+                            onChange={(e) => {
+                              const projectTeam = (e.target as HTMLInputElement).checked;
+                              setUsers((prev) => prev.map((item) => item.id === u.id
+                                ? { ...item, permissions: { projectWrite: item.permissions?.projectWrite === true, projectTeam } }
+                                : item));
+                            }}
+                          />
+                          <span>{t2('إدارة أعضاء المشاريع التي ينتمي إليها', 'Manage members in projects the user belongs to')}</span>
+                        </label>
+                        <small>{t2('لا تمنح هذه الخيارات وصولاً عاماً للمشاريع أو إعدادات المنصة. الصلاحيات الحساسة متاحة للمدير فقط.', 'These do not grant global project access or system settings. Sensitive account and system controls remain admin-only.')}</small>
+                      </fieldset>
+                      <div class="team-user-admin-actions">
+                        <button
+                          class="btn-ghost sm"
+                          onClick={() => {
+                            setPermissionsError(null);
+                            setPendingPermissions({ user: u, permissions: {
+                              projectWrite: u.permissions?.projectWrite === true,
+                              projectTeam: u.permissions?.projectTeam === true,
+                            } });
+                          }}
+                        >
+                          {t2('حفظ الصلاحيات', 'Save permissions')}
+                        </button>
+                        <div class="team-password-reset">
+                          <input
+                            type="password"
+                            class="modern-input"
+                            autocomplete="new-password"
+                            aria-label={t2(`كلمة مرور جديدة لـ ${name}`, `New password for ${name}`)}
+                            placeholder={t2('كلمة مرور جديدة (6 أحرف على الأقل)', 'New password (min 6 characters)')}
+                            value={resetPasswordDrafts[u.id] || ''}
+                            onInput={(e) => setResetPasswordDrafts((prev) => ({ ...prev, [u.id]: (e.target as HTMLInputElement).value }))}
+                          />
+                          <button
+                            class="btn-ghost sm"
+                            disabled={(resetPasswordDrafts[u.id] || '').length < 6}
+                            onClick={() => {
+                              setPasswordResetError(null);
+                              setPendingPasswordReset({ user: u, newPassword: resetPasswordDrafts[u.id] || '' });
+                            }}
+                          >
+                            {t2('إعادة تعيين كلمة المرور', 'Reset password')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                )}
               </div>
             );
           })}
@@ -518,6 +631,28 @@ export function Team() {
         confirmLabel={t2('تغيير الدور', 'Change role')}
         onConfirm={handleRoleChangeConfirmed}
         onCancel={() => { setPendingRole(null); setRoleError(null); }}
+      />
+      <ReAuthModal
+        open={pendingPermissions !== null}
+        username={currentUser?.username}
+        loading={permissionsSaving}
+        error={permissionsError}
+        title={pendingPermissions ? t2(`تحديث صلاحيات ${pendingPermissions.user.username}`, `Update permissions for ${pendingPermissions.user.username}`) : t2('تحديث الصلاحيات', 'Update permissions')}
+        description={t2('أدخل كلمة مرور حساب المدير لتأكيد هذا التغيير.', 'Enter your admin account password to confirm this change.')}
+        confirmLabel={t2('حفظ الصلاحيات', 'Save permissions')}
+        onConfirm={handlePermissionsConfirmed}
+        onCancel={() => { setPendingPermissions(null); setPermissionsError(null); }}
+      />
+      <ReAuthModal
+        open={pendingPasswordReset !== null}
+        username={currentUser?.username}
+        loading={passwordResetSaving}
+        error={passwordResetError}
+        title={pendingPasswordReset ? t2(`إعادة تعيين كلمة مرور ${pendingPasswordReset.user.username}`, `Reset ${pendingPasswordReset.user.username}'s password`) : t2('إعادة تعيين كلمة المرور', 'Reset password')}
+        description={t2('أدخل كلمة مرور حساب المدير لتأكيد إعادة التعيين. ستُنهى جلسات المستخدم فوراً.', 'Enter your admin account password to confirm. The user’s active sessions will be revoked immediately.')}
+        confirmLabel={t2('إعادة التعيين', 'Reset password')}
+        onConfirm={handlePasswordResetConfirmed}
+        onCancel={() => { setPendingPasswordReset(null); setPasswordResetError(null); }}
       />
     </div>
   );

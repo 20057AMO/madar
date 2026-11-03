@@ -145,6 +145,9 @@ import {
   issueUnlockToken,
   verifyUnlockToken,
   verifyAccountPassword,
+  getUserPermissions,
+  resetUserPassword,
+  updateUserPermissions,
   revokeAllSessions,
   revokeProvidersUnlocks,
   isTotpEnabled,
@@ -163,7 +166,8 @@ import { getJwtSecret } from './services/jwt-secret';
 import { describeJwtSecretRejection } from './services/jwt-secret-core';
 import { checkUserWrite, sweepUserWriteBuckets } from './services/user-write-limiter';
 import type { UserRole } from './services/user-store';
-import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkProjectAccess } from './middleware/auth';
+import { isUserPermissions } from './services/user-permissions-core';
+import { authMiddleware, requireAdmin, requireRole, requireProjectAccess, checkProjectAccess, canManageProjectTeamAccess } from './middleware/auth';
 import { attachWebSockets } from './ws/ws-server';
 import { getPresence } from './ws/ws-presence';
 import { notifyCanvasUpdate, notifyCanvasOps } from './ws/ws-canvas';
@@ -380,7 +384,7 @@ app.get('/api/auth/status', (req: any, res) => {
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   const decoded = token ? verifyToken(token) : null;
   const user = decoded ? getUserInfo(decoded.id) : null;
-  res.json({ hasUser: true, user });
+  res.json({ hasUser: true, user: user ? { ...user, permissions: decoded?.permissions } : null });
 });
 
 app.post('/api/auth/setup', authLimiter, async (req, res) => {
@@ -742,6 +746,7 @@ app.get('/api/users/with-memberships', requireAdmin, (req: any, res) => {
   }
   const enriched = users.map((u) => ({
     ...u,
+    permissions: getUserPermissions(u.id),
     memberships: (memberships.get(u.id) || []).slice(0, 50),
   }));
   res.json({ users: enriched });
@@ -786,6 +791,55 @@ app.patch('/api/users/:userId/role', requireAdmin, authLimiter, async (req: any,
     username: targetInfo?.username || req.params.userId,
   });
   res.json({ ok: true });
+});
+
+app.patch('/api/users/:userId/permissions', requireAdmin, authLimiter, async (req: any, res) => {
+  const { permissions, accountPassword } = req.body || {};
+  if (!isUserPermissions(permissions)) {
+    return res.status(400).json({ error: 'Both project permissions must be booleans.' });
+  }
+  if (!accountPassword || !String(accountPassword).length) {
+    return res.status(400).json({ error: 'Account password is required to change permissions.' });
+  }
+  if (!(await verifyAccountPassword(String(accountPassword), req.user?.id))) {
+    recordAudit('user-permissions-change-failed', false, req.ip, req.user?.id);
+    return res.status(401).json({ error: 'Account password is incorrect.' });
+  }
+  if (!getUserInfo(req.params.userId)) return res.status(404).json({ error: 'User not found.' });
+  if (!updateUserPermissions(req.params.userId, permissions)) {
+    return res.status(404).json({ error: 'User not found.' });
+  }
+  const targetInfo = getUserInfo(req.params.userId);
+  recordAudit('user-permissions-changed', true, req.ip, req.params.userId, {
+    username: targetInfo?.username || req.params.userId,
+    projectWrite: permissions.projectWrite,
+    projectTeam: permissions.projectTeam,
+  });
+  res.json({ ok: true });
+});
+
+app.patch('/api/users/:userId/password', requireAdmin, authLimiter, async (req: any, res) => {
+  const { accountPassword, newPassword } = req.body || {};
+  if (req.params.userId === req.user?.id) {
+    return res.status(400).json({ error: 'Use the account password page to change your own password.' });
+  }
+  if (!getUserInfo(req.params.userId)) return res.status(404).json({ error: 'User not found.' });
+  if (typeof newPassword !== 'string' || !newPassword) return res.status(400).json({ error: 'New password is required.' });
+  if (typeof accountPassword !== 'string' || !accountPassword) return res.status(400).json({ error: 'Account password is required.' });
+  if (!(await verifyAccountPassword(accountPassword, req.user?.id))) {
+    recordAudit('user-password-reset-failed', false, req.ip, req.user?.id);
+    return res.status(401).json({ error: 'Account password is incorrect.' });
+  }
+  try {
+    await resetUserPassword(req.params.userId, newPassword);
+    const targetInfo = getUserInfo(req.params.userId);
+    recordAudit('user-password-reset', true, req.ip, req.params.userId, {
+      username: targetInfo?.username || req.params.userId,
+    });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.delete('/api/users/:userId', requireAdmin, userAdminLimiter, (req: any, res) => {
@@ -1009,7 +1063,7 @@ app.get('/api/chat/context', async (req: any, res) => {
     if (project !== 'all') {
       const canonical = canonicalProjectSlug(project);
       if (!canonical) return res.status(400).json({ error: 'Project slug is invalid' });
-      const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, 'viewer');
+      const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, 'viewer', req.user.permissions);
       if (!allowed) return res.status(403).json({ error: 'Access denied to this project' });
       // Everything below acts on the SAME canonical value the gate authorised.
       scope = canonical;
@@ -1042,7 +1096,7 @@ function chatSessionGate(req: any, project: string, level: 'viewer' | 'editor'):
   if (!project) return null; // global rows — no project to authorise against
   const canonical = canonicalProjectSlug(project);
   if (!canonical) return 'Project slug is invalid';
-  const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, level);
+  const { allowed } = checkProjectAccess(req.user.id, req.user.role, canonical, level, req.user.permissions);
   return allowed ? null : 'Access denied to this project';
 }
 
@@ -2180,14 +2234,27 @@ app.get('/api/projects/:slug/members', requireProjectAccess('viewer'), async (re
 // Add member — project admins + system admins only (the middleware also
 // canonicalizes req.params.slug before the handler, so the meta store and the
 // channel sync below name the same project the gate decided on).
-app.post('/api/projects/:slug/members', requireProjectAccess('admin'), async (req: any, res) => {
+app.post('/api/projects/:slug/members', requireProjectAccess('viewer'), async (req: any, res) => {
   try {
     const slug = req.params.slug;
     const { userId, role } = req.body || {};
+    if (!canManageProjectTeamAccess(req.user.id, req.user.role, slug, req.user.permissions)) {
+      return res.status(403).json({ error: 'Not authorized to manage this project team' });
+    }
     if (!userId || !String(userId).trim()) {
       return res.status(400).json({ error: 'userId is required' });
     }
     const memberRole = ['admin', 'editor', 'viewer'].includes(role) ? role : 'viewer';
+    const meta = loadMeta(slug);
+    const hasProjectAdminAccess = req.user.role === 'admin' ||
+      meta?.ownerId === req.user.id ||
+      memberList(meta || {}).some((member) => member.userId === req.user.id && member.role === 'admin');
+    if (memberRole === 'admin' && !hasProjectAdminAccess) {
+      return res.status(403).json({ error: 'Only project admins can assign the admin role' });
+    }
+    if (memberRole === 'editor' && userId === req.user.id && req.user.permissions?.projectWrite !== true && !hasProjectAdminAccess) {
+      return res.status(403).json({ error: 'Cannot grant yourself project write access' });
+    }
 
     // Validate user exists
     const targetUser = getUserInfo(userId);
@@ -2241,10 +2308,10 @@ app.delete('/api/projects/:slug/members/:userId', requireProjectAccess('viewer')
     const meta = loadMeta(slug);
     if (!meta) return res.status(404).json({ error: 'Project not found' });
 
-    const isProjectAdmin = meta.ownerId === callerId || memberList(meta).some((m) => m.userId === callerId && m.role === 'admin');
+    const canManageTeam = canManageProjectTeamAccess(callerId, callerRole || 'viewer', slug, req.user?.permissions);
 
     // Users can remove themselves; otherwise must be admin
-    if (callerId !== targetUserId && callerRole !== 'admin' && !isProjectAdmin) {
+    if (callerId !== targetUserId && !canManageTeam) {
       return res.status(403).json({ error: 'Not authorized to remove this member' });
     }
 
@@ -2528,7 +2595,7 @@ app.post('/api/opencode/open', userWriteLimiter, async (req: any, res) => {
       recordAudit('opencode-open-failed', false, req.ip, req.user?.id, { slug: rawSlug });
       return res.status(404).json({ error: 'Project not found' });
     }
-    const { allowed } = checkProjectAccess(req.user.id, req.user.role, slug, 'editor');
+    const { allowed } = checkProjectAccess(req.user.id, req.user.role, slug, 'editor', req.user.permissions);
     if (!allowed) {
       recordAudit('opencode-open-failed', false, req.ip, req.user?.id, { slug });
       return res.status(403).json({ error: 'Access denied to this project' });
@@ -2787,6 +2854,7 @@ app.post('/api/opencode/delegate/:slug', userWriteLimiter, async (req: any, res)
       req.user.role,
       slug,
       capability === 'readonly' ? 'viewer' : 'editor',
+      req.user.permissions,
     );
     if (!allowed) return res.status(403).json({ error: 'Access denied to this project' });
     if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
@@ -2821,10 +2889,16 @@ app.get('/api/opencode/delegate/:slug', requireProjectAccess('viewer'), (req: an
  * public metadata shape (agent/status/at/duration). The route is already
  * viewer-gated; this is the second, content-level gate.
  */
-function delegationView(entry: DelegationEntry, userId: string, role: string, slug: string): DelegationEntry | Record<string, unknown> {
+function delegationView(
+  entry: DelegationEntry,
+  userId: string,
+  role: string,
+  slug: string,
+  permissions?: { projectWrite: boolean; projectTeam: boolean }
+): DelegationEntry | Record<string, unknown> {
   // `role` arrives from req.user (verified by verifyToken) so this cast is
   // safe; typed as UserRole to match checkProjectAccess's signature.
-  const editorAccess = checkProjectAccess(userId, role as UserRole, slug, 'editor').allowed;
+  const editorAccess = checkProjectAccess(userId, role as UserRole, slug, 'editor', permissions).allowed;
   if (editorAccess || (entry.userId && entry.userId === userId)) return entry;
   const { prompt, result, ...publicEntry } = entry;
   void prompt;
@@ -2838,7 +2912,7 @@ app.get('/api/opencode/delegate/:slug/history', requireProjectAccess('viewer'), 
     if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
     const all = listDelegations(slug);
     // Newest first for the UI, mirroring the activity feed list contract.
-    const entries = all.map((e) => delegationView(e, req.user.id, req.user.role, slug));
+    const entries = all.map((e) => delegationView(e, req.user.id, req.user.role, slug, req.user.permissions));
     res.json({ entries: [...entries].reverse(), total: all.length });
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
@@ -2851,7 +2925,7 @@ app.get('/api/opencode/delegate/:slug/history/:id', requireProjectAccess('viewer
     if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
     const entry = getDelegation(slug, String(req.params.id || ''));
     if (!entry) return res.status(404).json({ error: 'Delegation not found' });
-    res.json(delegationView(entry, req.user.id, req.user.role, slug));
+    res.json(delegationView(entry, req.user.id, req.user.role, slug, req.user.permissions));
   } catch (err: any) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -3474,4 +3548,3 @@ startAttachmentGcSweep();
 // host bind source for project containers and reports a broken mount instead of
 // letting every project file land in a directory nobody can see.
 startWorkspaceMountAudit();
-

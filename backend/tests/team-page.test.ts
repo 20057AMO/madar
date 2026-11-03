@@ -171,7 +171,7 @@ describe('Team page & permissions (real Docker container)', () => {
     const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
     const loginData = await loginRes.json();
     if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
-    const realAdmin = { headers: { ...authHeaders(), Authorization: `Bearer ${loginData.token}` } };
+    const realAdmin = { headers: { ...authHeaders(), Authorization: 'Bearer ' + loginData.token } };
 
     const t0 = new Date().toISOString();
     const ok = await req('PATCH', `/users/${viewerId}/role`, { role: 'editor', accountPassword: pw }, realAdmin.headers);
@@ -243,7 +243,7 @@ describe('Team page & permissions (real Docker container)', () => {
     const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
     const loginData = await loginRes.json();
     if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
-    const realAdmin = { headers: { ...authHeaders(), Authorization: `Bearer ${loginData.token}` } };
+    const realAdmin = { headers: { ...authHeaders(), Authorization: 'Bearer ' + loginData.token } };
 
     // The acting admin must re-confirm their account password — missing → 400,
     // wrong → 401, correct → 200 (transfer mutates nothing on a failed sudo).
@@ -266,5 +266,52 @@ describe('Team page & permissions (real Docker container)', () => {
       entries2.some((e) => e.event === 'ownership-transferred' && e.userId === editorId),
       'ownership-transferred audit entry exists for the new owner'
     );
+  });
+
+  test('delegated project permissions and admin password reset (real login; self-skips)', async (t) => {
+    const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
+    const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
+    const loginData = await loginRes.json();
+    if (!loginData.token) return t.skip('no real admin login available (set WSD_TEST_ACCOUNT_PASSWORD)');
+    const realAdmin = { headers: { ...authHeaders(), Authorization: 'Bearer ' + loginData.token } };
+
+    const permissionUpdate = await requestWithBackoff(
+      'PATCH',
+      `/users/${viewerId}/permissions`,
+      { permissions: { projectWrite: true, projectTeam: true }, accountPassword: pw },
+      realAdmin.headers
+    );
+    assert.strictEqual(permissionUpdate.status, 200, `permission update: ${permissionUpdate.status}`);
+    const roster = await (await req('GET', '/users/with-memberships', undefined, realAdmin.headers)).json();
+    const viewerRow = (roster.users as any[]).find((u: any) => u.id === viewerId);
+    assert.deepStrictEqual(viewerRow.permissions, { projectWrite: true, projectTeam: true });
+
+    const notesWrite = await req('PUT', `/projects/${slug}/notes`, { items: [] }, runAs(viewerToken).headers);
+    assert.strictEqual(notesWrite.status, 200, 'projectWrite permits a member to use editor-level project APIs');
+
+    const selfPromotion = await req(
+      'POST',
+      `/projects/${slug}/members`,
+      { userId: viewerId, role: 'editor' },
+      runAs(viewerToken).headers
+    );
+    assert.strictEqual(selfPromotion.status, 403, 'projectTeam cannot grant the caller project-write access');
+    const adminPromotion = await req(
+      'POST',
+      `/projects/${slug}/members`,
+      { userId: viewerId, role: 'admin' },
+      runAs(viewerToken).headers
+    );
+    assert.strictEqual(adminPromotion.status, 403, 'projectTeam cannot grant project-admin privileges');
+
+    const reset = await requestWithBackoff(
+      'PATCH',
+      `/users/${viewerId}/password`,
+      { newPassword: `${pw}-reset`, accountPassword: pw },
+      realAdmin.headers
+    );
+    assert.strictEqual(reset.status, 200, `admin password reset: ${reset.status}`);
+    const revoked = await req('GET', `/projects/${slug}`, undefined, runAs(viewerToken).headers);
+    assert.strictEqual(revoked.status, 401, 'resetting the password revokes the target user session');
   });
 });

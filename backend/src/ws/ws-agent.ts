@@ -15,6 +15,7 @@ import { checkUserWrite } from '../services/user-write-limiter';
 import { checkProjectAccess } from '../middleware/auth';
 import { canonicalProjectSlug } from '../services/project-slug-core';
 import type { UserRole } from '../services/user-store';
+import { getUserInfo, getUserPermissions } from '../services/user-store';
 
 const MAX_PROMPT_CHARS = 20000;
 const MAX_HISTORY_TURNS = 20;
@@ -107,7 +108,7 @@ export function handleAgentSocket(
   ws: WebSocket,
   agentId: string,
   chatId: string,
-  authUser: { id: string; username: string; role: UserRole; jti?: string } | null,
+  authUser: { id: string; username: string; role: UserRole; permissions?: { projectWrite: boolean; projectTeam: boolean }; jti?: string } | null,
   onRelease: () => void
 ): void {
   const room = roomKey(agentId, chatId);
@@ -219,11 +220,18 @@ export function handleAgentSocket(
       return;
     }
     if (project && project !== 'all') {
+      const liveUserInfo = authUser ? getUserInfo(authUser.id) : null;
+      if (authUser && !liveUserInfo) {
+        ws.close(1008, 'account unavailable');
+        return;
+      }
+      const livePermissions = liveUserInfo ? getUserPermissions(liveUserInfo.id) : undefined;
       const allowed = checkProjectAccess(
         authUser?.id ?? '',
-        (authUser?.role ?? 'viewer') as UserRole,
+        (liveUserInfo?.role ?? authUser?.role ?? 'viewer') as UserRole,
         project,
-        'editor'
+        'editor',
+        livePermissions
       ).allowed;
       if (!allowed) {
         sendJson(ws, { type: 'error', message: 'Project access denied' });

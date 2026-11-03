@@ -1,6 +1,6 @@
 import { createContext, type ComponentChildren } from 'preact';
 import { useState, useEffect, useContext, useCallback } from 'preact/hooks';
-import { relockProviders, clearProvidersUnlock, type UserProfile } from './api';
+import { relockProviders, clearProvidersUnlock, type UserPermissions, type UserProfile } from './api';
 import { clearEmbedSession } from './lib/embed-session';
 import { capturePostLoginRoute } from './lib/post-login-route';
 
@@ -8,6 +8,7 @@ interface AuthUser {
   id: string;
   username: string;
   role: 'admin' | 'editor' | 'viewer';
+  permissions?: UserPermissions;
   createdAt: string;
   passwordChangedAt?: string;
   profile?: UserProfile;

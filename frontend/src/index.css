@@ -2938,7 +2938,7 @@ iframe[data-kbd-focus] {
 /* Roster rows */
 .team-list { display: grid; gap: 8px; }
 .team-row {
-  display: flex; align-items: center; gap: 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
   padding: 13px 15px;
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   transition: border-color 0.15s, background 0.15s;
@@ -2987,6 +2987,21 @@ iframe[data-kbd-focus] {
 }
 
 .team-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-inline-start: auto; }
+.team-user-admin-tools {
+  flex: 0 0 100%; margin-top: 2px; padding-top: 10px;
+  border-top: 1px solid var(--border); color: var(--text-2);
+}
+.team-user-admin-tools > summary { width: fit-content; color: var(--text-3); font-size: 0.75rem; cursor: pointer; }
+.team-user-admin-tools > summary:hover { color: var(--text); }
+.team-user-admin-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 1fr); gap: 14px; padding-top: 12px; }
+.team-permission-list { display: grid; gap: 9px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.team-permission-list legend { margin-bottom: 8px; color: var(--text); font-size: 0.8rem; font-weight: 600; }
+.team-permission-list label { display: flex; align-items: flex-start; gap: 8px; color: var(--text-2); font-size: 0.78rem; }
+.team-permission-list input { margin-top: 2px; accent-color: var(--blue); }
+.team-permission-list small { color: var(--text-3); font-size: 0.7rem; line-height: 1.5; }
+.team-user-admin-actions { display: grid; align-content: start; justify-items: start; gap: 10px; }
+.team-password-reset { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }
+.team-password-reset .modern-input { flex: 1 1 200px; min-width: 0; }
 
 /* Add-user card */
 .team-add { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
@@ -3023,6 +3038,7 @@ iframe[data-kbd-focus] {
 
 @media (max-width: 700px) {
   .team-page { padding: 1rem; }
+  .team-user-admin-content { grid-template-columns: 1fr; }
   .team-roles { grid-template-columns: 1fr; gap: 8px; }
   .team-fields, .team-role-opts { grid-template-columns: 1fr; }
   .team-hero-ico { width: 40px; height: 40px; border-radius: 11px; }

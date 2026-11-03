@@ -36,7 +36,7 @@ import { canonicalProjectSlug } from '../services/project-slug-core';
  */
 function gateProject(
   slug: string,
-  user: { id: string; role: string } | null,
+  user: { id: string; role: string; permissions?: { projectWrite: boolean; projectTeam: boolean } } | null,
   minRole: 'admin' | 'editor' | 'viewer'
 ): boolean {
   if (!user) return false;
@@ -52,7 +52,8 @@ function gateProject(
     user.role as 'admin' | 'editor' | 'viewer',
     read.meta,
     minRole,
-    read.state
+    read.state,
+    user.permissions
   ).allowed;
 }
 

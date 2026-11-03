@@ -53,7 +53,7 @@ export interface Project {
  * extra request. Keep the legacy branch in sync with the backend.
  */
 export function canOpenProjectWorkspace(
-  user: { id: string; role: string } | null | undefined,
+  user: { id: string; role: string; permissions?: UserPermissions } | null | undefined,
   project: Pick<Project, 'ownerId' | 'members'>,
 ): boolean {
   if (!user) return false;
@@ -64,7 +64,7 @@ export function canOpenProjectWorkspace(
   if (!project.ownerId && !(project.members && project.members.length > 0)) return true;
   if (project.ownerId === user.id) return true;
   const member = (project.members || []).find((m) => m.userId === user.id);
-  return !!member && member.role !== 'viewer';
+  return !!member && (member.role !== 'viewer' || user.permissions?.projectWrite === true);
 }
 
 /** Container-crash record set by the server-side detector. */
@@ -1469,9 +1469,15 @@ export interface TeamUser {
   id: string;
   username: string;
   role: UserRole;
+  permissions?: UserPermissions;
   createdAt: string;
   passwordChangedAt?: string;
   profile?: UserProfile;
+}
+
+export interface UserPermissions {
+  projectWrite: boolean;
+  projectTeam: boolean;
 }
 
 export interface TeamMembership {
@@ -1504,6 +1510,22 @@ export const updateUserRole = (userId: string, role: UserRole, accountPassword?:
     // skipAuthRedirect so a wrong sudo password surfaces inline in the
     // ReAuthModal instead of triggering the global session-expiry handler.
     body: JSON.stringify({ role, accountPassword }),
+    skipAuthRedirect: true,
+  });
+
+export const updateUserPermissions = (userId: string, permissions: UserPermissions, accountPassword: string) =>
+  api<{ ok: boolean }>(`/api/users/${userId}/permissions`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ permissions, accountPassword }),
+    skipAuthRedirect: true,
+  });
+
+export const resetUserPassword = (userId: string, newPassword: string, accountPassword: string) =>
+  api<{ ok: boolean }>(`/api/users/${userId}/password`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newPassword, accountPassword }),
     skipAuthRedirect: true,
   });
 

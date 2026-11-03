@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { generateTotpSecret, verifyTotp } from './totp';
 import { isReservedUsername } from './chat-team-core';
 import { jwtSecretValue } from './jwt-secret';
+import { sanitizeUserPermissions, type UserPermissions } from './user-permissions-core';
 
 const DATA_DIR = process.env.WSD_DATA_DIR || '/app/data';
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -48,6 +49,7 @@ export interface StoredUser {
   providersPasswordHash?: string;
   providersPasswordVersion?: number;
   tokenVersion?: number;
+  permissions?: UserPermissions;
   totp?: TotpConfig;
   profile?: UserProfile;
 }
@@ -73,7 +75,10 @@ function loadUsers(): void {
     // Current multi-user format: { users: StoredUser[] }
     if (Array.isArray(raw.users)) {
       for (const u of raw.users) {
-        if (u?.id) usersMap.set(u.id, u);
+        if (u?.id) {
+          if (u.permissions !== undefined) u.permissions = sanitizeUserPermissions(u.permissions);
+          usersMap.set(u.id, u);
+        }
       }
     }
   } catch {
@@ -131,6 +136,10 @@ export function getUserInfo(id: string): { id: string; username: string; role: U
   const u = getUserById(id);
   if (!u) return null;
   return { id: u.id, username: u.username, role: u.role, createdAt: u.createdAt, passwordChangedAt: u.passwordChangedAt, profile: u.profile };
+}
+
+export function getUserPermissions(id: string): UserPermissions {
+  return sanitizeUserPermissions(getUserById(id)?.permissions);
 }
 
 // ── Profile (display name / email / bio / avatar) ─────────────
@@ -271,7 +280,7 @@ function signSessionToken(user: StoredUser): string {
   );
 }
 
-export function verifyToken(token: string | null): { id: string; username: string; role: UserRole; jti?: string } | null {
+export function verifyToken(token: string | null): { id: string; username: string; role: UserRole; permissions: UserPermissions; jti?: string } | null {
   if (!token) return null;
   if (usersMap.size === 0) loadUsers();
   try {
@@ -287,7 +296,13 @@ export function verifyToken(token: string | null): { id: string; username: strin
     if (!user) return null;
     // tokenVersion must match (logout-everywhere / password-change revocation).
     if ((decoded.tv || 0) !== (user.tokenVersion || 0)) return null;
-    return { id: user.id, username: user.username, role: user.role, jti: decoded.jti };
+    return {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      permissions: getUserPermissions(user.id),
+      jti: decoded.jti,
+    };
   } catch {
     return null;
   }
@@ -318,6 +333,19 @@ export async function changePassword(currentPassword: string, newPassword: strin
   user.tokenVersion = (user.tokenVersion || 0) + 1;
   saveUsers();
   return { token: signSessionToken(user) };
+}
+
+export async function resetUserPassword(userId: string, newPassword: string): Promise<boolean> {
+  const user = getUserById(userId);
+  if (!user) return false;
+  if (!newPassword || newPassword.length < 6) {
+    throw new Error('New password must be at least 6 characters.');
+  }
+  user.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  user.passwordChangedAt = new Date().toISOString();
+  user.tokenVersion = (user.tokenVersion || 0) + 1;
+  saveUsers();
+  return true;
 }
 
 export async function revokeAllSessions(accountPassword: string, userId?: string): Promise<void> {
@@ -382,6 +410,14 @@ export function updateUserRole(userId: string, role: UserRole): boolean {
   if (!user) return false;
   if (!['admin', 'editor', 'viewer'].includes(role)) return false;
   user.role = role;
+  saveUsers();
+  return true;
+}
+
+export function updateUserPermissions(userId: string, permissions: UserPermissions): boolean {
+  const user = getUserById(userId);
+  if (!user) return false;
+  user.permissions = sanitizeUserPermissions(permissions);
   saveUsers();
   return true;
 }
@@ -536,7 +572,7 @@ export function verifyTotpCode(code: string, userId: string): boolean {
 function signPending2faToken(userId: string): string {
   const user = getUserById(userId);
   if (!user) throw new Error('User not found.');
-  return jwt.sign({ scope: '2fa-pending', id: user.id }, JWT_SECRET, { expiresIn: PENDING_2FA_EXPIRY });
+  return jwt.sign({ scope: '2fa-pending', id: user.id, tv: user.tokenVersion || 0 }, JWT_SECRET, { expiresIn: PENDING_2FA_EXPIRY });
 }
 
 // ── Embedded-surface proxy credential ────────────────────────
@@ -612,12 +648,13 @@ export function verifyEmbedToken(token: string | null): EmbedIdentity | null {
 export function verifyPending2faToken(token: string | null): string | null {
   if (usersMap.size === 0) loadUsers();
   try {
-    const decoded = jwt.verify(String(token || ''), JWT_SECRET) as { scope?: string; id?: string };
+    const decoded = jwt.verify(String(token || ''), JWT_SECRET) as { scope?: string; id?: string; tv?: number };
     if (decoded.scope !== '2fa-pending' || !decoded.id) return null;
     // The challenged account must still exist — a challenge minted for a user
     // deleted mid-flow must not complete into a session for a ghost.
     const user = usersMap.get(decoded.id);
     if (!user) return null;
+    if ((decoded.tv || 0) !== (user.tokenVersion || 0)) return null;
     return user.id;
   } catch {
     return null;

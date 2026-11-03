@@ -25,6 +25,7 @@ import { checkUserWrite } from '../services/user-write-limiter';
 import { checkProjectAccess } from '../middleware/auth';
 import { canonicalProjectSlug } from '../services/project-slug-core';
 import type { UserRole } from '../services/user-store';
+import { getUserInfo, getUserPermissions } from '../services/user-store';
 
 const MAX_PROMPT_CHARS = 20000;
 const MAX_HISTORY_TURNS = 20;
@@ -161,7 +162,7 @@ export function handleChatSocket(
   ws: WebSocket,
   slug: string,
   chatId: string,
-  authUser: { id: string; username: string; role: UserRole; jti?: string } | null,
+  authUser: { id: string; username: string; role: UserRole; permissions?: { projectWrite: boolean; projectTeam: boolean }; jti?: string } | null,
   onRelease: () => void
 ): void {
   // Project-level authorization matches the REST surface: 'global' is not a
@@ -170,8 +171,8 @@ export function handleChatSocket(
   // admins always pass; legacy projects without membership data stay open.
   const notGlobal = slug !== 'global';
   const ctx = notGlobal
-    ? { read: checkProjectAccess(authUser?.id ?? '', authUser?.role ?? 'viewer', slug, 'viewer').allowed,
-        write: checkProjectAccess(authUser?.id ?? '', authUser?.role ?? 'viewer', slug, 'editor').allowed }
+    ? { read: checkProjectAccess(authUser?.id ?? '', authUser?.role ?? 'viewer', slug, 'viewer', authUser?.permissions).allowed,
+        write: checkProjectAccess(authUser?.id ?? '', authUser?.role ?? 'viewer', slug, 'editor', authUser?.permissions).allowed }
     : { read: true, write: true };
   if (!ctx.read) {
     onRelease();
@@ -208,8 +209,19 @@ export function handleChatSocket(
       return;
     }
 
+    const liveUserInfo = authUser ? getUserInfo(authUser.id) : null;
+    if (authUser && !liveUserInfo) {
+      ws.close(1008, 'account unavailable');
+      return;
+    }
+    const liveUser = liveUserInfo
+      ? { ...liveUserInfo, permissions: getUserPermissions(liveUserInfo.id) }
+      : null;
+    const canWrite = !notGlobal && !!liveUser || (!!liveUser &&
+      checkProjectAccess(liveUser.id, liveUser.role, slug, 'editor', liveUser.permissions).allowed);
+
     if (msg.type === 'stop') {
-      if (!ctx.write) {
+      if (!canWrite) {
         sendJson(ws, { type: 'error', message: 'Read-only: only editors can control this chat.' });
         return;
       }
@@ -223,7 +235,7 @@ export function handleChatSocket(
       return;
     }
 
-    if (!ctx.write) {
+    if (!canWrite) {
       sendJson(ws, { type: 'error', message: 'Read-only: only editors can send messages to this project chat.' });
       return;
     }
@@ -252,8 +264,8 @@ export function handleChatSocket(
     // the global room is open to every authenticated user, and a message may
     // name a different project than the room it was sent to. Read is enough
     // (context is read data); 'all' stays open, mirroring /api/projects.
-    if (project && project !== 'all' && authUser) {
-      const scope = checkProjectAccess(authUser.id, authUser.role, project, 'viewer');
+    if (project && project !== 'all' && liveUser) {
+      const scope = checkProjectAccess(liveUser.id, liveUser.role, project, 'viewer', liveUser.permissions);
       if (!scope.allowed) {
         sendJson(ws, { type: 'error', message: 'Project access denied' });
         return;
@@ -262,7 +274,7 @@ export function handleChatSocket(
 
     // Per-user write budget (NAT-shared safe). Reject the message, but keep the
     // socket open so the client can back off and retry — never drop the WS.
-    const retryAfter = checkUserWrite(authUser?.id, undefined);
+    const retryAfter = checkUserWrite(liveUser?.id, undefined);
     if (retryAfter > 0) {
       sendJson(ws, { type: 'error', message: 'Rate limited. Slow down your messages and try again shortly.' });
       return;

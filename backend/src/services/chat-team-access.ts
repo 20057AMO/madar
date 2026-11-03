@@ -12,6 +12,7 @@
 import { checkProjectAccess } from '../middleware/auth';
 import { canonicalProjectSlug } from './project-slug-core';
 import type { UserRole } from '../services/user-store';
+import type { UserPermissions } from './user-permissions-core';
 import { isChannelAdmin, type CanSendMode, type TeamChannel } from '../services/chat-team-core';
 
 export type AccessLevel = 'none' | 'read' | 'write';
@@ -20,6 +21,7 @@ export interface ChatUser {
   id: string;
   username: string;
   role: UserRole;
+  permissions?: UserPermissions;
 }
 
 export function canAccessChannel(user: ChatUser, channel: TeamChannel): AccessLevel {
@@ -33,9 +35,9 @@ export function canAccessChannel(user: ChatUser, channel: TeamChannel): AccessLe
     // spelling and would also reject mismatch; we fail closed explicitly.
     const slug = canonicalProjectSlug(channel.projectSlug);
     if (!slug || slug !== channel.projectSlug) return 'none';
-    const read = checkProjectAccess(user.id, user.role, slug, 'viewer').allowed;
+    const read = checkProjectAccess(user.id, user.role, slug, 'viewer', user.permissions).allowed;
     if (!read) return 'none';
-    const write = checkProjectAccess(user.id, user.role, slug, 'editor').allowed;
+    const write = checkProjectAccess(user.id, user.role, slug, 'editor', user.permissions).allowed;
     return write ? 'write' : 'read';
   }
 

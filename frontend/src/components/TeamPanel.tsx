@@ -87,7 +87,10 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
   // Who may manage members: system admins, the (local) owner, and admin
   // members. A plain caller — even a project viewer/editor — sees the roster
   // read-only instead of buttons that would always 403.
-  const canManage = currentUser?.role === 'admin' || ownerId === currentUser?.id || myMemberRole === 'admin';
+  const canManage = currentUser?.role === 'admin' || ownerId === currentUser?.id || myMemberRole === 'admin' ||
+    (currentUser?.permissions?.projectTeam === true && !!myMemberRole);
+  const canAssignAdmin = currentUser?.role === 'admin' || ownerId === currentUser?.id || myMemberRole === 'admin';
+  const canTransfer = currentUser?.role === 'admin' || ownerId === currentUser?.id || myMemberRole === 'admin';
 
   const loadMembers = async () => {
     try {
@@ -221,7 +224,7 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
           >
             <option value="viewer">{t2('عارض', 'Viewer')}</option>
             <option value="editor">{t2('محرر', 'Editor')}</option>
-            <option value="admin">{t2('مدير', 'Admin')}</option>
+            {canAssignAdmin && <option value="admin">{t2('مدير', 'Admin')}</option>}
           </select>
           <button
             class="btn-primary sm"
@@ -291,21 +294,21 @@ export function TeamPanel({ slug, project, onlineUsers = [] }: Props) {
                       >
                         <option value="viewer">{t2('عارض', 'Viewer')}</option>
                         <option value="editor">{t2('محرر', 'Editor')}</option>
-                        <option value="admin">{t2('مدير', 'Admin')}</option>
+                        {canAssignAdmin && <option value="admin">{t2('مدير', 'Admin')}</option>}
                       </select>
                     ) : (
                       <span class="member-meta"><RoleBadge role={m.role} ar={ar} /></span>
                     )}
                     {canManage && !isOwner && (
                       <>
-                        <button
+                        {canTransfer && <button
                           class="btn-ghost sm"
                           title={t2('نقل الملكية', 'Transfer ownership')}
                           aria-label={t2(`نقل الملكية إلى ${m.username}`, `Transfer ownership to ${m.username}`)}
                           onClick={() => { setTransferError(null); setTransferTarget(m); }}
                         >
                           <Crown class="icon icon-sm" />
-                        </button>
+                        </button>}
                         <button
                           class="btn-danger sm"
                           title={t2('إزالة العضو', 'Remove member')}
