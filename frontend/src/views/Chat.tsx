@@ -1859,6 +1859,7 @@ export function Chat() {
   };
 
   const canDelete = (c: ChatChannel) => {
+    if (c.kind === 'project') return user?.role === 'admin';
     if (c.kind !== 'channel') return false;
     return user?.role === 'admin' || c.createdBy === meId;
   };

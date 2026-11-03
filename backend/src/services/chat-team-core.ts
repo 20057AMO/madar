@@ -59,6 +59,7 @@ export interface TeamChannel {
   members: ChannelMember[];
   createdBy?: string;
   createdAt: string;
+  deletedAt?: string;
   lastMessageAt?: string;
   pinnedMessageId?: string | null;
 }

@@ -157,6 +157,10 @@ export function broadcastChannelUpdate(channelId: string, canSend: CanSendMode):
   broadcastToChannel(channelId, { type: 'channel_update', channel: { id: channelId, canSend } });
 }
 
+export function broadcastChannelDeleted(channelId: string): void {
+  broadcastToChannel(channelId, { type: 'channel_deleted', channelId });
+}
+
 /** Push the @madar bot's typing indicator to a channel's subscribers. */
 export function broadcastBotTyping(channelId: string, typing: boolean): void {
   broadcastToChannel(channelId, {

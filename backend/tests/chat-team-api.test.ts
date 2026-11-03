@@ -421,16 +421,25 @@ test('read position drives unread counts', async () => {
   assert.strictEqual(bad.status, 400);
 });
 
-test('channel delete: admin can, non-creator editor cannot, kind guard', async () => {
-  // A project channel can never be deleted as a "manual" delete.
+test('channel delete: admin can delete project channels; they stay deleted across recreate', async () => {
   const slug = uniqueId('teamchat');
   const created = await api('POST', '/projects', { name: 'Team Chat T', slug });
   assert.strictEqual(created.status, 201, `create project: ${created.status}`);
   createdSlugs.push(slug);
 
   const projChannel = `project:${slug}`;
+  const globalEditorDelete = await runAs(await globalEditorToken())('DELETE', `${chatBase}/channels/${projChannel}`);
+  assert.strictEqual(globalEditorDelete.status, 403, JSON.stringify(globalEditorDelete.json));
+
+  const projectMessage = await sendChannelMessage(projChannel, 'remove project chat');
+  assert.ok(projectMessage.id);
   const delProj = await api('DELETE', `${chatBase}/channels/${projChannel}`);
-  assert.strictEqual(delProj.status, 400, JSON.stringify(delProj.json));
+  assert.strictEqual(delProj.status, 200, JSON.stringify(delProj.json));
+  assert.strictEqual((await api('GET', `${chatBase}/channels/${projChannel}`)).status, 404);
+
+  const recreated = await api('POST', `/projects/${slug}/recreate`);
+  assert.strictEqual(recreated.status, 200, `recreate project: ${recreated.status} ${JSON.stringify(recreated.json)}`);
+  assert.strictEqual((await api('GET', `${chatBase}/channels/${projChannel}`)).status, 404, 'deleted project chat must not reappear after recreate');
 
   // Admin role always passes manual-channel deletion regardless of creator.
   const ch = await makeChannel(uniqueId('del'));

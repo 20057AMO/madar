@@ -11,6 +11,8 @@ import fs from 'fs';
 import path from 'path';
 
 import { HttpError } from './docker-manager';
+import { readMeta } from './projects-meta';
+import { canonicalProjectSlug } from './project-slug-core';
 
 import {
   listUsers,
@@ -77,6 +79,7 @@ import {
   broadcastPinChange,
   broadcastPinnedUpdate,
   broadcastChannelUpdate,
+  broadcastChannelDeleted,
   getChatTeamPresence,
 } from '../ws/ws-chat-team';
 import { teamChatBot } from './chat-team-bot';
@@ -269,19 +272,32 @@ export function registerChatTeamRoutes(app: any): void {
     res.json({ channel: enrichChannel(channel, idx, user), level });
   });
 
-  // Delete a manual channel (creator or admin; editor+ level overall).
+  // Delete a manual channel or a project channel (system admin only).
   r.delete('/channels/:channelId', chatWriteLimiter, async (req: any, res) => {
     const cid = req.params.channelId;
     if (!isChannelId(cid)) return res.status(400).json({ error: 'Invalid channel id' });
     const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
     const channel = getChannel(cid);
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
-    if (channel.kind !== 'channel') return res.status(400).json({ error: 'Only manual channels can be deleted' });
-    const isCreator = channel.createdBy === user.id;
-    if (user.role !== 'admin' && !(user.role === 'editor' && isCreator)) {
-      return res.status(403).json({ error: 'Only the creator or an admin can delete this channel' });
+    if (channel.kind === 'project') {
+      if (user.role !== 'admin') {
+        return res.status(403).json({ error: 'Only a system admin can delete a project channel' });
+      }
+      const slug = channel.projectSlug || '';
+      if (canonicalProjectSlug(slug) !== slug || cid !== `project:${slug}`) {
+        return res.status(400).json({ error: 'Invalid project channel' });
+      }
+      await deleteChannel(cid, { preserveProjectChannel: readMeta(slug).state !== 'absent' });
+    } else if (channel.kind === 'channel') {
+      const isCreator = channel.createdBy === user.id;
+      if (user.role !== 'admin' && !(user.role === 'editor' && isCreator)) {
+        return res.status(403).json({ error: 'Only the creator or an admin can delete this channel' });
+      }
+      await deleteChannel(cid);
+    } else {
+      return res.status(400).json({ error: 'Direct message channels cannot be deleted' });
     }
-    await deleteChannel(cid);
+    broadcastChannelDeleted(cid);
     res.json({ ok: true });
   });
 

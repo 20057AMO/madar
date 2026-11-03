@@ -108,7 +108,7 @@ export function getLastMessage(channelId: string): TeamMessage | null {
 
 /** All channels (raw — access filtering happens in the caller). */
 export function listChannels(): TeamChannel[] {
-  return readChannelsRaw().channels;
+  return readChannelsRaw().channels.filter((channel) => !channel.deletedAt);
 }
 
 /** All channels the user is a participant of (direct dm: only participant). */
@@ -259,7 +259,10 @@ export async function setChannelCanSend(channelId: string, canSend: CanSendMode)
 }
 
 /** Remove a deleted project's auto-channel + its messages + uploads. */
-export async function deleteChannel(channelId: string): Promise<void> {
+export async function deleteChannel(
+  channelId: string,
+  options: { preserveProjectChannel?: boolean } = {}
+): Promise<void> {
   const cid = isChannelId(channelId) ? channelId : '';
   if (!cid) return;
   await withFileLockAsync(`msgs:${cid}`, async () => {
@@ -292,6 +295,12 @@ export async function deleteChannel(channelId: string): Promise<void> {
       }
     }
     await updateChannels((channels) => {
+      const channel = channels.find((c) => c.id === cid);
+      if (options.preserveProjectChannel && channel?.kind === 'project') {
+        if (channel.deletedAt) return { changed: false, result: undefined };
+        channel.deletedAt = new Date().toISOString();
+        return { changed: true, result: undefined };
+      }
       const filtered = channels.filter((c) => c.id !== cid);
       const changed = filtered.length !== channels.length;
       channels.splice(0, channels.length, ...filtered);
