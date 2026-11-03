@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { Download, TriangleAlert, Globe, Copy, Loader2, Check, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit, Link2, Sparkles, Lightbulb, GitBranch, RefreshCw, Upload } from 'lucide-preact';
+import { Download, TriangleAlert, Globe, Copy, Loader2, Check, X, Pencil, FileArchive, Folder, FileText, FileCode, FileJson, FileImage, Home, Bot, FolderOpen, ScrollText, SquareTerminal, StickyNote, Wrench, Users, Camera, PenTool, History, MessageSquare, BrainCircuit, Link2, Sparkles, Lightbulb, GitBranch, RefreshCw, Upload } from 'lucide-preact';
 import { useHashLocation } from 'wouter/use-hash-location';
 import {
   getProject,
@@ -15,6 +15,11 @@ import {
   cloneProject,
   getProjectGit,
   pushProjectGit,
+  stageProjectGit,
+  unstageProjectGit,
+  commitProjectGit,
+  pullProjectGit,
+  checkoutProjectGitBranch,
   updateProjectTags,
   getProjectStats,
   checkProjectPorts,
@@ -775,7 +780,18 @@ export function Project({ params }: { params: { slug: string } }) {
       </nav>
 
       <div id={`pane-${tab}`} role="tabpanel" aria-labelledby={`ptab-${tab}`} tabIndex={0} ref={paneRef}>
-        {tab === 'overview' && <OverviewPanel slug={slug} project={project} liveStats={liveStats} readOnly={readOnly} onChanged={load} onError={setError} />}
+        {tab === 'overview' && (
+          <OverviewPanel
+            slug={slug}
+            project={project}
+            liveStats={liveStats}
+            readOnly={readOnly}
+            gitAuthorName={user?.profile?.displayName || user?.username || ''}
+            gitAuthorEmail={user?.profile?.email || ''}
+            onChanged={load}
+            onError={setError}
+          />
+        )}
         {tab === 'chat' && <ProjectChat slug={slug} readOnly={readOnly}  />}
         {tab === 'files' && <FilesPanel slug={slug} readOnly={readOnly} />}
         {tab === 'reviews' && (
@@ -820,6 +836,8 @@ function OverviewPanel({
   project,
   liveStats,
   readOnly,
+  gitAuthorName,
+  gitAuthorEmail,
   onChanged,
   onError,
 }: {
@@ -827,6 +845,8 @@ function OverviewPanel({
   project: Project | null;
   liveStats: ProjectStats | null;
   readOnly: boolean;
+  gitAuthorName: string;
+  gitAuthorEmail: string;
   onChanged: () => void;
   onError: (msg: string) => void;
 }) {
@@ -848,8 +868,16 @@ function OverviewPanel({
   const [gitRepoPath, setGitRepoPath] = useState('');
   const [gitLoading, setGitLoading] = useState(false);
   const [gitPushing, setGitPushing] = useState(false);
+  const [gitWorking, setGitWorking] = useState(false);
+  const [gitOperation, setGitOperation] = useState<'stage' | 'unstage' | 'commit' | 'pull' | 'branch-create' | 'branch-switch' | null>(null);
   const [gitMsg, setGitMsg] = useState<string | null>(null);
   const [confirmGitPush, setConfirmGitPush] = useState(false);
+  const [confirmGitPull, setConfirmGitPull] = useState(false);
+  const [selectedGitFiles, setSelectedGitFiles] = useState<string[]>([]);
+  const [gitCommitText, setGitCommitText] = useState('');
+  const [gitAuthor, setGitAuthor] = useState(gitAuthorName);
+  const [gitEmail, setGitEmail] = useState(gitAuthorEmail);
+  const [gitNewBranch, setGitNewBranch] = useState('');
   const gitRequestRef = useRef(0);
 
   const [envText, setEnvText] = useState('');
@@ -919,6 +947,7 @@ function OverviewPanel({
       setGitRepoPath((current) => repositories.some((repo) => repo.path === current)
         ? current
         : (repositories[0]?.path ?? ''));
+      setSelectedGitFiles([]);
       return true;
     } catch (err: any) {
       if (requestId === gitRequestRef.current) {
@@ -946,6 +975,97 @@ function OverviewPanel({
       setGitPushing(false);
     }
   };
+
+  const runGitMutation = async <T,>(
+    kind: NonNullable<typeof gitOperation>,
+    operation: () => Promise<T>,
+    successMessage: (result: T) => string,
+    failureLabel: string,
+  ) => {
+    setGitWorking(true);
+    setGitOperation(kind);
+    setGitMsg(null);
+    try {
+      const result = await operation();
+      if (await refreshGitStatus()) setGitMsg(successMessage(result));
+    } catch (err: any) {
+      setGitMsg(`${failureLabel}: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setGitWorking(false);
+      setGitOperation(null);
+    }
+  };
+
+  const selectedUnstagedPaths = selectedGitRepo?.changes
+    .filter((change) => change.unstaged && selectedGitFiles.includes(change.path))
+    .map((change) => change.path) ?? [];
+  const selectedStagedPaths = selectedGitRepo?.changes
+    .filter((change) => change.staged && selectedGitFiles.includes(change.path))
+    .map((change) => change.path) ?? [];
+
+  const stageSelectedGitFiles = () => {
+    if (!selectedGitRepo || !selectedUnstagedPaths.length) return;
+    void runGitMutation(
+      'stage',
+      () => stageProjectGit(slug, selectedGitRepo.path, selectedUnstagedPaths),
+      (result) => t('project.gitStageSuccess', { count: result.paths.length }),
+      t('project.gitStageFailed'),
+    );
+  };
+
+  const unstageSelectedGitFiles = () => {
+    if (!selectedGitRepo || !selectedStagedPaths.length) return;
+    void runGitMutation(
+      'unstage',
+      () => unstageProjectGit(slug, selectedGitRepo.path, selectedStagedPaths),
+      (result) => t('project.gitUnstageSuccess', { count: result.paths.length }),
+      t('project.gitUnstageFailed'),
+    );
+  };
+
+  const commitGitChanges = () => {
+    if (!selectedGitRepo) return;
+    void runGitMutation(
+      'commit',
+      () => commitProjectGit(slug, selectedGitRepo.path, gitCommitText, gitAuthor, gitEmail),
+      (result) => {
+        setGitCommitText('');
+        return t('project.gitCommitSuccess', { commit: result.commit });
+      },
+      t('project.gitCommitFailed'),
+    );
+  };
+
+  const pullGitChanges = () => {
+    if (!selectedGitRepo) return;
+    setConfirmGitPull(false);
+    void runGitMutation(
+      'pull',
+      () => pullProjectGit(slug, selectedGitRepo.path),
+      (result) => t('project.gitPullSuccess', { branch: result.branch }),
+      t('project.gitPullFailed'),
+    );
+  };
+
+  const changeGitBranch = (branch: string, create: boolean) => {
+    if (!selectedGitRepo || !branch) return;
+    void runGitMutation(
+      create ? 'branch-create' : 'branch-switch',
+      () => checkoutProjectGitBranch(slug, selectedGitRepo.path, branch, create),
+      (result) => {
+        if (create) setGitNewBranch('');
+        return create
+          ? t('project.gitBranchCreateSuccess', { branch: result.branch })
+          : t('project.gitBranchSwitchSuccess', { branch: result.branch });
+      },
+      t('project.gitBranchFailed'),
+    );
+  };
+
+  useEffect(() => {
+    setGitAuthor(gitAuthorName);
+    setGitEmail(gitAuthorEmail);
+  }, [slug, gitAuthorName, gitAuthorEmail]);
 
   const visible = useDocumentVisible();
   const visibleRef = useRef(visible);
@@ -1587,7 +1707,7 @@ function OverviewPanel({
               aria-label={t('project.gitRefresh')}
               title={t('project.gitRefresh')}
               onClick={() => void refreshGitStatus()}
-              disabled={gitLoading || gitPushing}
+              disabled={gitLoading || gitWorking || gitPushing}
             >
               {gitLoading
                 ? <Loader2 width={14} height={14} class="icon spin" />
@@ -1606,7 +1726,10 @@ function OverviewPanel({
                   class="modern-input git-repo-select"
                   aria-label={t('project.gitRepository')}
                   value={selectedGitRepo?.path ?? ''}
-                  onChange={(e: any) => setGitRepoPath(e.target.value)}
+                  onChange={(e: any) => {
+                    setGitRepoPath(e.target.value);
+                    setSelectedGitFiles([]);
+                  }}
                 >
                   {gitRepositories.map((repo) => (
                     <option key={repo.path} value={repo.path}>
@@ -1631,42 +1754,201 @@ function OverviewPanel({
                         : t('project.gitClean')}
                     </span>
                   </div>
+                  {!readOnly && (
+                    <div class="git-branch-tools">
+                      {selectedGitRepo.branches.length > 0 && (
+                        <select
+                          class="modern-input"
+                          aria-label={t('project.gitBranch')}
+                          value={selectedGitRepo.branch ?? ''}
+                          disabled={gitWorking || gitPushing || selectedGitRepo.changes.length > 0}
+                          onChange={(e: any) => changeGitBranch(e.target.value, false)}
+                        >
+                          {!selectedGitRepo.branch && <option value="">{t('project.gitDetached')}</option>}
+                          {selectedGitRepo.branches.map((branch) => (
+                            <option key={branch} value={branch}>{branch}</option>
+                          ))}
+                        </select>
+                      )}
+                      <input
+                        class="modern-input"
+                        aria-label={t('project.gitNewBranch')}
+                        placeholder={t('project.gitNewBranch')}
+                        value={gitNewBranch}
+                        disabled={gitWorking || gitPushing || selectedGitRepo.changes.length > 0}
+                        onInput={(e: any) => setGitNewBranch(e.target.value)}
+                        onKeyDown={(e: any) => e.key === 'Enter' && changeGitBranch(gitNewBranch.trim(), true)}
+                      />
+                      <button
+                        type="button"
+                        class="btn-ghost sm"
+                        onClick={() => changeGitBranch(gitNewBranch.trim(), true)}
+                        disabled={gitWorking || gitPushing || selectedGitRepo.changes.length > 0 || !gitNewBranch.trim()}
+                      >
+                        {gitOperation === 'branch-create'
+                          ? <Loader2 width={13} height={13} class="icon spin" />
+                          : <GitBranch width={13} height={13} class="icon" />}
+                        {gitOperation === 'branch-create' ? t('project.gitCreatingBranch') : t('project.gitCreateBranch')}
+                      </button>
+                    </div>
+                  )}
                   <div class="git-status-row">
                     {selectedGitRepo.ahead > 0 && <span class="git-count ahead">{t('project.gitAhead', { count: selectedGitRepo.ahead })}</span>}
                     {selectedGitRepo.behind > 0 && <span class="git-count behind">{t('project.gitBehind', { count: selectedGitRepo.behind })}</span>}
                     {!selectedGitRepo.upstream && <span class="git-status-note">{t('project.gitNoUpstream')}</span>}
                     {selectedGitRepo.changes.length > 0 && <span class="git-status-note">{t('project.gitCommitFirst')}</span>}
+                    {gitOperation === 'branch-switch' && <span class="git-status-note">{t('project.gitSwitchingBranch')}</span>}
                     {!readOnly && (
-                      <button
-                        type="button"
-                        class="btn-primary sm git-push-button"
-                        onClick={() => setConfirmGitPush(true)}
-                        disabled={gitPushing || !selectedGitRepo.upstream || selectedGitRepo.ahead === 0 || selectedGitRepo.behind > 0}
-                      >
-                        {gitPushing
-                          ? <Loader2 width={13} height={13} class="icon spin" />
-                          : <Upload width={13} height={13} class="icon" />}
-                        {gitPushing ? t('project.gitPushing') : t('project.gitPush')}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          class="btn-ghost sm"
+                          onClick={() => setConfirmGitPull(true)}
+                          disabled={gitWorking || gitPushing || !selectedGitRepo.upstream || selectedGitRepo.changes.length > 0}
+                        >
+                          {gitOperation === 'pull'
+                            ? <Loader2 width={13} height={13} class="icon spin" />
+                            : <Download width={13} height={13} class="icon" />}
+                          {gitOperation === 'pull' ? t('project.gitPulling') : t('project.gitPull')}
+                        </button>
+                        <button
+                          type="button"
+                          class="btn-primary sm git-push-button"
+                          onClick={() => setConfirmGitPush(true)}
+                          disabled={gitWorking || gitPushing || !selectedGitRepo.upstream || selectedGitRepo.ahead === 0 || selectedGitRepo.behind > 0}
+                        >
+                          {gitPushing
+                            ? <Loader2 width={13} height={13} class="icon spin" />
+                            : <Upload width={13} height={13} class="icon" />}
+                          {gitPushing ? t('project.gitPushing') : t('project.gitPush')}
+                        </button>
+                      </>
                     )}
                   </div>
 
                   {selectedGitRepo.changes.length > 0 && (
-                    <div class="git-file-list" aria-label={t('project.gitChanges')}>
-                      {selectedGitRepo.changes.map((change) => (
-                        <div class="git-file-row" key={`${change.status}:${change.path}`}>
-                          <span class={`git-file-status ${
-                            change.status.includes('?') || change.status.includes('A')
-                              ? 'status-added'
-                              : change.status.includes('D')
-                                ? 'status-deleted'
-                                : change.status.includes('M')
-                                  ? 'status-modified'
-                                  : 'status-changed'
-                          }`}>{change.status}</span>
-                          <code title={change.path}>{change.path}</code>
+                    <>
+                      {!readOnly && (
+                        <div class="git-file-actions">
+                          <span class="git-status-note">
+                            {t('project.gitSelectedCount', { count: selectedGitFiles.length })}
+                          </span>
+                          <button
+                            type="button"
+                            class="btn-ghost sm"
+                            onClick={stageSelectedGitFiles}
+                            disabled={gitWorking || gitPushing || !selectedUnstagedPaths.length}
+                          >
+                            {gitOperation === 'stage'
+                              ? <Loader2 width={13} height={13} class="icon spin" />
+                              : <Check width={13} height={13} class="icon" />}
+                            {gitOperation === 'stage' ? t('project.gitStaging') : t('project.gitStageSelected')}
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-ghost sm"
+                            onClick={unstageSelectedGitFiles}
+                            disabled={gitWorking || gitPushing || !selectedStagedPaths.length}
+                          >
+                            {gitOperation === 'unstage'
+                              ? <Loader2 width={13} height={13} class="icon spin" />
+                              : <X width={13} height={13} class="icon" />}
+                            {gitOperation === 'unstage' ? t('project.gitUnstaging') : t('project.gitUnstageSelected')}
+                          </button>
                         </div>
-                      ))}
+                      )}
+                      <div class="git-file-list" aria-label={t('project.gitChanges')}>
+                        {selectedGitRepo.changes.map((change) => (
+                          <label class="git-file-row" key={`${change.status}:${change.path}`}>
+                            {!readOnly && (
+                              <input
+                                type="checkbox"
+                                aria-label={t('project.gitSelectFile', { path: change.path })}
+                                checked={selectedGitFiles.includes(change.path)}
+                                disabled={gitWorking || gitPushing}
+                                onChange={(e: any) => {
+                                  const checked = e.currentTarget.checked;
+                                  setSelectedGitFiles((current) => checked
+                                    ? [...current, change.path]
+                                    : current.filter((value) => value !== change.path));
+                                }}
+                              />
+                            )}
+                            <span class={`git-file-status ${
+                              change.status.includes('?') || change.status.includes('A')
+                                ? 'status-added'
+                                : change.status.includes('D')
+                                  ? 'status-deleted'
+                                  : change.status.includes('M')
+                                    ? 'status-modified'
+                                    : 'status-changed'
+                            }`}>{change.status}</span>
+                            <code title={change.path}>{change.path}</code>
+                            {change.staged && <span class="git-file-state">{t('project.gitStaged')}</span>}
+                            {change.unstaged && <span class="git-file-state">{t('project.gitUnstaged')}</span>}
+                          </label>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {!readOnly && (
+                    <div class="git-commit-box">
+                      <div class="git-author-row">
+                        <input
+                          class="modern-input"
+                          aria-label={t('project.gitAuthorName')}
+                          placeholder={t('project.gitAuthorName')}
+                          value={gitAuthor}
+                          onInput={(e: any) => setGitAuthor(e.target.value)}
+                          disabled={gitWorking || gitPushing}
+                        />
+                        <input
+                          class="modern-input"
+                          type="email"
+                          aria-label={t('project.gitAuthorEmail')}
+                          placeholder={t('project.gitAuthorEmail')}
+                          value={gitEmail}
+                          onInput={(e: any) => setGitEmail(e.target.value)}
+                          disabled={gitWorking || gitPushing}
+                        />
+                      </div>
+                      <div class="git-status-note">{t('project.gitAuthorHint')}</div>
+                      <div class="git-commit-row">
+                        <textarea
+                          class="modern-input"
+                          aria-label={t('project.gitCommitMessage')}
+                          placeholder={t('project.gitCommitMessage')}
+                          rows={2}
+                          maxLength={5000}
+                          value={gitCommitText}
+                          onInput={(e: any) => setGitCommitText(e.target.value)}
+                          onKeyDown={(e: any) => {
+                            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                              e.preventDefault();
+                              commitGitChanges();
+                            }
+                          }}
+                          disabled={gitWorking || gitPushing}
+                        />
+                        <button
+                          type="button"
+                          class="btn-primary sm"
+                          onClick={commitGitChanges}
+                          disabled={
+                            gitWorking
+                            || gitPushing
+                            || !selectedGitRepo.changes.some((change) => change.staged)
+                            || !gitCommitText.trim()
+                            || !gitAuthor.trim()
+                            || !gitEmail.trim()
+                          }
+                        >
+                          {gitOperation === 'commit'
+                            ? <Loader2 width={13} height={13} class="icon spin" />
+                            : <Check width={13} height={13} class="icon" />}
+                          {gitOperation === 'commit' ? t('project.gitCommitting') : t('project.gitCommit')}
+                        </button>
+                      </div>
                     </div>
                   )}
                   {selectedGitRepo.diff && (
@@ -1702,7 +1984,7 @@ function OverviewPanel({
                   onInput={(e: any) => setCloneUrl(e.target.value)}
                   onKeyDown={(e: any) => e.key === 'Enter' && void doClone()}
                 />
-                <button class="btn-ghost sm" onClick={() => void doClone()} disabled={cloning || !cloneUrl.trim()}>
+                <button class="btn-ghost sm" onClick={() => void doClone()} disabled={cloning || gitWorking || gitPushing || !cloneUrl.trim()}>
                   {cloning
                     ? <Loader2 width={13} height={13} class="icon spin" />
                     : <GitBranch width={13} height={13} class="icon" />}
@@ -1951,6 +2233,19 @@ function OverviewPanel({
           confirmLabel={t('project.gitPush')}
           onConfirm={pushGitChanges}
           onCancel={() => setConfirmGitPush(false)}
+        />
+        <ConfirmModal
+          open={confirmGitPull}
+          danger={false}
+          loading={gitWorking}
+          title={t('project.gitPullConfirmTitle')}
+          message={t('project.gitPullConfirmMessage', {
+            branch: selectedGitRepo?.branch || '',
+            upstream: selectedGitRepo?.upstream || '',
+          })}
+          confirmLabel={t('project.gitPull')}
+          onConfirm={pullGitChanges}
+          onCancel={() => setConfirmGitPull(false)}
         />
 
         {/* ── Activity ── */}

@@ -96,7 +96,13 @@ export type AuditEvent =
   | 'digest-delete'
   | 'suggestion-dismiss'
   | 'suggestion-accept'
+  | 'git-stage'
+  | 'git-unstage'
+  | 'git-commit'
+  | 'git-pull'
   | 'git-push'
+  | 'git-branch-create'
+  | 'git-branch-switch'
   | 'mount-audit';
 
 export interface AuditEntry {

@@ -1823,6 +1823,15 @@ textarea.agent-prompt-input {
 .git-panel-title .icon { color: var(--blue); }
 .git-repo-select { max-width: 100%; }
 .git-branch-row { min-width: 0; flex-wrap: wrap; }
+.git-branch-tools, .git-file-actions, .git-author-row, .git-commit-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.git-branch-tools > .modern-input, .git-author-row > .modern-input { min-width: 0; flex: 1 1 150px; }
+.git-branch-tools > select.modern-input { max-width: 220px; }
 .git-branch-name {
   display: inline-flex;
   align-items: center;
@@ -1870,12 +1879,20 @@ textarea.agent-prompt-input {
   padding: 6px 9px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
 }
+.git-file-row { cursor: pointer; }
+.git-file-row input[type="checkbox"] { flex: 0 0 auto; align-self: center; margin: 0; accent-color: var(--blue); }
 .git-file-row:last-child { border-bottom: 0; }
 .git-file-status { flex: 0 0 24px; color: var(--text-3); font: 600 0.65rem var(--mono); }
 .git-file-status.status-added { color: var(--green); }
 .git-file-status.status-modified { color: var(--yellow); }
 .git-file-status.status-deleted { color: var(--red); }
 .git-file-row code { min-width: 0; color: var(--text-2); font: 0.68rem var(--mono); overflow-wrap: anywhere; }
+.git-file-state { flex: 0 0 auto; color: var(--text-3); font-size: 0.62rem; }
+.git-commit-box { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.git-commit-row { align-items: flex-end; }
+.git-commit-row textarea { flex: 1 1 220px; min-width: 0; resize: vertical; }
+.git-file-actions { justify-content: flex-end; }
+.git-file-actions .git-status-note { margin-inline-end: auto; }
 .git-diff { border-top: 1px solid var(--border); padding-top: 10px; }
 .git-diff summary { color: var(--text-2); cursor: pointer; font-size: 0.7rem; }
 .git-diff pre {

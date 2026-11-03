@@ -1348,10 +1348,13 @@ export const cloneProject = (slug: string, url: string) =>
 export interface ProjectGitChange {
   path: string;
   status: string;
+  staged: boolean;
+  unstaged: boolean;
 }
 export interface ProjectGitRepository {
   path: string;
   branch: string | null;
+  branches: string[];
   upstream: string | null;
   ahead: number;
   behind: number;
@@ -1368,6 +1371,45 @@ export const pushProjectGit = (slug: string, repoPath: string) =>
     body: JSON.stringify({ path: repoPath }),
     signal: AbortSignal.timeout(130_000),
   });
+const projectGitWrite = <T>(slug: string, action: string, body: Record<string, unknown>, timeout = 30_000) =>
+  api<T>(`/api/projects/${slug}/git/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeout),
+  });
+export const stageProjectGit = (slug: string, repoPath: string, paths: string[]) =>
+  projectGitWrite<{ paths: string[] }>(slug, 'stage', { path: repoPath, paths });
+export const unstageProjectGit = (slug: string, repoPath: string, paths: string[]) =>
+  projectGitWrite<{ paths: string[] }>(slug, 'unstage', { path: repoPath, paths });
+export const commitProjectGit = (
+  slug: string,
+  repoPath: string,
+  message: string,
+  authorName: string,
+  authorEmail: string,
+) => projectGitWrite<{ branch: string | null; commit: string }>(
+  slug,
+  'commit',
+  { path: repoPath, message, authorName, authorEmail },
+);
+export const pullProjectGit = (slug: string, repoPath: string) =>
+  projectGitWrite<{ branch: string; upstream: string; output: string }>(
+    slug,
+    'pull',
+    { path: repoPath },
+    130_000,
+  );
+export const checkoutProjectGitBranch = (
+  slug: string,
+  repoPath: string,
+  branch: string,
+  create: boolean,
+) => projectGitWrite<{ branch: string }>(
+  slug,
+  'branch',
+  { path: repoPath, branch, create },
+);
 export const getProjectStats = (slug: string) =>
   api<{ stats: ProjectStats }>(`/api/projects/${slug}/stats`);
 export const checkProjectPorts = (slug: string) =>

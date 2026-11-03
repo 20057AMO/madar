@@ -44,7 +44,15 @@ import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorksp
 import { resolveContainedPath, parseUploadPaths, uploadRelativePath, copyContainedFile, readContainedFile } from './services/workspace-paths-core';
 import { loadMeta, readMeta, updateMeta, listMetaSlugs, memberList, writableMemberList } from './services/projects-meta';
 import { recordActivity, listActivity } from './services/project-activity';
-import { listProjectGitRepositories, pushProjectGit } from './services/project-git';
+import {
+  checkoutProjectGitBranch,
+  commitProjectGit,
+  listProjectGitRepositories,
+  pullProjectGit,
+  pushProjectGit,
+  stageProjectGitFiles,
+  unstageProjectGitFiles,
+} from './services/project-git';
 
 import { exportProjectSnapshot, importProjectSnapshot } from './services/project-snapshots';
 import { exportProjectZip } from './services/project-zip';
@@ -3205,6 +3213,85 @@ app.post('/api/projects/:slug/git/push', requireProjectAccess('editor'), userWri
     res.json(result);
   } catch (err: any) {
     recordAudit('git-push', false, req.ip, req.user?.id, { slug: req.params.slug });
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/git/stage', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
+  try {
+    const result = await stageProjectGitFiles(WORKSPACES_ROOT, req.params.slug, req.body?.path ?? '', req.body?.paths);
+    recordAudit('git-stage', true, req.ip, req.user?.id, { slug: req.params.slug, count: result.paths.length });
+    res.json(result);
+  } catch (err: any) {
+    recordAudit('git-stage', false, req.ip, req.user?.id, { slug: req.params.slug });
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/git/unstage', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
+  try {
+    const result = await unstageProjectGitFiles(WORKSPACES_ROOT, req.params.slug, req.body?.path ?? '', req.body?.paths);
+    recordAudit('git-unstage', true, req.ip, req.user?.id, { slug: req.params.slug, count: result.paths.length });
+    res.json(result);
+  } catch (err: any) {
+    recordAudit('git-unstage', false, req.ip, req.user?.id, { slug: req.params.slug });
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/git/commit', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
+  try {
+    const result = await commitProjectGit(
+      WORKSPACES_ROOT,
+      req.params.slug,
+      req.body?.path ?? '',
+      req.body?.message,
+      req.body?.authorName,
+      req.body?.authorEmail,
+    );
+    recordAudit('git-commit', true, req.ip, req.user?.id, {
+      slug: req.params.slug,
+      branch: result.branch,
+      commit: result.commit,
+    });
+    res.json(result);
+  } catch (err: any) {
+    recordAudit('git-commit', false, req.ip, req.user?.id, { slug: req.params.slug });
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/git/pull', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
+  try {
+    const result = await pullProjectGit(WORKSPACES_ROOT, req.params.slug, req.body?.path ?? '');
+    recordAudit('git-pull', true, req.ip, req.user?.id, {
+      slug: req.params.slug,
+      branch: result.branch,
+      upstream: result.upstream,
+    });
+    res.json(result);
+  } catch (err: any) {
+    recordAudit('git-pull', false, req.ip, req.user?.id, { slug: req.params.slug });
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:slug/git/branch', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
+  try {
+    const result = await checkoutProjectGitBranch(
+      WORKSPACES_ROOT,
+      req.params.slug,
+      req.body?.path ?? '',
+      req.body?.branch,
+      req.body?.create === true,
+    );
+    recordAudit(req.body?.create === true ? 'git-branch-create' : 'git-branch-switch', true, req.ip, req.user?.id, {
+      slug: req.params.slug,
+      branch: result.branch,
+    });
+    res.json(result);
+  } catch (err: any) {
+    recordAudit(req.body?.create === true ? 'git-branch-create' : 'git-branch-switch', false, req.ip, req.user?.id, { slug: req.params.slug });
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
