@@ -250,9 +250,10 @@ const RATE_WINDOW = 60_000; // 1 minute
 
 // Ceilings are env-tunable. Under WSD_TESTING=1 (the compose default for the
 // automated-suite container) the global/strict/agent-write/user-admin budgets
-// are relaxed so multi-suite teardown never trips them — while the
-// auth/unlock/totp brute-force scopes stay at their real values (that's what
-// security suites actually assert). Production should keep WSD_TESTING=0/absent.
+// are relaxed so multi-suite teardown never trips them — as is the per-user
+// write budget used by integration tests. The auth/unlock/totp brute-force
+// scopes stay at their real values (that's what security suites assert).
+// Production should keep WSD_TESTING=0/absent.
 function rateCeil(envKey: string, dflt: number, testValue: number): number {
   const raw = process.env[envKey];
   const n = raw ? Number(raw) : NaN;
@@ -263,7 +264,7 @@ const RATE_MAX = rateCeil('WSD_RATE_MAX', 240, 4000); // req/min global
 const RATE_STRICT_MAX = rateCeil('WSD_RATE_STRICT_MAX', 10, 400); // dangerous endpoints
 const RATE_AUTH_MAX = 10; // password-verification endpoints (brute-force guard)
 const RATE_USER_ADMIN_MAX = rateCeil('WSD_RATE_USER_ADMIN_MAX', 20, 2000); // admin user provisioning
-const RATE_USER_WRITE_MAX = 120; // per-user write budget (write-heavy endpoints)
+const RATE_USER_WRITE_MAX = process.env.WSD_TESTING === '1' ? 4000 : 120; // per-user write budget (write-heavy endpoints)
 
 // Per-user write limiter — keyed on the authenticated user id (falling back to
 // the shared IP when no user is present). For NAT-shared deployments a single
@@ -3448,8 +3449,5 @@ startAttachmentGcSweep();
 // host bind source for project containers and reports a broken mount instead of
 // letting every project file land in a directory nobody can see.
 startWorkspaceMountAudit();
-
-
-
 
 

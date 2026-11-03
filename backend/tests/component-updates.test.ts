@@ -31,7 +31,8 @@
  *   after()
  *     • restores the backed-up code-server files + launcher and SIGTERMs the
  *       supervised child so the entrypoint revives the ORIGINAL binary;
- *     • recreates the container with the DEFAULT env (WSD_UPDATE_*=, WSD_TESTING=0);
+ *     • recreates the container with the default update env and the original
+ *       test-mode setting (WSD_TESTING=1 in CI, 0 in a normal local stack);
  *     • clears updates state, deletes the temp admin, and asserts a final
  *       image-baseline code-server + healthy /api/updates so the box is left as found.
  *
@@ -449,11 +450,13 @@ const UPDATES_ENV = (port: number) => ({
   WSD_RATE_UPDATE_CHECK_MAX: '200',
 });
 
+const RESTORE_TESTING = process.env.WSD_TESTING === '1' ? '1' : '0';
+
 const RESTORE_ENV: Record<string, string> = {
   WSD_UPDATE_GITHUB_BASE: '',
   WSD_UPDATE_DOWNLOAD_BASE: '',
   WSD_UPDATE_NPM_REGISTRY: '',
-  WSD_TESTING: '0',
+  WSD_TESTING: RESTORE_TESTING,
   WSD_RATE_UPDATE_APPLY_MAX: '',
   WSD_RATE_UPDATE_CHECK_MAX: '',
 };

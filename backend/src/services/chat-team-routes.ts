@@ -107,9 +107,11 @@ const chatUpload = multer({
 /**
  * Per-user write budget for chat sends/uploads — chat is bursty, so give real
  * conversations headroom (240/min) while still capping runaway/agent loops.
+ * Integration tests get a higher ceiling so the serial stress suite can run.
  */
 function chatWriteLimiter(req: any, res: any, next: any): void {
-  const retryAfter = checkUserWrite(req?.user?.id, req?.ip, 60_000, 240);
+  const max = process.env.WSD_TESTING === '1' ? 4000 : 240;
+  const retryAfter = checkUserWrite(req?.user?.id, req?.ip, 60_000, max);
   if (retryAfter > 0) {
     res.set('Retry-After', String(retryAfter));
     return res.status(429).json({ error: 'Too many chat requests. Try again later.' });

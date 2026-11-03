@@ -316,7 +316,11 @@ describe('Project team & access control (real Docker container)', () => {
 
   // ── Ownership transfer (sudo op) ────────────────────────────
   test('transfer-owner requires the account password (400)', async () => {
-    const res = await reqAuth('POST', `/projects/${slug}/transfer-owner`, { userId: editorId });
+    const res = await postWithBackoff(
+      `/projects/${slug}/transfer-owner`,
+      { userId: editorId },
+      authHeaders()
+    );
     assert.strictEqual(res.status, 400, `transfer without password: ${res.status}`);
     const body = await res.json();
     assert.match(String(body.error || ''), /password/i);
@@ -376,7 +380,11 @@ describe('Project team & access control (real Docker container)', () => {
 
   test('transferring to the current owner is refused (400)', async (t) => {
     if (!ownerTransferred) return t.skip('requires the sudo transfer above (WSD_TEST_ACCOUNT_PASSWORD)');
-    const res = await reqAuth('POST', `/projects/${slug}/transfer-owner`, { userId: editorId });
+    const res = await postWithBackoff(
+      `/projects/${slug}/transfer-owner`,
+      { userId: editorId },
+      authHeaders()
+    );
     assert.strictEqual(res.status, 400, `self-transfer: ${res.status}`);
     const body = await res.json();
     assert.match(String(body.error || ''), /already the project owner/i);

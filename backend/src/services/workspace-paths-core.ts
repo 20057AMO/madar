@@ -1093,12 +1093,32 @@ export function renameContainedPath(
   // The cheap proof first, so a traversal / link / missing project answers with
   // the message callers already expect. It is not the control.
   const src = resolveContainedPath(root, slug, from);
+  const toParts = relPartsOf(to);
+  if (toParts.some((part) => part === '..')) throw new HttpError(400, invalidMessage);
+  if (src === base || toParts.length === 0) throw new HttpError(400, invalidMessage);
+  const dstCandidate = path.resolve(base, ...toParts);
+  if (src === dstCandidate) return { src, dst: src, noop: true, pinned: false };
+
+  const dstParent = resolveContainedPath(
+    root,
+    slug,
+    toParts.slice(0, -1).join('/'),
+    { mustExist: false }
+  );
+  const dstLeaf = path.join(dstParent, toParts[toParts.length - 1]);
+  try {
+    fs.lstatSync(dstLeaf);
+    throw new HttpError(409, existsMessage);
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    if (errnoOf(err) !== 'ENOENT') throw renameRefusal(err, invalidMessage, missingMessage);
+  }
+
   const dst = resolveContainedPath(root, slug, to, { mustExist: false });
-  if (src === base || dst === base) throw new HttpError(400, invalidMessage);
   if (src === dst) return { src, dst, noop: true, pinned: false };
 
   const srcParents = ensureParentChain(base, relPartsOf(from).slice(0, -1), invalidMessage);
-  const dstParents = ensureParentChain(base, relPartsOf(to).slice(0, -1), invalidMessage);
+  const dstParents = ensureParentChain(base, toParts.slice(0, -1), invalidMessage);
   const srcPin = pinContainedDir(base, srcParents, invalidMessage, missingMessage);
   const dstPin = pinContainedDir(base, dstParents, invalidMessage, missingMessage);
 

@@ -201,6 +201,9 @@ describe('resolveJwtSecret (what the app does at boot)', () => {
     if (originalEnv === undefined) delete process.env.JWT_SECRET;
     else process.env.JWT_SECRET = originalEnv;
     resetJwtSecretCache();
-    assert.strictEqual(jwtSecretValue(), resolvedSecret);
+    const restoredSecret = classifyJwtSecret(originalEnv) === null
+      ? String(originalEnv)
+      : resolvedSecret;
+    assert.strictEqual(jwtSecretValue(), restoredSecret);
   });
 });

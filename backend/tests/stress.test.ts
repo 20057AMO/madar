@@ -7,9 +7,8 @@
  * Rate-limit budgeting (analyzed from src/index.ts + chat-team-routes.ts):
  *   global budget      240/min prod · 4 000/min WSD_TESTING=1 (everything
  *                       except /health, which is exempt)
- *   chat write budget  240/min per-user (chatWriteLimiter — NOT relaxed by
- *                       WSD_TESTING) → total writes stay far below 240
- *   user write budget  120/min per-user (unused here)
+ *   chat write budget  240/min per-user prod · 4 000/min WSD_TESTING
+ *   user write budget  120/min prod · 4 000/min WSD_TESTING (unused here)
  *
  * Run the suite with the container under WSD_TESTING=1 (see repo AGENTS.md) —
  * the file paces itself adaptively so it also stays under production budgets
@@ -319,9 +318,8 @@ describe('Stress & Performance', () => {
 
       const errors: string[] = [];
       const counts = { get: 0, post: 0, typing: 0 };
-      // Hard cap on chat writes: the chatWriteLimiter budget is 240/min per
-      // user and is NOT relaxed by WSD_TESTING — the GET stream absorbs the
-      // remaining time.
+      // Keep writes bounded even with the relaxed test budget; the GET stream
+      // absorbs the remaining time.
       const MAX_POSTS = 80;
       const pacing = IS_TESTING ? 100 : 600;
       let msgCounter = 0;
