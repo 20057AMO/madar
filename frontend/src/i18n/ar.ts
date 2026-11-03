@@ -56,6 +56,7 @@ export const ar: Dict = {
     settingsUpdates: 'الإعدادات — تحديثات متوفرة',
     updatesApplying: 'جارٍ تطبيق تحديث',
     updatesAvailable: 'تحديثات متوفرة — افتح الإعدادات',
+    unreadMessages: '{n} رسالة غير مقروءة',
     providersUnlocked: 'صفحة المزوّدين مفتوحة — انقر لإعادة القفل',
     relockNow: 'إعادة قفل صفحة المزوّدين الآن؟',
     relockMessage: 'ستفقد جميع التبويبات المفتوحة الوصول إلى صفحة المزوّدين فوراً.',

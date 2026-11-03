@@ -1173,7 +1173,9 @@ export function Chat() {
     if (lastSeen.current.get(activeId) === anchor) return;
     lastSeen.current.set(activeId, anchor);
     sock.sendRead(activeId, anchor);
-    void markChatRead(activeId, anchor).catch(() => {});
+    void markChatRead(activeId, anchor)
+      .then(() => window.dispatchEvent(new Event('wsd:team-chat-read')))
+      .catch(() => {});
     
     // Update unread count for active channel locally instead of full list refresh
     setChannels((prev) => 
@@ -1195,7 +1197,9 @@ export function Chat() {
         
         lastSeen.current.set(activeId, anchor);
         sock.sendRead(activeId, anchor);
-        void markChatRead(activeId, anchor).catch(() => {});
+        void markChatRead(activeId, anchor)
+          .then(() => window.dispatchEvent(new Event('wsd:team-chat-read')))
+          .catch(() => {});
       }
     };
 

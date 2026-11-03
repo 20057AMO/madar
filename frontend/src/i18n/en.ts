@@ -54,6 +54,7 @@ export const en = {
     settingsUpdates: 'Settings — updates available',
     updatesApplying: 'An update is applying',
     updatesAvailable: 'Updates available — open Settings',
+    unreadMessages: '{n} unread messages',
     providersUnlocked: 'Providers unlocked',
     relockNow: 'Re-lock Providers now?',
     relockMessage: 'Every open tab loses access to the Providers page immediately.',

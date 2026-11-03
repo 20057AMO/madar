@@ -35,6 +35,31 @@ import { BASE, injectAuth } from './helpers';
 
 test.describe('Phone-width layout (360px)', () => {
 
+  test('sidebar unread badge and account actions stay accessible', async ({ page }) => {
+    let unread = 3;
+    await page.route('**/api/chat-team/channels', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ channels: [{ unread }] }),
+      })
+    );
+    await injectAuth(page);
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.goto(BASE);
+
+    await expect(page.getByRole('button', { name: '3 unread messages: Team Chat' })).toBeVisible();
+    await expect(page.locator('.nav-unread-badge')).toHaveText('3');
+    await expect(page.getByRole('button', { name: 'Open profile' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+
+    unread = 0;
+    await page.evaluate(() => window.dispatchEvent(new Event('wsd:team-chat-read')));
+    await expect(page.locator('.nav-unread-badge')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth))
+      .toBe(await page.evaluate(() => document.documentElement.clientWidth));
+  });
+
   /* -- a. Agents toolbar: the wrapper holds its 100% basis --------------- */
 
   test('a) Agents toolbar does not force sideways scrolling at 360px', async ({ page }) => {

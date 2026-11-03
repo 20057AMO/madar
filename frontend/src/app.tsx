@@ -35,6 +35,8 @@ import {
   avatarUrl,
   UNLOCK_KEY,
   getUpdates,
+  listChatChannels,
+  wsUrl,
 } from './api';
 import { UPDATE_RUNNING_STATES } from './views/settings-shared';
 import { Avatar } from './components/Avatar';
@@ -211,11 +213,15 @@ const NavButton = ({
   href,
   label,
   icon: Icon,
+  badge,
+  badgeLabel,
   onClick,
 }: {
   href?: string;
   label: string;
   icon: any;
+  badge?: number;
+  badgeLabel?: string;
   onClick?: () => void;
 }) => {
   const [location] = useHashLocation();
@@ -228,6 +234,7 @@ const NavButton = ({
   return (
     <button
       class={`nav-btn ${active ? 'active' : ''}`}
+      aria-label={badge ? badgeLabel : undefined}
       onClick={
         href
           ? () => navigate(href)
@@ -236,6 +243,7 @@ const NavButton = ({
     >
       <Icon width={16} height={16} class="icon" />
       <span class="nav-btn-label">{label}</span>
+      {badge ? <span class="nav-unread-badge" aria-hidden="true">{badge > 99 ? '99+' : badge}</span> : null}
     </button>
   );
 };
@@ -342,6 +350,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t, lang, toggleLang } = useI18n();
   const { user, logout } = useAuth();
   const [updatesFlag, setUpdatesFlag] = useState<'none' | 'available' | 'applying'>('none');
+  const [chatUnread, setChatUnread] = useState(0);
 
   // Update notification dot — admin only. Probed on mount, every 15 min and
   // whenever the tab becomes visible again (pageshow/visibilitychange, same
@@ -388,6 +397,79 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
     };
   }, [user?.role, updatesFlag]);
 
+  useEffect(() => {
+    if (!user?.id) {
+      setChatUnread(0);
+      return;
+    }
+
+    let alive = true;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshVersion = 0;
+
+    const refreshUnread = () => {
+      const version = ++refreshVersion;
+      void listChatChannels()
+        .then(({ channels }) => {
+          if (alive && version === refreshVersion) {
+            setChatUnread(channels.reduce((total, channel) => total + (channel.unread || 0), 0));
+          }
+        })
+        .catch(() => {});
+    };
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(refreshUnread, 150);
+    };
+    const connect = () => {
+      if (!alive) return;
+      try {
+        socket = new WebSocket(wsUrl('/ws/chat-team'));
+      } catch {
+        reconnectTimer = setTimeout(connect, 3000);
+        return;
+      }
+      socket.onopen = refreshUnread;
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'chat_bump' || message.type === 'access_revoked') scheduleRefresh();
+        } catch {
+          return;
+        }
+      };
+      socket.onclose = () => {
+        if (alive) reconnectTimer = setTimeout(connect, 3000);
+      };
+      socket.onerror = () => socket?.close();
+    };
+    const refreshWhenVisible = () => { if (!document.hidden) refreshUnread(); };
+
+    refreshUnread();
+    connect();
+    const poll = setInterval(refreshUnread, 30_000);
+    window.addEventListener('wsd:team-chat-read', refreshUnread);
+    window.addEventListener('pageshow', refreshUnread);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      alive = false;
+      clearInterval(poll);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      window.removeEventListener('wsd:team-chat-read', refreshUnread);
+      window.removeEventListener('pageshow', refreshUnread);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      if (socket) {
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.close();
+      }
+    };
+  }, [user?.id]);
+
   return (
     <aside class={`sidebar${open ? ' open' : ''}`}>
       <div
@@ -417,7 +499,13 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <NavButton href="/agents" label={t('nav.agents')} icon={Bot} />
         <NavButton href="/ide" label={t('nav.vscode')} icon={VSCodeIcon} />
         <div class="nav-group-label">{t('nav.groupCollaborate')}</div>
-        <NavButton href="/chat" label={t('nav.teamChat')} icon={MessageCircle} />
+        <NavButton
+          href="/chat"
+          label={t('nav.teamChat')}
+          icon={MessageCircle}
+          badge={chatUnread}
+          badgeLabel={t('nav.unreadMessages', { n: chatUnread }) + ': ' + t('nav.teamChat')}
+        />
         {/* In-app, like every other sidebar item: the raw proxy origin 401s a
             viewer (the embed cookie is editor+ only), which is exactly the
             designed needsEditor state the /#/opencode page already shows. */}
@@ -452,21 +540,21 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
       </button>
       <div class="sidebar-footer">
         <ProvidersUnlockBadge />
-        <div
+        <button
+          type="button"
           class="sidebar-profile-row"
-          role="button"
-          tabIndex={0}
           onClick={() => { navigate('/profile'); onClose(); }}
-          onKeyDown={(e: KeyboardEvent) => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/profile'); onClose(); }
-          }}
           title={t('nav.openProfile')}
+          aria-label={t('nav.openProfile')}
         >
-          <span class="sidebar-profile-label">{user?.profile?.displayName || user?.username || t('common.profile')}</span>
-          {user && <Avatar name={user.profile?.displayName || user.username} avatar={avatarUrl(user.id, user.profile?.avatarExt)} size={20} />}
-        </div>
+          {user && <Avatar name={user.profile?.displayName || user.username} avatar={avatarUrl(user.id, user.profile?.avatarExt)} size={34} />}
+          <span class="sidebar-profile-meta">
+            <span class="sidebar-profile-label">{user?.profile?.displayName || user?.username || t('common.profile')}</span>
+            {user?.username && <span class="sidebar-profile-handle">@{user.username}</span>}
+          </span>
+        </button>
         <div class="sys-row">
-          <span class="sys-dot ok" />
+          <span class="sys-dot ok" aria-hidden="true" />
           <button
             class="lang-btn"
             title={t('lang.switchTo')}
@@ -476,16 +564,16 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
             <Languages width={12} height={12} />
             <span>{lang === 'ar' ? 'EN' : 'ع'}</span>
           </button>
-          <button
-            class="nav-icon-btn"
-            title={t('common.signOut')}
-            aria-label={t('common.signOut')}
-            onClick={(e: Event) => { e.stopPropagation(); clearPostLoginRoute(); logout(); window.location.hash = '/login'; }}
-          >
-            <LogOut width={15} height={15} class="icon" />
-          </button>
           <span class="beta-chip" title="Beta software — features and data format may change">BETA</span>
         </div>
+        <button
+          type="button"
+          class="sidebar-signout"
+          onClick={(e: Event) => { e.stopPropagation(); clearPostLoginRoute(); logout(); window.location.hash = '/login'; }}
+        >
+          <LogOut width={15} height={15} class="icon" />
+          <span>{t('common.signOut')}</span>
+        </button>
       </div>
     </aside>
   );
