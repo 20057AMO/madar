@@ -48,6 +48,7 @@ import {
   MoreVertical,
   MessageSquareReply,
   BookOpen,
+  UploadCloud,
 } from 'lucide-preact';
 import {
   listChatChannels,
@@ -100,6 +101,11 @@ interface ComposerState {
   replyTo?: TeamChatMessage;
   attachments: { id: string; name: string; size: number; kind: 'image' | 'file'; url?: string }[];
 }
+
+/** Mirrors the server caps in chat-team-core.ts so the client can pre-check. */
+const MAX_MESSAGE_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_MB = 10;
+const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
 
 interface MentionDraft {
   start: number;
@@ -155,11 +161,38 @@ function fmtTyping(names: string[], ar: boolean): string {
   return ar ? 'عدة أشخاص يكتبون…' : 'Several people are typing…';
 }
 
-/** Short one-line preview for a message: text, or an attachment fallback. */
-function msgPreview(m: { text?: string; attachments?: { kind: string; name: string }[] }, attachmentLabel: string): string {
+/**
+ * Short one-line preview for a message: its text, else the first attachment's
+ * name (an image-only message must not render as a blank row), else `fallback`.
+ */
+function msgPreview(
+  m: { text?: string; attachments?: { kind?: string; name?: string | null }[] },
+  attachmentLabel: string,
+): string {
   const text = (m.text || '').replace(/\s+/g, ' ').trim();
   if (text) return text;
-  return m.attachments && m.attachments.length ? attachmentLabel : '';
+  const attachments = m.attachments;
+  // No attachments and no text means the channel has no history yet — return ''
+  // so the caller's `||` chain falls through to the channel-kind label.
+  if (!attachments || attachments.length === 0) return '';
+  const first = attachments[0];
+  const icon = first?.kind === 'image' ? '🖼' : '📎';
+  const firstName = (first?.name || '').trim();
+  const more = attachments.length > 1 ? ` +${attachments.length - 1}` : '';
+  return firstName ? `${icon} ${firstName}${more}` : attachmentLabel;
+}
+
+/**
+ * `ChatChannel.lastMessage.attachments` arrives with the channels list; read it
+ * defensively so the rail renders correctly whether or not the field is there.
+ */
+function lastMessageAttachments(c: ChatChannel): { id: string; name: string; kind: string }[] {
+  const last = c.lastMessage as
+    | { attachments?: { id: string; name: string; kind: string }[] }
+    | null
+    | undefined;
+  const attachments = last?.attachments;
+  return Array.isArray(attachments) ? attachments : [];
 }
 
 /** Localized WhatsApp-style day-separator label (Today/أمس/…). */
@@ -222,6 +255,16 @@ function PinnedMessageHeader({
     </div>
   );
 }
+/**
+ * Whether an attachment may be rendered inside an <img>. The server classifies
+ * images by CONTENT (magic bytes), so `kind` is authoritative; the extension
+ * fallback only rescues older rows. SVG stays out on purpose — an untrusted
+ * SVG is a document, not a picture — and HEIC/TIFF are not decodable by <img>.
+ */
+function isInlineImage(name: string, kind: string): boolean {
+  return attachmentGroup(name, kind) === 'image' && !/\.svg$/i.test(name || '');
+}
+
 function AttachImage({ id, alt }: { id: string; alt: string }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -311,9 +354,12 @@ function MessageAttachments({ message, onOpenLightbox }: {
   message: TeamChatMessage;
   onOpenLightbox: (images: { id: string; name: string }[], index: number) => void;
 }) {
+  const { t2 } = useI18n();
   const atts = message.attachments || [];
-  const images = atts.filter((a) => a.kind === 'image');
-  const rest = atts.filter((a) => a.kind !== 'image');
+  const images = atts.filter((a) => isInlineImage(a.name, a.kind));
+  const rest = atts.filter((a) => !isInlineImage(a.name, a.kind));
+  // Legacy rows may predate `name`; never render an empty label or alt text.
+  const labelOf = (a: { name?: string | null }) => (a.name || '').trim() || t2('مرفق', 'Attachment');
   return (
     <>
       {images.length >= 2 && (
@@ -322,18 +368,18 @@ function MessageAttachments({ message, onOpenLightbox }: {
             <button
               class="tchat-grid-item"
               key={img.id}
-              aria-label={`Open image ${i + 1}: ${img.name}`}
+              aria-label={t2(`فتح الصورة ${i + 1}: ${labelOf(img)}`, `Open image ${i + 1}: ${labelOf(img)}`)}
               onClick={() => onOpenLightbox(images, i)}
             >
-              <AttachImage id={img.id} alt={img.name} />
+              <AttachImage id={img.id} alt={labelOf(img)} />
             </button>
           ))}
         </div>
       )}
       {images.length === 1 && (
         <div class="tchat-attachment">
-          <button class="tchat-img-btn" aria-label={`Open image: ${images[0].name}`} onClick={() => onOpenLightbox(images, 0)}>
-            <AttachImage id={images[0].id} alt={images[0].name} />
+          <button class="tchat-img-btn" aria-label={t2(`فتح الصورة: ${labelOf(images[0])}`, `Open image: ${labelOf(images[0])}`)} onClick={() => onOpenLightbox(images, 0)}>
+            <AttachImage id={images[0].id} alt={labelOf(images[0])} />
           </button>
         </div>
       )}
@@ -686,6 +732,13 @@ export function Chat() {
   const [searchResults, setSearchResults] = useState<TeamChatMessage[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  // In-flight uploads. Send is blocked while > 0 so a message can never go out
+  // without the attachment the user just picked.
+  const [uploading, setUploading] = useState(0);
+  // Outcome of the last attach attempt (paste / drop / picker), announced to
+  // assistive tech and shown inline above the composer.
+  const [attachNotice, setAttachNotice] = useState('');
+  const [dropActive, setDropActive] = useState(false);
   const [error, setError] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
@@ -865,6 +918,11 @@ export function Chat() {
   const dialogRestoreRef = useRef<HTMLElement | null>(null);
 
   const fileInput = useRef<HTMLInputElement | null>(null);
+  // Slots claimed by uploads that have not landed in composer.attachments yet,
+  // so two quick picks cannot exceed MAX_MESSAGE_ATTACHMENTS between them.
+  const uploadReservedRef = useRef(0);
+  // dragenter/dragleave fire for children too — count depth, not booleans.
+  const dragDepthRef = useRef(0);
   const listRef = useRef<HTMLDivElement | null>(null);
   const settingsWrapRef = useRef<HTMLDivElement | null>(null);
   const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -921,19 +979,24 @@ export function Chat() {
         setMessages(ev.messages || []);
         setViewerOnly(ev.level === 'read');
         setActiveCanSend(ev.canSend === 'admins' ? 'admins' : 'everyone');
-        setCanWrite(ev.level === 'write');
+        // Server-resolved send permission wins when present: write-level does
+        // not imply "may send" in an admins-locked channel.
+        setCanWrite(typeof ev.maySend === 'boolean' ? ev.maySend : ev.level === 'write');
         requestAnimationFrame(() => requestAnimationFrame(() => { skipScroll.current = false; }));
       }
       return;
     }
     if (ev.type === 'channel_update') {
+      // The rail row is updated for EVERY channel (its settings pill must not
+      // go stale while another room is open); only the active channel's
+      // composer state depends on this user's own send permission.
+      setChannels((prev) =>
+        prev.map((c) => (c.id === ev.channel.id ? { ...c, canSend: ev.channel.canSend } : c))
+      );
       if (ev.channel.id === activeIdRef.current) {
         setActiveCanSend(ev.channel.canSend);
         // `viewerOnly`/`canWrite` are stale closure values here — derive from refs.
         setCanWrite(!viewerOnlyRef.current && (ev.channel.canSend !== 'admins' || canManageChannel()));
-        setChannels((prev) =>
-          prev.map((c) => (c.id === ev.channel.id ? { ...c, canSend: ev.channel.canSend } : c))
-        );
         setSettingsOpen(false);
       }
       return;
@@ -1040,6 +1103,31 @@ export function Chat() {
       }
       return;
     }
+    if (ev.type === 'channel_deleted') {
+      // Lifecycle frame (server fans it to subscribers before dropping the
+      // row). Without this the deleted room lingered in the rail until the
+      // 30s list poll — and could keep receiving nothing while looking live.
+      unreadLocal.current.delete(ev.channelId);
+      setChannels((prev) => prev.filter((c) => c.id !== ev.channelId));
+      if (ev.channelId === activeIdRef.current) {
+        switchChannel(null);
+        setActive(null);
+        setMessages([]);
+        setTyping([]);
+        setError(t2('تم حذف هذه المحادثة', 'This conversation was deleted'));
+      }
+      return;
+    }
+    if (ev.type === 'pinned_update') {
+      // The channel's primary pinned message moved (PUT /channels/:id/pin).
+      setChannels((prev) =>
+        prev.map((c) => (c.id === ev.channelId ? { ...c, pinnedMessageId: ev.pinnedMessageId } : c))
+      );
+      setActive((prev) =>
+        prev && prev.id === ev.channelId ? { ...prev, pinnedMessageId: ev.pinnedMessageId } : prev
+      );
+      return;
+    }
     if (ev.type === 'message_deleted') {
       if (ev.channelId === activeIdRef.current) {
         setMessages((prev) => prev.filter((m) => m.id !== ev.msgId));
@@ -1112,6 +1200,14 @@ export function Chat() {
     setMessages([]);
     mdCache.current.clear();
     setComposer({ text: '', attachments: [] });
+    // An upload still in flight belongs to the channel we just left; its result
+    // is dropped below, so its reserved slot and busy flag must go with it or
+    // Send would stay disabled in this new channel forever.
+    setUploading(0);
+    uploadReservedRef.current = 0;
+    dragDepthRef.current = 0;
+    setDropActive(false);
+    setAttachNotice('');
     setEditingMsgId(null);
     setEditText('');
     setDeleteMsgTarget(null);
@@ -1620,6 +1716,12 @@ export function Chat() {
 
   const doSend = async () => {
     if (!activeId || sending) return;
+    // Uploads are uploaded-then-sent, never concurrently: refuse the send and
+    // say why, so Enter is never silently swallowed while the composer looks ready.
+    if (uploading > 0) {
+      setAttachNotice(t2('انتظر انتهاء رفع المرفقات قبل الإرسال', 'Wait for the attachment upload to finish'));
+      return;
+    }
     const text = composer.text.trim();
     if (!text && !composer.attachments.length) return;
     setSending(true);
@@ -1642,26 +1744,127 @@ export function Chat() {
     }
   };
 
-  const onPickAttachments = async (files: FileList | File[]) => {
-    if (!activeId) return;
-    const fileList = Array.from(files).slice(0, 5 - composer.attachments.length);
-    if (!fileList.length) return;
-    try {
-      const uploadPromises = fileList.map(async (f) => {
-        const { attachment } = await uploadChatAttachment(activeId, f);
-        return {
-          id: attachment.id,
-          name: attachment.name,
-          size: attachment.size,
-          kind: attachment.kind,
-        };
-      });
-      
-      const results = await Promise.all(uploadPromises);
-      setComposer((c) => ({ ...c, attachments: [...c.attachments, ...results] }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
+  /**
+   * Stages files into the composer. Every file is checked on its own (size, cap)
+   * and uploaded on its own (`Promise.allSettled`), so one rejected file never
+   * discards the files that did upload — the user keeps what worked and gets one
+   * sentence naming what did not and why.
+   */
+  const onPickAttachments = async (files: FileList | File[] | null | undefined) => {
+    const channelId = activeId;
+    if (!channelId || !files) return;
+    const incoming = Array.from(files);
+    if (!incoming.length) return;
+
+    const problems: string[] = [];
+    const accepted: File[] = [];
+    const tooBig: string[] = [];
+    let skippedForCap = 0;
+    // Slots left = cap − already staged − uploads claimed by an in-flight batch.
+    let room = MAX_MESSAGE_ATTACHMENTS - composer.attachments.length - uploadReservedRef.current;
+
+    for (const file of incoming) {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        tooBig.push(file.name);
+        continue;
+      }
+      if (room <= 0) {
+        skippedForCap += 1;
+        continue;
+      }
+      room -= 1;
+      accepted.push(file);
     }
+
+    if (tooBig.length) {
+      problems.push(
+        t2(
+          `تجاوز الحجم (الحد ${MAX_ATTACHMENT_MB} م.ب): ${tooBig.join(', ')}`,
+          `Too large (max ${MAX_ATTACHMENT_MB} MB): ${tooBig.join(', ')}`,
+        ),
+      );
+    }
+    if (skippedForCap) {
+      problems.push(
+        t2(
+          `تم تجاهل ${skippedForCap} ملفاً — الحد ${MAX_MESSAGE_ATTACHMENTS} مرفقات لكل رسالة`,
+          `${skippedForCap} file(s) skipped — ${MAX_MESSAGE_ATTACHMENTS} attachments per message max`,
+        ),
+      );
+    }
+
+    if (!accepted.length) {
+      setAttachNotice(problems.join(' · '));
+      return;
+    }
+
+    uploadReservedRef.current += accepted.length;
+    setUploading((n) => n + accepted.length);
+    setAttachNotice('');
+
+    const settled = await Promise.allSettled(
+      accepted.map(async (file) => {
+        const { attachment } = await uploadChatAttachment(channelId, file);
+        return attachment;
+      }),
+    );
+
+    uploadReservedRef.current = Math.max(0, uploadReservedRef.current - accepted.length);
+    setUploading((n) => Math.max(0, n - accepted.length));
+
+    const staged: ComposerState['attachments'] = [];
+    const failed: string[] = [];
+    settled.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        const a = result.value;
+        staged.push({ id: a.id, name: a.name, size: a.size, kind: a.kind });
+        return;
+      }
+      const file = accepted[index];
+      const reason = result.reason instanceof Error && result.reason.message
+        ? result.reason.message
+        : t2('خطأ غير معروف', 'unknown error');
+      failed.push(t2(`فشل رفع ${file.name}: ${reason}`, `Upload failed for ${file.name}: ${reason}`));
+    });
+
+    // A channel switch while the upload was in flight resets the composer; those
+    // attachments belong to the OLD channel, so they are dropped, not appended
+    // into a conversation that never staged them.
+    if (activeIdRef.current !== channelId) return;
+
+    if (staged.length) {
+      setComposer((c) => ({
+        ...c,
+        attachments: [...c.attachments, ...staged].slice(0, MAX_MESSAGE_ATTACHMENTS),
+      }));
+    }
+    const allProblems = [...problems, ...failed];
+    if (allProblems.length) setAttachNotice(allProblems.join(' · '));
+  };
+
+  /** Pasted files (a screenshot, a copied image) stage as attachments; text pastes normally. */
+  const onPasteAttachments = (e: ClipboardEvent) => {
+    const files: File[] = [];
+    // `files` is the well-supported path; `items` covers browsers/clients that
+    // expose a pasted image only as a file item (screenshots on some Linux DEs).
+    const direct = e.clipboardData?.files;
+    if (direct && direct.length) {
+      for (let i = 0; i < direct.length; i += 1) files.push(direct[i]);
+    } else {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        if (item.kind !== 'file') continue;
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (!files.length) return;
+    // Only swallow the paste when it actually carried files — plain text paste
+    // must reach the textarea untouched.
+    e.preventDefault();
+    void onPickAttachments(files);
   };
 
   const createChannel = async () => {
@@ -1915,6 +2118,51 @@ export function Chat() {
   // for instant re-derivation on `channel_update`.
   const localCanWrite = () => !viewerOnly && (activeCanSend !== 'admins' || canManageChannel());
   const userCanWrite = () => canWrite;
+
+  /** True when the drag payload carries files — a text/selection drag stays native. */
+  const dragHasFiles = (e: DragEvent) => {
+    const types = e.dataTransfer?.types;
+    return !!types && Array.prototype.indexOf.call(types, 'Files') !== -1;
+  };
+
+  const onPaneDragEnter = (e: DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    // Never let a file drop navigate the SPA away.
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    if (userCanWrite()) setDropActive(true);
+  };
+
+  const onPaneDragOver = (e: DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    // Without preventDefault the browser refuses the drop and opens the file.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = userCanWrite() ? 'copy' : 'none';
+  };
+
+  const onPaneDragLeave = () => {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDropActive(false);
+  };
+
+  const onPaneDrop = (e: DragEvent) => {
+    dragDepthRef.current = 0;
+    setDropActive(false);
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    if (!userCanWrite()) {
+      setAttachNotice(t2('لا يمكنك إرفاق ملفات في هذه المحادثة', 'You cannot attach files to this conversation'));
+      return;
+    }
+    const list = e.dataTransfer?.files;
+    const files = list && list.length ? Array.from(list) : [];
+    if (!files.length) {
+      setAttachNotice(t2('تعذّر قراءة الملف المُسقَط', 'Could not read the dropped file'));
+      return;
+    }
+    void onPickAttachments(files);
+  };
+
   const mentionSuggestions = useMemo(() => {
     if (!mentionDraft || active?.kind === 'direct') return [];
     const query = mentionDraft.query.toLocaleLowerCase();
@@ -2433,7 +2681,7 @@ export function Chat() {
             const draft = lastMsgDraft.current.get(c.id);
             const preview = draft && c.lastMessageAt && draft.at >= new Date(c.lastMessageAt).getTime() - 1500
               ? draft.text
-              : msgPreview({ text: c.lastMessage?.text, attachments: [] }, t2('📎 مرفق', '📎 attachment'))
+              : msgPreview({ text: c.lastMessage?.text, attachments: lastMessageAttachments(c) }, t2('📎 مرفق', '📎 Attachment'))
                 || (c.kind === 'project' ? t2('قناة مشروع', 'Project channel') : c.kind === 'direct' ? channelSub(c, { id: meId }) : t2('قناة للفريق', 'Team channel'));
             return (
               <div
@@ -2485,7 +2733,23 @@ export function Chat() {
         </nav>
       </div>
 
-      <div class="tchat-main" inert={railOpen && isPhone}>
+      <div
+        class="tchat-main"
+        inert={railOpen && isPhone}
+        onDragEnter={onPaneDragEnter}
+        onDragOver={onPaneDragOver}
+        onDragLeave={onPaneDragLeave}
+        onDrop={onPaneDrop}
+      >
+        {dropActive && (
+          <div class="tchat-drop-overlay" aria-hidden="true">
+            <div class="tchat-drop-card">
+              <UploadCloud width={30} height={30} class="icon" />
+              <strong>{t2('أفلت الملفات للإرفاق', 'Drop files to attach')}</strong>
+              <span>{t2(`حتى ${MAX_MESSAGE_ATTACHMENTS} ملفات · ${MAX_ATTACHMENT_MB} م.ب لكل ملف`, `Up to ${MAX_MESSAGE_ATTACHMENTS} files · ${MAX_ATTACHMENT_MB} MB each`)}</span>
+            </div>
+          </div>
+        )}
         {active ? (
           <>
             <div class="tchat-head">
@@ -2795,6 +3059,10 @@ export function Chat() {
 
             {error && <div class="form-error" role="alert">{error}</div>}
 
+            {/* Outcome of the last attach attempt (paste / drop / picker). Kept
+                mounted so the live region actually announces changes. */}
+            <div class="tchat-attach-notice" role="status" aria-live="polite">{attachNotice}</div>
+
             {/* composer */}
             {userCanWrite() ? (
               <div class="tchat-composer">
@@ -2805,10 +3073,17 @@ export function Chat() {
                       <X width={12} height={12} />
                     </button>
                   </div>
-                )}                 {composer.attachments.map((a) => (
+                )}
+                {uploading > 0 && (
+                  <div class="tchat-uploading" role="status" aria-live="polite">
+                    <Loader2 width={13} height={13} class="icon spin" />
+                    {t2(`جارٍ رفع ${uploading} ملف…`, `Uploading ${uploading} file(s)…`)}
+                  </div>
+                )}
+                 {composer.attachments.map((a) => (
                    <div class="tchat-composer-att" key={a.id}>
-                     {a.kind === 'image' && <AttachImage id={a.id} alt={a.name} />}
-                     <span class="dim">{a.name}</span>
+                     {isInlineImage(a.name, a.kind) && <AttachImage id={a.id} alt={a.name || t2('مرفق', 'Attachment')} />}
+                     <span class="dim">{a.name || t2('مرفق', 'Attachment')}</span>
                      <button class="tchat-x" onClick={() => setComposer((c) => ({ ...c, attachments: c.attachments.filter((x) => x.id !== a.id) }))} aria-label={t2('إزالة المرفق', 'Remove attachment')}>
                        <X width={12} height={12} />
                      </button>
@@ -2873,6 +3148,7 @@ export function Chat() {
                          rows={1}
                          maxLength={5000}
                          value={composer.text}
+                         onPaste={(e: ClipboardEvent) => onPasteAttachments(e)}
                          onInput={(e: Event) => {
                            const el = e.target as HTMLTextAreaElement;
                            const v = el.value;
@@ -2955,16 +3231,25 @@ export function Chat() {
                      </button>
                    ) : (
                      <button
-                       class={`tchat-send-fab${composer.text.trim() || composer.attachments.length ? '' : ' mic'}`}
+                       class={`tchat-send-fab${composer.text.trim() || composer.attachments.length || uploading > 0 ? '' : ' mic'}`}
                        onClick={() => {
+                         if (uploading > 0) return;
                          if (composer.text.trim() || composer.attachments.length) void doSend();
                          else void startRecording();
                        }}
-                       disabled={sending}
-                       title={composer.text.trim() || composer.attachments.length ? t2('إرسال', 'Send') : t2('تسجيل رسالة صوتية', 'Record a voice note')}
-                       aria-label={composer.text.trim() || composer.attachments.length ? t2('إرسال', 'Send') : t2('تسجيل رسالة صوتية', 'Record a voice note')}
+                       disabled={sending || uploading > 0}
+                       title={uploading > 0
+                         ? t2('انتظر انتهاء الرفع', 'Waiting for upload')
+                         : composer.text.trim() || composer.attachments.length
+                           ? t2('إرسال', 'Send')
+                           : t2('تسجيل رسالة صوتية', 'Record a voice note')}
+                       aria-label={uploading > 0
+                         ? t2('انتظر انتهاء الرفع', 'Waiting for upload')
+                         : composer.text.trim() || composer.attachments.length
+                           ? t2('إرسال', 'Send')
+                           : t2('تسجيل رسالة صوتية', 'Record a voice note')}
                      >
-                       {sending
+                       {uploading > 0 || sending
                          ? <Loader2 width={18} height={18} class="icon spin" />
                          : (composer.text.trim() || composer.attachments.length) ? <Send width={18} height={18} /> : <Mic width={18} height={18} />}
                      </button>

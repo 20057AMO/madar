@@ -8,9 +8,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import fs from 'fs';
-import path from 'path';
 
-import { HttpError } from './docker-manager';
 import { readMeta } from './projects-meta';
 import { canonicalProjectSlug } from './project-slug-core';
 
@@ -60,6 +58,7 @@ import {
   getUnreadByChannel,
   saveAttachment,
   attachmentPath,
+  attachmentHead,
   getAttachmentMeta,
   genId,
   getLastMessage,
@@ -70,7 +69,14 @@ import {
   toggleMessageReaction,
 } from './chat-team-store';
 import { canAccessChannel, canSendInChannel, type ChatUser } from './chat-team-access';
-import { detectImageExt } from './avatar-store';
+import {
+  attachmentFileName,
+  contentDispositionHeader,
+  detectAttachmentFacts,
+  detectAttachmentKind,
+  sanitizeAttachmentName,
+  ATTACHMENT_HEAD_BYTES,
+} from './chat-attachment-kind';
 import {
   broadcastChatMessage,
   broadcastChatBump,
@@ -84,28 +90,30 @@ import {
 } from '../ws/ws-chat-team';
 import { teamChatBot } from './chat-team-bot';
 
+// memoryStorage only: nothing is written to disk here, so a request rejected
+// in the handler below (bad channel, no access, admins-only) leaves no orphan
+// bytes behind — the buffer is simply garbage-collected. The channel gate used
+// to live in a multer `fileFilter`, which had to fail closed while streaming:
+// a client that sends the file part BEFORE the channelId field got a bogus
+// 400. Authorization now runs in the handler, after multer has parsed the
+// whole multipart body, so field order no longer matters.
 const chatUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_ATTACHMENT_BYTES, files: 1 },
-  // L1: reject unauthorized uploads BEFORE any bytes land in memory — a
-  // blocked editor must never make the server buffer up to 10 MB for a 403.
-  // Fail-closed when the caller streams the file before channelId (our client
-  // always appends channelId first — see uploadChatAttachment in api.ts).
-  fileFilter: (req: any, _file, cb) => {
-    const channelId = typeof req.body?.channelId === 'string' ? req.body.channelId : '';
-    if (!isChannelId(channelId)) return cb(new HttpError(400, 'Missing or invalid channelId'));
-    const channel = getChannel(channelId);
-    if (!channel) return cb(new HttpError(404, 'Channel not found'));
-    const user: ChatUser = { id: req.user?.id, username: req.user?.username, role: req.user?.role };
-    if (canAccessChannel(user, channel) !== 'write') {
-      return cb(new HttpError(403, 'Write access required to upload'));
-    }
-    if (!canSendInChannel(user, channel, 'write')) {
-      return cb(new HttpError(403, 'Only admins can send in this channel'));
-    }
-    cb(null, true);
-  },
 });
+
+/**
+ * `chatUpload.single('file')` with one addition: multer aborts on
+ * LIMIT_FILE_SIZE but never reports WHICH limit it hit, so the global handler
+ * could only answer a bare "File too large". Tag the real cap (10 MB, from
+ * MAX_ATTACHMENT_BYTES — never a retyped number) so the 413 can name it.
+ */
+function chatUploadSingle(req: any, res: any, next: any): void {
+  chatUpload.single('file')(req, res, (err: any) => {
+    if (err && err.code === 'LIMIT_FILE_SIZE') err.limitBytes = MAX_ATTACHMENT_BYTES;
+    next(err);
+  });
+}
 
 /**
  * Per-user write budget for chat sends/uploads — chat is bursty, so give real
@@ -197,7 +205,18 @@ export function registerChatTeamRoutes(app: any): void {
           ...c,
           unread: unread[c.id]?.count || 0,
           firstUnreadId: unread[c.id]?.firstUnreadId,
-          lastMessage: lastMsg ? { text: lastMsg.text, timestamp: lastMsg.createdAt } : null,
+          // Compact preview: an attachment-only message (image / voice note)
+          // has empty text, so the rail needs the attachment kinds to render
+          // "[Photo]" instead of a blank line. Additive — older clients ignore it.
+          lastMessage: lastMsg
+            ? {
+                text: lastMsg.text,
+                timestamp: lastMsg.createdAt,
+                ...(lastMsg.attachments?.length
+                  ? { attachments: lastMsg.attachments.map((a) => ({ id: a.id, name: a.name, kind: a.kind })) }
+                  : {}),
+              }
+            : null,
         };
       }),
     });
@@ -323,9 +342,13 @@ export function registerChatTeamRoutes(app: any): void {
       return res.status(404).json({ error: getChannel(cid) ? 'Message not found' : 'Channel not found' });
     }
     const updatedChannel = getChannel(cid) || channel;
-    
+
     broadcastPinnedUpdate(cid, updatedChannel.pinnedMessageId || null);
-    res.json({ channel: updatedChannel });
+    // Same enriched shape as every other channel-returning route (member
+    // usernames/avatars, canSend default, maySend) — a raw row here would make
+    // the client's channel state regress on the response of this call.
+    const idx = userIndex();
+    res.json({ channel: enrichChannel(updatedChannel, idx, user) });
   });
 
   // Channel send-mode settings (creator / explicit channel admin / system admin).
@@ -446,17 +469,9 @@ export function registerChatTeamRoutes(app: any): void {
       return res.status(403).json({ error: 'Only admins can send in this channel' });
     }
 
-    const normalized = normalizeMessage(req.body);
-    if (!normalized) return res.status(400).json({ error: 'Message is required (max 5000 chars)' });
-
-    // Reply target must actually exist in THIS channel.
-    let replyToExists = false;
-    if (normalized.replyTo) {
-      replyToExists = getAllMessages(channelId).some((m) => m.id === normalized.replyTo);
-      if (!replyToExists) return res.status(400).json({ error: 'Reply target not found' });
-    }
-
     // Attachments are pre-uploaded ids the client attaches by reference.
+    // Resolved BEFORE the text: an attachment-only message has no caption, so
+    // the text gate below must know whether anything valid was attached.
     let attachments: ChatAttachment[] | undefined;
     const rawAtt = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
     if (rawAtt.length > 0) {
@@ -466,30 +481,32 @@ export function registerChatTeamRoutes(app: any): void {
       for (const a of rawAtt) {
         const id = typeof a?.id === 'string' ? a.id : '';
         if (!/^att-[a-z0-9-]+$/.test(id)) return res.status(400).json({ error: 'Invalid attachment' });
-        const path = attachmentPath(id);
-        if (!path) return res.status(400).json({ error: 'Attachment not found' });
+        const attPath = attachmentPath(id);
+        if (!attPath) return res.status(400).json({ error: 'Attachment not found' });
         const meta = getAttachmentMeta(id);
         if (!meta || meta.channelId !== channelId) {
           return res.status(400).json({ error: 'Attachment was uploaded to a different channel' });
         }
         let size = 0;
         try {
-          size = fs.statSync(path).size;
+          size = fs.statSync(attPath).size;
         } catch {
           return res.status(400).json({ error: 'Attachment not found' });
         }
         total += size;
         if (total > MAX_ATTACHMENT_BYTES) return res.status(400).json({ error: 'Attachments too large' });
-        const name = typeof a?.name === 'string' ? a.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 255) : 'file';
+        // Display name: the client may re-label it per message, otherwise the
+        // name persisted at upload wins. Both are sanitized — a header/path-
+        // breaking name can never reach Content-Disposition.
+        const name = sanitizeAttachmentName(
+          typeof a?.name === 'string' && a.name ? a.name : meta.name,
+          'file'
+        );
         // Kind is re-derived from the stored bytes (client-claimed kind is
-        // never trusted) — a re-uploaded fake won't be labeled an image.
-        let kind: 'image' | 'file' = 'file';
-        try {
-          kind = detectImageExt(fs.readFileSync(path)) ? 'image' : 'file';
-        } catch {
-          return res.status(400).json({ error: 'Attachment not found' });
-        }
-        out.push({ id, name: name || 'file', kind, size });
+        // never trusted) — only the first 64 bytes are read, so a 10 MB voice
+        // note is never slurped to learn its type.
+        const kind = detectAttachmentKind(attachmentHead(id, ATTACHMENT_HEAD_BYTES));
+        out.push({ id, name, kind, size });
       }
       attachments = out;
       const existingBytes = channelAttachmentBytes(getAllMessages(channelId));
@@ -497,6 +514,16 @@ export function registerChatTeamRoutes(app: any): void {
       if (existingBytes + newBytes > MAX_CHANNEL_ATTACHMENT_BYTES) {
         return res.status(400).json({ error: 'Channel attachment storage limit exceeded (500 MB)' });
       }
+    }
+
+    const normalized = normalizeMessage(req.body, { allowEmptyText: (attachments?.length || 0) > 0 });
+    if (!normalized) return res.status(400).json({ error: 'Message is required (max 5000 chars)' });
+
+    // Reply target must actually exist in THIS channel.
+    let replyToExists = false;
+    if (normalized.replyTo) {
+      replyToExists = getAllMessages(channelId).some((m) => m.id === normalized.replyTo);
+      if (!replyToExists) return res.status(400).json({ error: 'Reply target not found' });
     }
 
     const message: TeamMessage = formatMessage(
@@ -567,7 +594,9 @@ export function registerChatTeamRoutes(app: any): void {
     if (!canEditMessage(existing, user.id)) {
       return res.status(403).json({ error: 'Only the author can edit this message' });
     }
-    const normalized = normalizeEditMessage(req.body);
+    const normalized = normalizeEditMessage(req.body, {
+      allowEmptyText: (existing.attachments?.length || 0) > 0,
+    });
     if (!normalized) return res.status(400).json({ error: 'Message is required (max 5000 chars)' });
     const updated = await editMessage(cid, msgId, normalized.text, normalized.mentions);
     if (!updated) return res.status(404).json({ error: 'Message not found' });
@@ -646,8 +675,10 @@ export function registerChatTeamRoutes(app: any): void {
   });
 
   // ── Attachments ──────────────────────────────────────────────
-  // Upload is scoped to a channel so access is checked before bytes land.
-  r.post('/upload', chatWriteLimiter, chatUpload.single('file'), async (req: any, res) => {
+  // The route is scoped to a channel so access is checked before the bytes are
+  // persisted (multer already buffered them in memory; nothing touches disk
+  // until saveAttachment runs, so every refusal below is orphan-free).
+  r.post('/upload', chatWriteLimiter, chatUploadSingle, async (req: any, res) => {
     const user: ChatUser = { id: req.user.id, username: req.user.username, role: req.user.role };
     const channelId = typeof req.body?.channelId === 'string' ? req.body.channelId : '';
     if (!isChannelId(channelId)) return res.status(400).json({ error: 'Invalid channel id' });
@@ -666,14 +697,16 @@ export function registerChatTeamRoutes(app: any): void {
     if (buf.length > MAX_ATTACHMENT_BYTES) {
       return res.status(400).json({ error: 'File too large (max 10 MB)' });
     }
-    const kind = detectImageExt(buf) ? 'image' : 'file';
-    const saved = await saveAttachment(buf, channelId, user.id);
+    // Bytes decide the kind (never the extension or a client claim). SVG/HTML/
+    // HEIC/TIFF stay 'file' on purpose — see chat-attachment-kind.ts.
+    const kind = detectAttachmentKind(buf);
+    const name = sanitizeAttachmentName(req.file.originalname, 'file');
+    const saved = await saveAttachment(buf, channelId, user.id, { name, kind });
     if (saved === 'channel-not-found') return res.status(404).json({ error: 'Channel not found' });
     if (saved === 'quota') {
       return res.status(400).json({ error: 'Channel attachment storage limit exceeded (500 MB)' });
     }
     const { id, size } = saved;
-    const name = String(req.file.originalname || 'file').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 255) || 'file';
     res.status(201).json({ attachment: { id, name, kind, size } });
   });
 
@@ -690,7 +723,15 @@ export function registerChatTeamRoutes(app: any): void {
     if (!channel || canAccessChannel(user, channel) === 'none') {
       return res.status(403).json({ error: 'Access denied' });
     }
-    res.setHeader('Content-Type', 'application/octet-stream');
+    // Re-derive type and name from the stored bytes rather than trusting the
+    // meta record: only a real raster image is served `image/*` + inline, so
+    // an uploaded SVG/HTML can never execute as markup on our own origin.
+    const facts = detectAttachmentFacts(attachmentHead(attachmentId, ATTACHMENT_HEAD_BYTES));
+    res.setHeader('Content-Type', facts.mime);
+    res.setHeader(
+      'Content-Disposition',
+      contentDispositionHeader(attachmentFileName(meta.name, facts), facts.kind)
+    );
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.sendFile(p);
   });

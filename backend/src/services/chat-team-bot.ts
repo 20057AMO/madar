@@ -63,10 +63,18 @@ export function createTeamChatBot(deps: TeamChatBotDeps = {}): TeamChatBot {
     return !!p && p.enabled && (p.apiKeyMasked !== '' || p.type === 'ollama');
   }
 
+  /** Bounded prompt window. A channel holds up to 500 messages × 5 000 chars;
+   *  pasting all of it into the system prompt on every mention blew the
+   *  context (and the bill) for a busy room. Same discipline as
+   *  buildBotContext: keep the NEWEST rows, then trim from the front. */
+  const BOT_HISTORY_MAX_MESSAGES = 30;
+  const BOT_HISTORY_MAX_CHARS = 6000;
+
   /** Flat render of a channel's recent rows for the untrusted-history frame
    *  (mirrors buildBotContext's label mapping in chat-team-bot-core). */
   function renderHistoryBlock(messages: MessageLike[]): string {
-    return messages
+    const lines = messages
+      .slice(-BOT_HISTORY_MAX_MESSAGES)
       .map((m) => {
         const who = m.userId === BOT_USER_ID ? 'assistant' : 'user';
         const name = m.username || m.userId || 'unknown';
@@ -75,8 +83,20 @@ export function createTeamChatBot(deps: TeamChatBotDeps = {}): TeamChatBot {
           .join(' ');
         const text = String(m.text ?? '').trim();
         return `[${who} ${name}] ${text}${refs && text ? ' ' : ''}${refs}`;
-      })
-      .join('\n');
+      });
+    let start = 0;
+    let total = lines.reduce((sum, line) => sum + line.length + 1, 0);
+    while (start < lines.length - 1 && total > BOT_HISTORY_MAX_CHARS) {
+      total -= lines[start].length + 1;
+      start += 1;
+    }
+    const kept = lines.slice(start);
+    if (kept.length === 1 && kept[0].length > BOT_HISTORY_MAX_CHARS) {
+      // A single oversized newest message: keep its head (the mention lives
+      // there) rather than dropping the room's latest context entirely.
+      kept[0] = kept[0].slice(0, BOT_HISTORY_MAX_CHARS);
+    }
+    return kept.join('\n');
   }
 
   /** System prompt: the stock Madar system + the bot's channel ground rules +

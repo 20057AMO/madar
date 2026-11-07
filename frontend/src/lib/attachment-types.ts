@@ -33,15 +33,18 @@ const PDF_EXTS = new Set(['pdf']);
 const ARCHIVE_EXTS = new Set(['zip', 'tar', 'gz', 'tgz', '7z', 'rar']);
 const TEXT_EXTS = new Set(['txt', 'md', 'log', 'csv', 'conf', 'env']);
 
-function extOf(name: string): string {
-  const idx = name.lastIndexOf('.');
-  if (idx < 0) return name.toLowerCase();
+function extOf(name: string | null | undefined): string {
+  // Legacy attachment rows may predate `name`; a missing name must degrade to
+  // "unknown extension", never throw inside a render path.
+  const value = typeof name === 'string' ? name : '';
+  const idx = value.lastIndexOf('.');
+  if (idx < 0) return value.toLowerCase();
   // Dotfile like `.env` — the extension is everything after the leading dot.
-  if (idx === 0) return name.slice(1).toLowerCase();
-  return name.slice(idx + 1).toLowerCase();
+  if (idx === 0) return value.slice(1).toLowerCase();
+  return value.slice(idx + 1).toLowerCase();
 }
 
-export function attachmentGroup(name: string, kind: string): AttachmentGroup {
+export function attachmentGroup(name: string | null | undefined, kind: string): AttachmentGroup {
   if (kind === 'image') return 'image';
   const ext = extOf(name);
   if (CODE_EXTS.has(ext)) return 'code';

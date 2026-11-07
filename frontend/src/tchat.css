@@ -281,6 +281,7 @@
 
 /* ── Main column ────────────────────────────────────────────── */
 .tchat-main {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1437,6 +1438,59 @@ mark.tchat-search-hit {
 .tchat-x:hover { color: var(--text); }
 .tchat-readonly { padding: 14px 16px; color: var(--text-2); font-size: 0.75rem; border-top: 1px solid var(--border); background: var(--panel); }
 
+/* ── Attachment intake: drop target, progress + outcome notice ── */
+.tchat-drop-overlay {
+  position: absolute;
+  inset: 8px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  border-radius: 14px;
+  border: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  /* Never a click target: the pane below keeps its own handlers. */
+  pointer-events: none;
+  animation: tchat-drop-in 120ms ease-out;
+}
+.tchat-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 22px;
+  border-radius: 12px;
+  text-align: center;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.tchat-drop-card svg { color: var(--accent); }
+.tchat-drop-card strong { font-size: 0.86rem; font-weight: 600; }
+.tchat-drop-card span { font-size: 0.7rem; color: var(--text-2); }
+@keyframes tchat-drop-in {
+  from { opacity: 0; transform: scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+.tchat-attach-notice {
+  margin: 0 12px;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--yellow);
+}
+/* Stays mounted so the live region can announce; empty = no space taken. */
+.tchat-attach-notice:empty { display: none; }
+
+.tchat-uploading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  color: var(--text-2);
+}
+
 /* Composer icon buttons meet a usable touch target (WCAG 2.5.8) */
 .tchat-composer .btn {
   min-width: 44px;
@@ -1918,7 +1972,8 @@ mark.tchat-search-hit {
 @media (prefers-reduced-motion: reduce) {
   .tchat-rail { transition: none; }
   .tchat-ctx-menu,
-  .tchat-emoji-panel { animation: none; }
+  .tchat-emoji-panel,
+  .tchat-drop-overlay { animation: none; }
 }
 
 /* ── Phone tweaks (≤640px) ──────────────────────────────────── */
@@ -1969,6 +2024,8 @@ mark.tchat-search-hit {
      destroy the stack. */
   .tchat-presence-avatar { min-width: 24px; }
   .tchat-send-fab { width: 46px; height: 46px; }
+  /* Attachment chips carry a bare X icon; it needs a real tap box. */
+  .tchat-composer-att .tchat-x { min-width: 44px; min-height: 44px; }
   .lightbox-nav { width: 44px; height: 44px; }
 }
 @media (max-width: 640px) {

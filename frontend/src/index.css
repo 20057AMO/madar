@@ -199,7 +199,7 @@ select.modern-input { appearance: none; cursor: pointer; }
 /* Brand watermark (bottom-end corner, all pages — RTL via logical props) */
 .watermark {
   position: fixed; inset-inline-end: 18px; bottom: 14px; z-index: 90;
-  width: 86px; height: 86px; opacity: 0.09;
+  width: 86px; height: 86px; opacity: 0.25;
   pointer-events: none; user-select: none;
 }
 .watermark img { width: 100%; height: 100%; object-fit: contain; }
@@ -2887,13 +2887,6 @@ iframe[data-kbd-focus] {
 .modal-card,
 .modal-dialog {
   animation: dialogIn 0.18s cubic-bezier(0.2, 0.8, 0.3, 1) both;
-}
-
-/* Watermark — present on every page, gently alive */
-.watermark { animation: wmBreathe 7s ease-in-out infinite; }
-@keyframes wmBreathe {
-  0%, 100% { opacity: 0.07; }
-  50%      { opacity: 0.13; }
 }
 
 /* ── Team page (admin roster at /team) ─────────────────────── */

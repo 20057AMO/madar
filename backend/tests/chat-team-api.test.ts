@@ -1843,6 +1843,129 @@ test('reactions access matrix: viewer member reacts 200 but cannot send; outside
   assert.strictEqual(out.status, 403, JSON.stringify(out.json));
 });
 
+// ── Live WS regressions (protocol frames) ─────────────────────
+/** Open a team-chat socket the same way the browser does (`?token=`). */
+function openChatSocket(token: string): Promise<WebSocket> {
+  const ws = new WebSocket(`${WS_BASE}/ws/chat-team?token=${encodeURIComponent(token)}`);
+  return new Promise((resolve, reject) => {
+    ws.once('open', () => resolve(ws));
+    ws.once('error', reject);
+  });
+}
+
+/** Wait for one frame matching `pred`. Attach BEFORE sending the trigger. */
+function waitFrame(ws: WebSocket, pred: (f: any) => boolean, timeoutMs = 8000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (raw: any) => {
+      let frame: any;
+      try {
+        frame = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      if (!pred(frame)) return;
+      cleanup();
+      resolve(frame);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('timed out waiting for WS frame'));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+    };
+    ws.on('message', onMessage);
+  });
+}
+
+/** Subscribe a socket to a channel and return the `subscribed` replay frame. */
+async function subscribeFrame(token: string, channelId: string): Promise<{ ws: WebSocket; frame: any }> {
+  const ws = await openChatSocket(token);
+  const framePromise = waitFrame(ws, (f) => f.type === 'subscribed' && f.channelId === channelId);
+  ws.send(JSON.stringify({ type: 'subscribe', channelId }));
+  return { ws, frame: await framePromise };
+}
+
+test('WS: subscribed carries server-resolved maySend (editor locked out of an admins-only channel)', async () => {
+  const ch = await makeChannel(uniqueId('wsmay'));
+  const lock = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'admins' });
+  assert.strictEqual(lock.status, 200, JSON.stringify(lock.json));
+
+  const editor = await makeUser('wsmay', 'editor');
+  const sockets: WebSocket[] = [];
+  try {
+    const asEditor = await subscribeFrame(editor.token, ch.id);
+    sockets.push(asEditor.ws);
+    // Write-level (editors write in manual channels) but NOT allowed to send.
+    assert.strictEqual(asEditor.frame.level, 'write', JSON.stringify(asEditor.frame));
+    assert.strictEqual(asEditor.frame.canSend, 'admins');
+    assert.strictEqual(asEditor.frame.maySend, false, 'a locked channel must not unlock the editor composer');
+
+    const asAdmin = await subscribeFrame(signTestToken(), ch.id);
+    sockets.push(asAdmin.ws);
+    assert.strictEqual(asAdmin.frame.maySend, true, 'a system admin may send even when the channel is locked');
+
+    // Unlock and re-subscribe: the editor may send again.
+    const unlock = await api('PUT', `${chatBase}/channels/${ch.id}/settings`, { canSend: 'everyone' });
+    assert.strictEqual(unlock.status, 200, JSON.stringify(unlock.json));
+    const reopened = await subscribeFrame(editor.token, ch.id);
+    sockets.push(reopened.ws);
+    assert.strictEqual(reopened.frame.maySend, true, 'the unlocked channel re-opens sending for editors');
+  } finally {
+    for (const ws of sockets) ws.terminate();
+  }
+});
+
+test('WS: deleting a channel delivers channel_deleted to its subscribers', async () => {
+  const ch = await makeChannel(uniqueId('wsdel'));
+  const ws = await openChatSocket(signTestToken());
+  try {
+    const subscribed = waitFrame(ws, (f) => f.type === 'subscribed' && f.channelId === ch.id);
+    ws.send(JSON.stringify({ type: 'subscribe', channelId: ch.id }));
+    await subscribed;
+
+    const deleted = waitFrame(ws, (f) => f.type === 'channel_deleted' && f.channelId === ch.id);
+    const del = await api('DELETE', `${chatBase}/channels/${ch.id}`);
+    assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+    const frame = await deleted;
+    assert.strictEqual(frame.channelId, ch.id);
+  } finally {
+    ws.terminate();
+  }
+});
+
+test('deleting the last-read message re-anchors the read position (no unread regrowth)', async () => {
+  const ch = await makeChannel(uniqueId('readdel'));
+  const m1 = await sendChannelMessage(ch.id, 'first');
+  const m2 = await sendChannelMessage(ch.id, 'second');
+  const m3 = await sendChannelMessage(ch.id, 'third');
+  const reader = await makeUser('readdel', 'editor');
+  const asReader = runAs(reader.token);
+
+  // Read up to m2 → exactly one unread (m3).
+  const mark = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m2.id });
+  assert.strictEqual(mark.status, 200, JSON.stringify(mark.json));
+  let row = (await asReader('GET', `${chatBase}/channels`)).json.channels.find((c: any) => c.id === ch.id);
+  assert.strictEqual(row.unread, 1);
+
+  // The anchor message disappears. The read position must slide back to m1 —
+  // resetting it to "nothing read" would turn the whole channel unread again.
+  const del = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${m2.id}`);
+  assert.strictEqual(del.status, 200, JSON.stringify(del.json));
+  row = (await asReader('GET', `${chatBase}/channels`)).json.channels.find((c: any) => c.id === ch.id);
+  assert.strictEqual(row.unread, 1, 'only m3 stays unread after the anchor is deleted');
+  assert.strictEqual(row.firstUnreadId, m3.id);
+
+  // Deleting the FIRST message (a read anchor of the earliest history) leaves
+  // the later ones intact instead of marking everything read.
+  await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m1.id });
+  const delFirst = await api('DELETE', `${chatBase}/channels/${ch.id}/messages/${m1.id}`);
+  assert.strictEqual(delFirst.status, 200, JSON.stringify(delFirst.json));
+  row = (await asReader('GET', `${chatBase}/channels`)).json.channels.find((c: any) => c.id === ch.id);
+  assert.strictEqual(row.unread, 1, 'm3 is still the one unread message');
+});
+
 test('reactions 404/400: deleted message 404, unknown channel 404, junk emoji still 400 on a real channel', async () => {
   const ch = await makeChannel(uniqueId('reac404'));
   const m = await sendChannelMessage(ch.id, 'to be deleted');

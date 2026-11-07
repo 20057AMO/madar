@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-preact';
 import { chatAttachmentObjectUrl, revokeChatAttachmentObjectUrl } from '../api';
+import { useI18n } from '../i18n';
 
 interface AttachmentLightboxProps {
   images: { id: string; name: string }[];
@@ -18,6 +19,7 @@ interface AttachmentLightboxProps {
 }
 
 export function AttachmentLightbox({ images, index, onClose, onIndexChange }: AttachmentLightboxProps) {
+  const { t2 } = useI18n();
   const overlayRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [url, setUrl] = useState<string | null>(null);
@@ -112,21 +114,24 @@ export function AttachmentLightbox({ images, index, onClose, onIndexChange }: At
       dir="ltr"
       role="dialog"
       aria-modal="true"
-      aria-label={`Attachment preview: ${current?.name || ''}, ${index + 1} of ${count}`}
+      aria-label={t2(
+        `معاينة المرفق: ${current?.name || t2('مرفق', 'Attachment')}، ${index + 1} من ${count}`,
+        `Attachment preview: ${current?.name || 'Attachment'}, ${index + 1} of ${count}`,
+      )}
       onMouseDown={(e: any) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div class="lightbox-nav lightbox-prev" role="button" tabIndex={0} aria-label="Previous image" onClick={() => onIndexChange((index - 1 + count) % count)} onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onIndexChange((index - 1 + count) % count); } }}>
+      <div class="lightbox-nav lightbox-prev" role="button" tabIndex={0} aria-label={t2('الصورة السابقة', 'Previous image')} onClick={() => onIndexChange((index - 1 + count) % count)} onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onIndexChange((index - 1 + count) % count); } }}>
         <ChevronLeft width={22} height={22} />
       </div>
 
       <div class="lightbox-stage">
         {url ? (
-          <img class="lightbox-img" src={url} alt={current?.name || 'attachment'} />
+          <img class="lightbox-img" src={url} alt={current?.name || t2('مرفق', 'Attachment')} />
         ) : loadError ? (
           <div class="lightbox-error" role="alert">
-            <span>Failed to load image</span>
-            <button class="lightbox-retry" onClick={() => setRetryTick((t) => t + 1)} aria-label="Retry loading image">
-              Retry
+            <span>{t2('تعذّر تحميل الصورة', 'Failed to load image')}</span>
+            <button class="lightbox-retry" onClick={() => setRetryTick((t) => t + 1)} aria-label={t2('إعادة محاولة تحميل الصورة', 'Retry loading image')}>
+              {t2('إعادة المحاولة', 'Retry')}
             </button>
           </div>
         ) : (
@@ -135,16 +140,16 @@ export function AttachmentLightbox({ images, index, onClose, onIndexChange }: At
           </div>
         )}
         <div class="lightbox-caption">
-          <span class="lightbox-name">{current?.name || ''}</span>
+          <span class="lightbox-name">{current?.name || t2('مرفق', 'Attachment')}</span>
           <span class="dim">{index + 1}/{count}</span>
         </div>
       </div>
 
-      <div class="lightbox-nav lightbox-next" role="button" tabIndex={0} aria-label="Next image" onClick={() => onIndexChange((index + 1) % count)} onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onIndexChange((index + 1) % count); } }}>
+      <div class="lightbox-nav lightbox-next" role="button" tabIndex={0} aria-label={t2('الصورة التالية', 'Next image')} onClick={() => onIndexChange((index + 1) % count)} onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onIndexChange((index + 1) % count); } }}>
         <ChevronRight width={22} height={22} />
       </div>
 
-      <button class="lightbox-close" ref={closeRef} onClick={onClose} aria-label="Close preview">
+      <button class="lightbox-close" ref={closeRef} onClick={onClose} aria-label={t2('إغلاق المعاينة', 'Close preview')}>
         <X width={20} height={20} />
       </button>
     </div>

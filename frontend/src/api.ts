@@ -1792,13 +1792,23 @@ export interface ChatChannel {
   createdAt: string;
   lastMessageAt?: string;
   /** Preview of the newest message (rail subtitle) — from the channels list. */
-  lastMessage?: { text: string; timestamp: string } | null;
+  lastMessage?: {
+    text: string;
+    timestamp: string;
+    /**
+     * Additive attachment summary: an attachment-only message has empty text,
+     * so the rail needs the kinds. `name` may be absent on legacy rows.
+     */
+    attachments?: { id: string; name?: string; kind: string }[];
+  } | null;
   unread?: number;
   firstUnreadId?: string;
   /** Send permission for manual channels: 'everyone' (default) or 'admins'. */
   canSend?: 'everyone' | 'admins';
   /** Whether the current user may send messages (server-resolved). */
   maySend?: boolean;
+  /** Primary pinned message id selected by an admin (null when cleared). */
+  pinnedMessageId?: string | null;
 }
 
 /** All channels the user can see, with unread counts. */

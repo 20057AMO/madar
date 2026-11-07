@@ -39,7 +39,7 @@ import {
   markMessageAsDelivered,
   markMessagesAsRead,
 } from '../services/chat-team-store';
-import { canAccessChannel, type ChatUser } from '../services/chat-team-access';
+import { canAccessChannel, canSendInChannel, type ChatUser } from '../services/chat-team-access';
 import { BOT_USER_ID, BOT_USERNAME, isChannelId, type CanSendMode, type TeamChannel } from '../services/chat-team-core';
 
 const PRESENCE_TYPING_MS = 3000;
@@ -158,7 +158,20 @@ export function broadcastChannelUpdate(channelId: string, canSend: CanSendMode):
 }
 
 export function broadcastChannelDeleted(channelId: string): void {
-  broadcastToChannel(channelId, { type: 'channel_deleted', channelId });
+  // Lifecycle frame — the channel row is ALREADY gone when this runs, so the
+  // regular broadcastToChannel path (which re-checks canAccessChannel against
+  // a live row) would refuse the row and send `access_revoked` instead,
+  // leaving `channel_deleted` unreachable. Fan the frame out to whoever was
+  // subscribed at delete time and drop the now-dead subscription state.
+  const set = channelSubscribers.get(channelId);
+  if (!set) return;
+  for (const ws of set) {
+    send(ws, { type: 'channel_deleted', channelId });
+    const client = clients.get(ws);
+    client?.channels.delete(channelId);
+    client?.typingAt.delete(channelId);
+  }
+  channelSubscribers.delete(channelId);
 }
 
 /** Push the @madar bot's typing indicator to a channel's subscribers. */
@@ -310,6 +323,10 @@ export function handleChatTeamSocket(
           messages: getMessages(channelId, { limit: 100 }),
           level,
           canSend: channel.canSend || 'everyone',
+          // Server-authoritative SEND permission. `level` alone is not enough:
+          // an editor in an 'admins'-locked manual channel is write-level but
+          // still may not send, so the client must not open its composer.
+          maySend: canSendInChannel(client.user, channel, level),
         });
         return;
       }

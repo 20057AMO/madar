@@ -14,6 +14,7 @@ import path from 'path';
 import { randomBytes } from 'crypto';
 
 import { withFileLockAsync } from './write-queue';
+import type { ChatAttachmentKind } from './chat-attachment-kind';
 import {
   DEFAULT_MSG_CAP,
   MAX_ATTACHMENT_BYTES,
@@ -508,6 +509,25 @@ export async function deleteMessage(
       }
       return { changed, result: undefined };
     });
+    // Read positions that pointed at the deleted message: re-anchor them to
+    // the newest SURVIVING message that preceded it. Without this, the anchor
+    // stops resolving in getUnreadByChannel and the WHOLE channel turns
+    // unread again (a delete would manufacture unread history). idx === 0 means
+    // nothing came before it — drop the entry, so only later messages count.
+    await withFileLockAsync('chat-read', async () => {
+      const map = readReadMap();
+      const channelMap = map[channelId];
+      if (!channelMap) return;
+      const fallback = idx > 0 ? messages[idx - 1]?.id : undefined;
+      let changed = false;
+      for (const [userId, anchor] of Object.entries(channelMap)) {
+        if (anchor !== msgId) continue;
+        if (fallback) channelMap[userId] = fallback;
+        else delete channelMap[userId];
+        changed = true;
+      }
+      if (changed) writeReadMap(map);
+    });
     // Attachment ids may be referenced by more than one message in a channel.
     if (unusedAttachments.length > 0) deleteAttachments([...new Set(unusedAttachments)]);
     result = { deleted: true, attachmentIds };
@@ -658,11 +678,13 @@ export function uploadDir(): string {
 }
 
 /** Save an attachment's bytes under a fresh random id, plus a small meta file
- * (channelId/uploadedBy) so cross-channel reuse can be rejected later. */
+ * (channelId/uploadedBy/name/kind) so cross-channel reuse can be rejected and
+ * the download can be served with the truth instead of the raw id. */
 export async function saveAttachment(
   buffer: Buffer,
   channelId: string,
-  userId: string
+  userId: string,
+  info?: { name?: string; kind?: ChatAttachmentKind }
 ): Promise<{ id: string; size: number } | 'channel-not-found' | 'quota'> {
   return withFileLockAsync(`msgs:${channelId}`, async () => {
     if (!getChannel(channelId)) return 'channel-not-found';
@@ -704,12 +726,18 @@ export async function saveAttachment(
     const bytesPath = path.join(UPLOADS_DIR, id);
     const metaPath = path.join(UPLOADS_DIR, `${id}.meta.json`);
     fs.writeFileSync(bytesPath, buffer, { mode: 0o600, flag: 'wx' });
+    // name/kind are display metadata only (never used for path math) — an
+    // absent value stays absent so the reader keeps its byte-derived fallback.
+    const meta: Record<string, unknown> = {
+      channelId,
+      uploadedBy: userId,
+      uploadedAt: new Date().toISOString(),
+      size: buffer.length,
+    };
+    if (typeof info?.name === 'string' && info.name) meta.name = info.name;
+    if (info?.kind === 'image' || info?.kind === 'file') meta.kind = info.kind;
     try {
-      fs.writeFileSync(
-        metaPath,
-        JSON.stringify({ channelId, uploadedBy: userId, uploadedAt: new Date().toISOString(), size: buffer.length }),
-        { mode: 0o600, flag: 'wx' }
-      );
+      fs.writeFileSync(metaPath, JSON.stringify(meta), { mode: 0o600, flag: 'wx' });
     } catch (err) {
       try {
         fs.rmSync(bytesPath, { force: true });
@@ -722,13 +750,36 @@ export async function saveAttachment(
   });
 }
 
-/** Ownership metadata for an uploaded attachment — null when absent (legacy). */
-export function getAttachmentMeta(attachmentId: string): { channelId: string; uploadedBy: string; uploadedAt: string } | null {
+/** Public shape of a stored attachment's metadata. */
+export interface AttachmentMeta {
+  channelId: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  /** Display name persisted at upload (absent on pre-name uploads). */
+  name?: string;
+  /** Classification persisted at upload (absent on pre-kind uploads — the
+   * caller re-derives it from the bytes, which stays the source of truth). */
+  kind?: ChatAttachmentKind;
+}
+
+/**
+ * Ownership metadata for an uploaded attachment — null when absent (legacy).
+ * Deliberately does NOT read the bytes file: this is a metadata reader, and
+ * every caller that needs the kind classifies the head it has to read anyway.
+ */
+export function getAttachmentMeta(attachmentId: string): AttachmentMeta | null {
   if (!/^att-[a-z0-9-]+$/.test(attachmentId)) return null;
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(UPLOADS_DIR, `${attachmentId}.meta.json`), 'utf8'));
     if (raw && typeof raw.channelId === 'string' && typeof raw.uploadedBy === 'string') {
-      return { channelId: raw.channelId, uploadedBy: raw.uploadedBy, uploadedAt: String(raw.uploadedAt || '') };
+      const meta: AttachmentMeta = {
+        channelId: raw.channelId,
+        uploadedBy: raw.uploadedBy,
+        uploadedAt: String(raw.uploadedAt || ''),
+      };
+      if (typeof raw.name === 'string' && raw.name) meta.name = raw.name;
+      if (raw.kind === 'image' || raw.kind === 'file') meta.kind = raw.kind;
+      return meta;
     }
   } catch { /* missing or corrupt */ }
   return null;
@@ -741,6 +792,31 @@ export function attachmentPath(attachmentId: string): string | null {
     if (fs.existsSync(full)) return full;
   } catch { /* fallthrough */ }
   return null;
+}
+
+/**
+ * First `max` bytes of a stored attachment (default 64 — every signature we
+ * classify lives there). Bounded on purpose: a 10 MB voice note must never be
+ * slurped into memory just to learn its type; an unreadable file yields an
+ * empty buffer so the caller degrades to "plain file" instead of throwing.
+ */
+export function attachmentHead(attachmentId: string, max = 64): Buffer {
+  const full = attachmentPath(attachmentId);
+  if (!full) return Buffer.alloc(0);
+  const limit = Math.max(1, Math.min(Math.floor(max) || 64, 4096));
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(full, 'r');
+    const buf = Buffer.alloc(limit);
+    const read = fs.readSync(fd, buf, 0, limit, 0);
+    return read > 0 ? buf.subarray(0, read) : Buffer.alloc(0);
+  } catch {
+    return Buffer.alloc(0);
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* best-effort */ }
+    }
+  }
 }
 
 export function deleteAttachment(attachmentId: string): void {

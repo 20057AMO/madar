@@ -18,12 +18,14 @@ export type ChatSocketEvent =
   | { type: 'typing_stop'; channelId: string; user: { id: string; username: string } }
   | { type: 'read'; channelId: string; userId: string; msgId: string }
   | { type: 'pin'; channelId: string; msgId: string; pinned: boolean }
+  | { type: 'pinned_update'; channelId: string; pinnedMessageId: string | null }
   | { type: 'presence'; users: { id: string; username: string; role: string; displayName?: string; avatarExt?: 'png' | 'jpg' | 'webp' }[] }
-  | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write'; canSend?: string }
+  | { type: 'subscribed'; channelId: string; messages: TeamChatMessage[]; level: 'read' | 'write'; canSend?: string; maySend?: boolean }
   | { type: 'channel_update'; channel: { id: string; canSend: 'everyone' | 'admins' } }
   | { type: 'status_update'; messageId: string; newStatus: TeamChatMessage['status'] }
   | { type: 'message_updated'; channelId: string; message: TeamChatMessage }
   | { type: 'message_deleted'; channelId: string; msgId: string }
+  | { type: 'channel_deleted'; channelId: string }
   | { type: 'access_revoked'; channelId: string };
 
 export interface TeamChatSocket {
@@ -102,7 +104,7 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
         }
         switch (msg.type) {
           case 'subscribed':
-            onEventRef.current({ type: 'subscribed', channelId: msg.channelId, messages: msg.messages ?? [], level: msg.level, canSend: msg.canSend });
+            onEventRef.current({ type: 'subscribed', channelId: msg.channelId, messages: msg.messages ?? [], level: msg.level, canSend: msg.canSend, maySend: msg.maySend });
             break;
           case 'message':
             onEventRef.current({ type: 'message', channel: msg.channel, message: msg.message });
@@ -122,6 +124,9 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
           case 'pin':
             onEventRef.current({ type: 'pin', channelId: msg.channelId, msgId: msg.msgId, pinned: msg.pinned });
             break;
+          case 'pinned_update':
+            onEventRef.current({ type: 'pinned_update', channelId: msg.channelId, pinnedMessageId: msg.pinnedMessageId ?? null });
+            break;
           case 'presence':
             onEventRef.current({ type: 'presence', users: msg.users ?? [] });
             break;
@@ -138,6 +143,9 @@ export function useTeamChatSocket(onEvent: (ev: ChatSocketEvent) => void): TeamC
             break;
           case 'message_deleted':
             onEventRef.current({ type: 'message_deleted', channelId: msg.channelId, msgId: msg.msgId });
+            break;
+          case 'channel_deleted':
+            onEventRef.current({ type: 'channel_deleted', channelId: msg.channelId });
             break;
           case 'access_revoked':
             onEventRef.current({ type: 'access_revoked', channelId: msg.channelId });

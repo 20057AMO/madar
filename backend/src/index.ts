@@ -3564,8 +3564,15 @@ app.use((err: any, _req: any, res: any, next: any) => {
     return res.status(400).json({ error: err.type === 'entity.parse.failed' ? 'Invalid JSON body' : 'Request body too large' });
   }
   // multer oversize uploads are 413 (Payload Too Large), not generic 400s.
+  // `limitBytes` is tagged by wrappers that know their cap (chat uploads), so
+  // the client learns the real limit instead of a bare "File too large".
   if (err?.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'File too large' });
+    const limitBytes = Number(err?.limitBytes);
+    const suffix =
+      Number.isFinite(limitBytes) && limitBytes > 0
+        ? ` (max ${Number.isInteger(limitBytes / (1024 * 1024)) ? limitBytes / (1024 * 1024) : (limitBytes / (1024 * 1024)).toFixed(1)} MB)`
+        : '';
+    return res.status(413).json({ error: `File too large${suffix}` });
   }
   // multer rejections (unexpected fields) are client errors.
   if (typeof err?.code === 'string' && err.code.startsWith('LIMIT_')) {

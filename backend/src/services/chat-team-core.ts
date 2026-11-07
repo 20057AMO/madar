@@ -130,13 +130,18 @@ export function buildDirectChannelId(a: string, b: string): string {
   return `dm:${[a, b].sort().join(':')}`;
 }
 
-/** Strip control chars + trim, then cap — returns null when empty/over-long. */
-export function sanitizePlain(raw: unknown, max: number): string | null {
+/** Strip control chars + normalize newlines + trim (no length rule). */
+function cleanPlain(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
-  const sanitized = raw
+  return raw
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
     .replace(/\r\n?/g, '\n')
     .trim();
+}
+
+/** Strip control chars + trim, then cap — returns null when empty/over-long. */
+export function sanitizePlain(raw: unknown, max: number): string | null {
+  const sanitized = cleanPlain(raw);
   if (!sanitized) return null;
   if (sanitized.length > max) return null;
   return sanitized;
@@ -162,12 +167,21 @@ export function parseMentions(text: string): string[] {
  * Normalize an inbound message. Accepts { text, replyTo? } (attachments come
  * through the upload route and are attached before append). Returns null on
  * invalid text/replyTo so the caller can 400/error-frame.
+ *
+ * `allowEmptyText` is set by the caller ONLY once it has resolved at least one
+ * valid attachment: an image/voice note with no caption is a real message, and
+ * the old "text required" rule silently dropped it. Over-long text is still
+ * refused in both modes — the ceiling never bends.
  */
-export function normalizeMessage(raw: unknown): { text: string; replyTo?: string; mentions: string[] } | null {
+export function normalizeMessage(
+  raw: unknown,
+  opts?: { allowEmptyText?: boolean }
+): { text: string; replyTo?: string; mentions: string[] } | null {
   if (!raw || typeof raw !== 'object') return null;
   const body = raw as Record<string, unknown>;
-  const text = sanitizePlain(body.text, MAX_TEXT_CHARS);
-  if (!text) return null;
+  const text = cleanPlain(body.text) ?? '';
+  if (text.length > MAX_TEXT_CHARS) return null;
+  if (!text && !opts?.allowEmptyText) return null;
   let replyTo: string | undefined;
   if (body.replyTo !== undefined && body.replyTo !== null && body.replyTo !== '') {
     if (typeof body.replyTo !== 'string' || !MESSAGE_ID_RE.test(body.replyTo)) return null;
@@ -178,16 +192,22 @@ export function normalizeMessage(raw: unknown): { text: string; replyTo?: string
 
 /**
  * Normalize an inbound message EDIT. Same text ceiling as sending
- * (sanitizePlain with MAX_TEXT_CHARS) — empty/over-long/junk return null so
- * the caller can 400. `replyTo` is NEVER accepted here: a reply's target is
- * immutable once sent, and re-targeting an edited message would corrupt the
+ * (sanitizePlain with MAX_TEXT_CHARS) — over-long/junk return null so the
+ * caller can 400, and an empty body is null unless the caller passes
+ * `allowEmptyText` (a message that carries attachments may be edited to a
+ * bare caption-free state). `replyTo` is NEVER accepted here: a reply's target
+ * is immutable once sent, and re-targeting an edited message would corrupt the
  * conversation history.
  */
-export function normalizeEditMessage(raw: unknown): { text: string; mentions: string[] } | null {
+export function normalizeEditMessage(
+  raw: unknown,
+  opts?: { allowEmptyText?: boolean }
+): { text: string; mentions: string[] } | null {
   if (!raw || typeof raw !== 'object') return null;
   const body = raw as Record<string, unknown>;
-  const text = sanitizePlain(body.text, MAX_TEXT_CHARS);
-  if (!text) return null;
+  const text = cleanPlain(body.text) ?? '';
+  if (text.length > MAX_TEXT_CHARS) return null;
+  if (!text && !opts?.allowEmptyText) return null;
   return { text, mentions: parseMentions(text) };
 }
 
