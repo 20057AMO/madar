@@ -376,7 +376,6 @@
   background: var(--panel-2);
   font-weight: 600;
 }
-.nav-btn.active::before { background: var(--accent); }
 .nav-btn:hover:not(.active) { background: rgba(255, 255, 255, 0.04); }
 .nav-btn:focus-visible {
   outline: 2px solid var(--accent);
