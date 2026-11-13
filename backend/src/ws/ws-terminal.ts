@@ -7,6 +7,15 @@
  * Protocol: raw binary frames carry terminal I/O; text frames are JSON control
  * messages ({ type: 'resize', cols, rows }). Server closes on error with a
  * text { type: 'error', message } frame first.
+ *
+ * Close-code contract (see services/terminal-close.ts, mirrored by the client
+ * so a permanent failure is never auto-retried):
+ *   4000 session-ended     — the shell/pty/exec stream ended
+ *   4404 container-missing — Docker answered 404 (no such container)
+ *   4409 container-stopped — Docker answered 409 (container exists, not running)
+ *   4503 capacity          — this slug:mode terminal is already open / global cap
+ *   4500 internal          — anything else that failed to start (retryable)
+ * 1008 (project access denied) is produced by ws-server.ts, not here.
  */
 import { WebSocket } from 'ws';
 import Docker from 'dockerode';
@@ -14,6 +23,7 @@ import path from 'path';
 import * as pty from 'node-pty';
 import { WORKSPACES_ROOT } from '../services/docker-manager';
 import { resolveProjectSubdir } from '../services/workspace-files';
+import { TERMINAL_CLOSE, mapTerminalStartError } from '../services/terminal-close';
 
 const docker = new Docker();
 
@@ -33,16 +43,24 @@ export function handleTerminalSocket(
   onRelease: () => void
 ): void {
   const key = `${slug}:${mode}`;
+  // Idempotent: the `start` promise and the socket's `close` event can both finish.
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    onRelease();
+  };
+
   if (active.has(key)) {
     sendJson(ws, { type: 'error', message: `A ${mode} terminal for '${slug}' is already open. Close it first.` });
-    ws.close(1013, 'session busy');
-    onRelease();
+    ws.close(TERMINAL_CLOSE.capacity, 'session busy');
+    release();
     return;
   }
   if (active.size >= MAX_SESSIONS) {
     sendJson(ws, { type: 'error', message: 'Too many open terminals. Close another one first.' });
-    ws.close(1013, 'too many sessions');
-    onRelease();
+    ws.close(TERMINAL_CLOSE.capacity, 'too many sessions');
+    release();
     return;
   }
 
@@ -59,11 +77,15 @@ export function handleTerminalSocket(
   let shell: ShellHandle | null = null;
   let ready = false;
   let closed = false;
+  let registered = false;
 
-  const finish = () => {
+  const finish = (code: number = TERMINAL_CLOSE.sessionEnded, reason: string = 'session ended') => {
     if (closed) return;
     closed = true;
-    active.delete(key);
+    if (registered) {
+      active.delete(key);
+      registered = false;
+    }
     if (shell) {
       try {
         shell.close();
@@ -71,8 +93,8 @@ export function handleTerminalSocket(
         /* ignore */
       }
     }
-    if (ws.readyState === WebSocket.OPEN) ws.close();
-    onRelease();
+    if (ws.readyState === WebSocket.OPEN) ws.close(code, reason);
+    release();
   };
 
   ws.on('message', (data, isBinary) => {
@@ -95,8 +117,8 @@ export function handleTerminalSocket(
       else queue.push(buf);
     }
   });
-  ws.on('close', finish);
-  ws.on('error', finish);
+  ws.on('close', () => finish());
+  ws.on('error', () => finish());
 
   let notifyExit = finish;
   // pty.spawn can throw SYNCHRONOUSLY (e.g. missing shell binary on exotic
@@ -105,25 +127,19 @@ export function handleTerminalSocket(
   // graceful socket close.
   const start = (async () => {
     if (mode === 'control') return startControlShell(slug, subdirInfo, send, () => notifyExit());
-    try {
-      return await startProjectExec(slug, subdirInfo, send, () => notifyExit());
-    } catch (err: any) {
-      if (err?.statusCode === 404) {
-        throw new Error(`Project container 'wsd-${slug}' not found. Start the project first.`);
-      }
-      throw err;
-    }
+    return startProjectExec(slug, subdirInfo, send, () => notifyExit());
   })();
 
   start
     .then((sh) => {
-      if (ws.readyState !== WebSocket.OPEN) {
+      if (closed || ws.readyState !== WebSocket.OPEN) {
         sh.close();
-        onRelease();
+        release();
         return;
       }
       shell = sh;
       active.add(key);
+      registered = true;
       ready = true;
       while (queue.length > 0) {
         sh.write(queue.shift()!);
@@ -138,12 +154,13 @@ export function handleTerminalSocket(
         hostPath: subdirInfo.hostPath,
       });
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
+      const failure = mapTerminalStartError(err, slug);
       if (ws.readyState === WebSocket.OPEN) {
-        sendJson(ws, { type: 'error', message: String(err?.message || err) });
-        ws.close(1011, 'terminal failed');
+        sendJson(ws, { type: 'error', message: failure.message });
+        ws.close(failure.code, failure.reason);
       }
-      onRelease();
+      release();
     });
 }
 

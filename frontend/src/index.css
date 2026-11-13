@@ -780,6 +780,15 @@ input.detail-title {
 .term-status-dot.closed { background: var(--text-3); }
 .term-status-dot.error { background: var(--red); box-shadow: 0 0 6px rgba(248,81,73,0.4); }
 .term-header-label { color: var(--text-3); white-space: nowrap; }
+.term-close-notice {
+  min-width: 0;
+  max-width: 34ch;
+  font-size: 11px;
+  color: var(--yellow);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .term-header-path {
   display: flex; align-items: center; gap: 6px;
   flex: 1; min-width: 0;
