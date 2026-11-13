@@ -33,6 +33,7 @@ import {
   type DelegateCapability,
   type NoteKind,
 } from '../api';
+import { useAuth } from '../auth';
 import { ConfirmModal } from './ConfirmModal';
 import { relTime } from '../lib/time';
 import {
@@ -71,6 +72,8 @@ function CapBadge({ capability }: { capability: DelegateCapability }) {
 
 export function AgentRunPanel({ slug, readOnly }: { slug: string; readOnly?: boolean }) {
   const [, setLocation] = useHashLocation();
+  const { user } = useAuth();
+  const canDelegate = user?.role === 'admin' || user?.role === 'editor';
 
   const [agents, setAgents] = useState<StudioItem[]>([]);
   const [capabilities, setCapabilities] = useState<Record<string, DelegateCapability>>({});
@@ -252,29 +255,30 @@ export function AgentRunPanel({ slug, readOnly }: { slug: string; readOnly?: boo
     return () => clearTimeout(t);
   }, [notice]);
 
-  const all = agents;
   const readers = agents.filter((a) => capabilities[a.name] === 'readonly');
   const writers = agents.filter((a) => capabilities[a.name] === 'write');
-  const pool = readOnly ? readers : all;
 
-  // Default selection: the first agent in the effective pool once loaded.
+  // Default selection: the first agent in the roster once loaded. The picker is
+  // never narrowed by project role — whether a run is allowed at all is decided
+  // by `canDelegate` (system role), and the capability badge marks the writers.
   useEffect(() => {
-    if (capLoaded && !selected && pool.length) {
-      setSelected(pool[0].name);
+    if (capLoaded && !selected && agents.length) {
+      setSelected(agents[0].name);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [capLoaded, agents, readOnly]);
+  }, [capLoaded, agents]);
 
   const selectAgent = (name: string) => {
     if (!name) return;
     setSelected(name);
+    if (!canDelegate) return;
     setPrompt(defaultDelegatePrompt(name)); // each agent ships its own template
   };
 
   const runAgent = async () => {
     const agent = selected;
     const task = prompt.trim();
-    if (!agent || !task || running || task.length > DELEGATE_PROMPT_MAX) return;
+    if (!canDelegate || !agent || !task || running || task.length > DELEGATE_PROMPT_MAX) return;
     setLaunchError(null);
     try {
       const r = await delegateStart(slug, { agent, prompt: task });
@@ -376,11 +380,10 @@ export function AgentRunPanel({ slug, readOnly }: { slug: string; readOnly?: boo
         <BrainCircuit width={14} height={14} class="icon" /> OpenCode Agents
       </h2>
 
-      {readOnly ? (
+      {!canDelegate ? (
         <div class="panel-muted" role="status">
-          You have viewer access — you can run <strong>read-only</strong> agents (reviewers and
-          auditors) on this project. Editors can additionally run write-capable agents that
-          change the workspace, and save results into Notes / Canvas.
+          Agent runs are launched by editors. The roster, live status and history on this project are
+          read-only for you.
         </div>
       ) : (
         <div style="font-size:0.72rem;color:var(--text-3);background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:8px 12px">
@@ -402,13 +405,11 @@ export function AgentRunPanel({ slug, readOnly }: { slug: string; readOnly?: boo
           <div class="skel-line" style="height:76px" />
           <div class="skel-line w60" style="margin-bottom:0" />
         </div>
-      ) : pool.length === 0 && capLoaded ? (
+      ) : agents.length === 0 && capLoaded ? (
         <div class="empty-state" style="text-align:center;padding:24px 0" role="status">
           <div class="big-icon"><BrainCircuit width={26} height={26} class="icon" /></div>
           <p style="color:var(--text-3);font-size:0.78rem;margin:8px 0 0">
-            {readOnly
-              ? 'There are no read-only agents in the roster for viewer access.'
-              : 'No subagents found — open Opencode Studio to create one first.'}
+            No subagents found — open Opencode Studio to create one first.
           </p>
         </div>
       ) : (
@@ -426,10 +427,10 @@ export function AgentRunPanel({ slug, readOnly }: { slug: string; readOnly?: boo
                 class="modern-input compact"
                 style="min-width:200px;flex:1"
                 value={selected}
-                disabled={running || pool.length === 0}
+                disabled={running || agents.length === 0}
                 onChange={(e: any) => selectAgent(e.target.value)}
               >
-                {pool.length > 0 && readers.length > 0 && (
+                {readers.length > 0 && (
                   <optgroup label="Read-only agents (never edit the workspace)">
                     {readers.map((it) => (
                       <option key={it.name} value={it.name}>
@@ -439,7 +440,7 @@ export function AgentRunPanel({ slug, readOnly }: { slug: string; readOnly?: boo
                     ))}
                   </optgroup>
                 )}
-                {!readOnly && writers.length > 0 && (
+                {writers.length > 0 && (
                   <optgroup label="Write-capable agents (can edit the workspace)">
                     {writers.map((it) => (
                       <option key={it.name} value={it.name}>
@@ -453,58 +454,59 @@ export function AgentRunPanel({ slug, readOnly }: { slug: string; readOnly?: boo
               {selected && capabilities[selected] && <CapBadge capability={capabilities[selected]} />}
             </div>
 
-            <textarea
-              class="modern-input mono"
-              style="width:100%;min-height:88px;resize:vertical;font-size:0.78rem;line-height:1.55;box-sizing:border-box"
-              aria-label="Agent task"
-              aria-invalid={overLimit ? 'true' : undefined}
-              aria-describedby="agent-prompt-hint agent-run-shortcut"
-              placeholder="Describe the task for this agent — e.g. “Review src/ for XSS-prone patterns”, “Plan the data layer for Y”, “Write tests for Z”…"
-              value={prompt}
-              disabled={busy}
-              onInput={(e: any) => setPrompt(e.target.value)}
-              onKeyDown={(e: KeyboardEvent) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runAgent();
-              }}
-              spellcheck={false}
-            />
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span
-                id="agent-prompt-hint"
-                style={`font-size:0.66rem;font-variant-numeric:tabular-nums;${
-                  overLimit ? 'color:#fca5a5' : 'color:var(--text-3)'
-                }`}
-              >
-                {prompt.length.toLocaleString()} / {DELEGATE_PROMPT_MAX.toLocaleString()} chars
-              </span>
-              {overLimit && (
-                <span
-                  role="alert"
-                  style="font-size:0.68rem;color:#fca5a5;font-weight:600"
-                >
-                  Exceeds the {DELEGATE_PROMPT_MAX.toLocaleString()}-character limit — the agent won't run.
-                </span>
-              )}
-              <span id="agent-run-shortcut" style="font-size:0.66rem;color:var(--text-3)">
-                Shortcut: Ctrl+Enter
-              </span>
-              <span style="flex:1" />
-              {selected && (
-                <button
-                  class="btn-primary sm"
-                  onClick={runAgent}
-                  disabled={!selected || !prompt.trim() || overLimit || busy}
-                  aria-label={running ? 'Agent is running — wait for it to finish' : 'Run the agent on this project'}
-                  title="Run (Ctrl+Enter)"
-                >
-                  {running ? <Loader2 width={13} height={13} class="icon spin" /> : <Play width={13} height={13} class="icon" />}
-                  {running ? 'Running…' : 'Run agent'}
-                </button>
-              )}
-              {readOnly && (
-                <span style="font-size:0.68rem;color:var(--text-3)">Read-only agents only.</span>
-              )}
-            </div>
+            {canDelegate && (
+              <>
+                <textarea
+                  class="modern-input mono"
+                  style="width:100%;min-height:88px;resize:vertical;font-size:0.78rem;line-height:1.55;box-sizing:border-box"
+                  aria-label="Agent task"
+                  aria-invalid={overLimit ? 'true' : undefined}
+                  aria-describedby="agent-prompt-hint agent-run-shortcut"
+                  placeholder="Describe the task for this agent — e.g. “Review src/ for XSS-prone patterns”, “Plan the data layer for Y”, “Write tests for Z”…"
+                  value={prompt}
+                  disabled={busy}
+                  onInput={(e: any) => setPrompt(e.target.value)}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runAgent();
+                  }}
+                  spellcheck={false}
+                />
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span
+                    id="agent-prompt-hint"
+                    style={`font-size:0.66rem;font-variant-numeric:tabular-nums;${
+                      overLimit ? 'color:#fca5a5' : 'color:var(--text-3)'
+                    }`}
+                  >
+                    {prompt.length.toLocaleString()} / {DELEGATE_PROMPT_MAX.toLocaleString()} chars
+                  </span>
+                  {overLimit && (
+                    <span
+                      role="alert"
+                      style="font-size:0.68rem;color:#fca5a5;font-weight:600"
+                    >
+                      Exceeds the {DELEGATE_PROMPT_MAX.toLocaleString()}-character limit — the agent won't run.
+                    </span>
+                  )}
+                  <span id="agent-run-shortcut" style="font-size:0.66rem;color:var(--text-3)">
+                    Shortcut: Ctrl+Enter
+                  </span>
+                  <span style="flex:1" />
+                  {selected && (
+                    <button
+                      class="btn-primary sm"
+                      onClick={runAgent}
+                      disabled={!selected || !prompt.trim() || overLimit || busy}
+                      aria-label={running ? 'Agent is running — wait for it to finish' : 'Run the agent on this project'}
+                      title="Run (Ctrl+Enter)"
+                    >
+                      {running ? <Loader2 width={13} height={13} class="icon spin" /> : <Play width={13} height={13} class="icon" />}
+                      {running ? 'Running…' : 'Run agent'}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </>
       )}

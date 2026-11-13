@@ -111,7 +111,6 @@ import {
   deleteDelegation,
   type DelegationEntry,
 } from './services/opencode-delegate';
-import { agentCapability, type DelegateCapability } from './services/opencode-delegate-core';
 import { probeOpencodeServer } from './services/opencode-api';
 import * as componentUpdates from './services/component-updates';
 import { startBootUpdatesReapply } from './services/updates-boot';
@@ -1611,7 +1610,11 @@ app.post('/api/archive/:entry/restore', requireRole('editor'), userWriteLimiter,
 });
 
 // Create a new project (provisions container + workspace).
-app.post('/api/projects', async (req: any, res) => {
+// SECURITY: editor+ only. The creator becomes `ownerId` + an admin member, and
+// `decideControlAccess` admits the owner to `mode=control` — a root PTY inside
+// the app container, which mounts /var/run/docker.sock. Ungated, any viewer
+// could self-escalate to host RCE in three steps.
+app.post('/api/projects', requireRole('editor'), async (req: any, res) => {
   try {
     const { name, slug, description, image, ports, env, limits } = req.body || {};
     if (!name || !String(name).trim()) {
@@ -1645,7 +1648,12 @@ app.post('/api/projects', async (req: any, res) => {
 // Duplicate an existing project: new project inheriting image/env/ports,
 // plus a copy of the source workspace files and developer notes. Requires
 // editor+ access (a viewer remains read-only and cannot forge a writable copy).
-app.post('/api/projects/:slug/duplicate', requireProjectAccess('editor'), async (req: any, res) => {
+// SECURITY: the SYSTEM role is checked BEFORE the membership check, because the
+// copy's creator becomes `ownerId` + an admin member and `decideControlAccess`
+// admits the owner to `mode=control` — a root PTY beside /var/run/docker.sock.
+// Deliberately stricter than the membership check alone: a project editor member
+// whose system role is `viewer` is refused, so membership never grants ownership.
+app.post('/api/projects/:slug/duplicate', requireRole('editor'), requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const { name, slug, description, ports } = req.body || {};
     // Defense-in-depth: mirror validateProjectSpec's port rules (privileged +
@@ -2050,7 +2058,12 @@ app.delete('/api/projects/:slug/snapshots/:file', requireProjectAccess('editor')
 });
 
 // Restore a stored snapshot as a NEW project (never overwrites an existing one).
-app.post('/api/projects/:slug/snapshots/:file/restore', requireProjectAccess('editor'), async (req: any, res) => {
+// SECURITY: editor+ only — a restore grants the same ownership as duplicate (the
+// caller becomes `ownerId` + an admin member of the restored project), and
+// `decideControlAccess` admits the owner to `mode=control`, a root PTY beside
+// /var/run/docker.sock. The system role is checked BEFORE membership, so a
+// viewer account that is a project editor can never restore its way to ownership.
+app.post('/api/projects/:slug/snapshots/:file/restore', requireRole('editor'), requireProjectAccess('editor'), async (req: any, res) => {
   try {
     const project = await snapAuto.restoreStoredSnapshot(req.params.slug, req.params.file, req.user?.id);
     const userId = req.user?.id;
@@ -2831,11 +2844,13 @@ app.post('/api/updates/apply', requireAdmin, authLimiter, updateApplyLimiter, as
 // ── Agent delegation (run a roster subagent on a project's workspace) ────
 // POST starts a background agent run (returns {id, status:'running'}); the
 // run's progress is polled via GET state (live tail) and the finished result
-// persists in the per-project history. Access is capability-gated (readonly
-// agents → viewer+, write agents → editor+) and enforced BOTH in the route
+// persists in the per-project history. Launching a delegation requires the
+// SYSTEM editor role for EVERY agent, readonly included — the run executes in
+// the app container beside docker.sock, so 'readonly' is a label, not an
+// access tier — plus project access. Both are enforced BOTH in the route
 // (before any meta read or probe — a denied user always gets a uniform 403,
 // never a 404/503 that would leak project existence or opencode state) and
-// inside startDelegation (authoritative, on freshly-read frontmatter).
+// inside startDelegation (authoritative).
 
 app.post('/api/opencode/delegate/:slug', userWriteLimiter, async (req: any, res) => {
   try {
@@ -2845,25 +2860,26 @@ app.post('/api/opencode/delegate/:slug', userWriteLimiter, async (req: any, res)
     // (and a non-canonical value would fall through to the legacy open
     // fallback). No 400 here on purpose: an empty fold is an anti-oracle 403.
     const slug = canonicalProjectSlug(String(req.params.slug || '').trim());
-    // Permission gate FIRST (L1 anti-oracle): resolve the capability from the
-    // roster and gate access before loadMeta/probe, so users without access
-    // can never distinguish 404/503 from their 403.
-    let capability: DelegateCapability = 'write';
-    const agentName = typeof req.body?.agent === 'string' ? req.body.agent.trim() : '';
-    if (agentName) {
-      try {
-        capability = agentCapability(studio.getAgent(agentName).content);
-      } catch {
-        /* unknown agent — the service 404s it after the access gate */
-      }
+    // SYSTEM-role gate FIRST (L1 anti-oracle), for EVERY capability: a
+    // delegated agent executes INSIDE the app container — which mounts
+    // /var/run/docker.sock rw and holds data/jwt.secret — so a delegation is
+    // the same privilege class as the embedded IDE, and `POST /api/embed/session`
+    // already demands editor+. There is no file jail (opencode runs as root with
+    // cwd=/workspace), so even an agent with edit AND bash denied can read
+    // /app/data/jwt.secret or another project's workspace and hand the text
+    // back; 'readonly' therefore stays a UI/audit label, never an access tier.
+    // checkProjectAccess alone is satisfied by project membership and by the
+    // legacy memberless fallback — neither is a role gate. Runs BEFORE
+    // loadMeta/probe so a denied caller can never distinguish 404/503 from 403.
+    if (req.user?.role !== 'admin' && req.user?.role !== 'editor') {
+      return res.status(403).json({ error: 'Access denied to this project' });
     }
-    const { allowed } = checkProjectAccess(
-      req.user.id,
-      req.user.role,
-      slug,
-      capability === 'readonly' ? 'viewer' : 'editor',
-      req.user.permissions,
-    );
+    // Delegation is editor-level by construction: the role gate above already
+    // required a system admin/editor (and a system editor is a global editor on
+    // every project), so asking for anything less here would describe a
+    // decision this route cannot make. The run's capability label is not read
+    // here at all — startDelegation classifies the agent itself.
+    const { allowed } = checkProjectAccess(req.user.id, req.user.role, slug, 'editor', req.user.permissions);
     if (!allowed) return res.status(403).json({ error: 'Access denied to this project' });
     if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
     const probe = await probeOpencodeServer();
@@ -2939,18 +2955,35 @@ app.get('/api/opencode/delegate/:slug/history/:id', requireProjectAccess('viewer
   }
 });
 
-app.delete('/api/opencode/delegate/:slug/history/:id', requireProjectAccess('editor'), (req: any, res) => {
-  try {
-    const slug = String(req.params.slug || '').trim();
-    if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
-    if (!deleteDelegation(slug, String(req.params.id || ''))) {
-      return res.status(404).json({ error: 'Delegation not found' });
+// L6: deletions are the same role class as a launch, so the SYSTEM editor+ bar
+// applies here too — before requireProjectAccess, so a caller who is only a
+// project member (including the legacy memberless fallback, which grants
+// editor level to any authenticated user) can never remove another user's
+// delegation history. Same uniform body as the launch gate on purpose: no
+// 404/200 difference that would let a viewer probe ids. req.user is guarded
+// explicitly (fail-closed) instead of dereferenced.
+app.delete(
+  '/api/opencode/delegate/:slug/history/:id',
+  (req: any, res, next) => {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'editor') {
+      return res.status(403).json({ error: 'Access denied to this project' });
     }
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
-  }
-});
+    next();
+  },
+  requireProjectAccess('editor'),
+  (req: any, res) => {
+    try {
+      const slug = String(req.params.slug || '').trim();
+      if (!loadMeta(slug)) return res.status(404).json({ error: 'Project not found' });
+      if (!deleteDelegation(slug, String(req.params.id || ''))) {
+        return res.status(404).json({ error: 'Delegation not found' });
+      }
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
+);
 
 // Project container logs
 app.get('/api/projects/:slug/logs', requireProjectAccess('viewer'), async (req, res) => {

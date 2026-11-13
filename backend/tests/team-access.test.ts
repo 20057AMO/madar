@@ -80,10 +80,28 @@ describe('Project team & access control (real Docker container)', () => {
   let viewerToken = '';
   let created = false;
   let ownerTransferred = false;
+  const editorProjectSlug = uniqueId('team-editor-create');
+  let editorProjectCreated = false;
+  // Dedicated throwaway project for the ownership-escalation rows: the viewer
+  // account is an EDITOR MEMBER here, so only a system-role gate can refuse it
+  // (the membership check alone would let it through).
+  const escalationSlug = uniqueId('team-escalation');
+  let escalationCreated = false;
+  const dupSlug = uniqueId('team-dup');
+  let dupProjectSlug = '';
 
   after(async () => {
     if (created) {
       await deleteRobust(`/projects/${slug}`);
+    }
+    if (editorProjectCreated) {
+      await deleteRobust(`/projects/${editorProjectSlug}`);
+    }
+    if (escalationCreated) {
+      await deleteRobust(`/projects/${escalationSlug}`);
+    }
+    if (dupProjectSlug) {
+      await deleteRobust(`/projects/${dupProjectSlug}`);
     }
     // Remove the temporary users so the environment stays clean.
     await deleteRobust(`/users/${viewerId}`);
@@ -116,6 +134,158 @@ describe('Project team & access control (real Docker container)', () => {
 
     editorToken = signUser(editorId, editorName, 'editor');
     viewerToken = signUser(viewerId, viewerName, 'viewer');
+  });
+
+  // ── Creating a project is editor+ (privilege-escalation gate) ──
+  // POST /api/projects writes the caller as `ownerId` + an admin member, and
+  // decideControlAccess admits the owner to `mode=control` — a root PTY in the
+  // app container, which mounts /var/run/docker.sock. Ungated, a viewer could
+  // self-appoint as owner and escalate to host RCE, so the route is gated.
+  test('viewer CANNOT create a project (403 — no self-appointed owner ⇒ no control PTY)', async () => {
+    const attemptedSlug = uniqueId('team-viewer-create');
+    const res = await postWithBackoff('/projects', {
+      name: 'Viewer Project Attempt',
+      slug: attemptedSlug,
+    }, runAs(viewerToken).headers);
+    const data = await res.json();
+    assert.strictEqual(res.status, 403, `viewer create should be denied: ${res.status} -> ${JSON.stringify(data)}`);
+
+    const list = await reqAuth('GET', '/projects');
+    assert.strictEqual(list.status, 200, `project list: ${list.status}`);
+    const listData = await list.json();
+    const slugs = (listData.projects as any[]).map((p: any) => p.slug);
+    assert.ok(!slugs.includes(attemptedSlug), `a refused create must persist nothing, but ${attemptedSlug} exists`);
+  });
+
+  test('editor CAN create a project (201 — min-role gate admits editor+)', async () => {
+    const res = await postWithBackoff('/projects', {
+      name: 'Editor Created Project',
+      slug: editorProjectSlug,
+    }, runAs(editorToken).headers);
+    const data = await res.json();
+    assert.strictEqual(res.status, 201, `editor create should be allowed: ${res.status} -> ${JSON.stringify(data)}`);
+    editorProjectCreated = true;
+    assert.strictEqual(data.project.slug, editorProjectSlug);
+  });
+
+  // ── Ownership-granting routes are editor+ (the second escalation path) ──
+  // Boot the dedicated project here: the viewer account is deliberately an
+  // `editor` MEMBER of it, so `requireProjectAccess('editor')` is satisfied and
+  // only the `requireRole('editor')` system gate stands between that viewer and
+  // project ownership (⇒ `mode=control` root PTY beside the docker socket).
+  test('set up an escalation project where the viewer is an editor member', async () => {
+    const res = await postWithBackoff('/projects', {
+      name: 'Escalation Probe',
+      slug: escalationSlug,
+      description: 'Throwaway project for the ownership-escalation rows',
+    }, authHeaders());
+    const data = await res.json();
+    assert.strictEqual(res.status, 201, `escalation project create: ${res.status} -> ${JSON.stringify(data)}`);
+    escalationCreated = true;
+
+    const add = await postWithBackoff(`/projects/${escalationSlug}/members`, { userId: viewerId, role: 'editor' }, authHeaders());
+    const addData = await add.json();
+    assert.strictEqual(add.status, 200, `add viewer as editor member: ${add.status} -> ${JSON.stringify(addData)}`);
+  });
+
+  test('viewer member with editor rights CANNOT duplicate (403 — no self-appointed owner)', async (t) => {
+    if (!escalationCreated) return t.skip('escalation project could not be created');
+    const res = await postWithBackoff(`/projects/${escalationSlug}/duplicate`, {
+      name: 'viewer-escalation-dup',
+      slug: dupSlug,
+    }, runAs(viewerToken).headers);
+    const data = await res.json();
+    assert.strictEqual(
+      res.status,
+      403,
+      `an editor MEMBER whose system role is viewer must not duplicate: ${res.status} -> ${JSON.stringify(data)}`
+    );
+    // A refused duplicate must leave nothing behind — the copy would have made
+    // the caller its owner (⇒ root control PTY).
+    const list = await reqAuth('GET', '/projects');
+    assert.strictEqual(list.status, 200, `project list: ${list.status}`);
+    const listData = await list.json();
+    const slugs = (listData.projects as any[]).map((p: any) => p.slug);
+    // duplicateProject dedupes by suffixing -1, -2, … so the ghost copy would not
+    // be named exactly `dupSlug`; refuse ANY slug derived from it.
+    assert.ok(
+      !slugs.some((s: any) => s === dupSlug || String(s).startsWith(dupSlug + '-')),
+      `a refused duplicate must persist nothing, but a copy of ${dupSlug} exists`
+    );
+  });
+
+  test('viewer member with editor rights CANNOT restore a snapshot as a new project (403)', async (t) => {
+    if (!escalationCreated) return t.skip('escalation project could not be created');
+    // The gate runs before any archive lookup, so the filename need only match
+    // the strict stored-snapshot shape — no capture is required for this row.
+    const file = `madar-${escalationSlug}-00000000000000000.tar.gz`;
+    const res = await postWithBackoff(`/projects/${escalationSlug}/snapshots/${file}/restore`, {}, runAs(viewerToken).headers);
+    const data = await res.json();
+    assert.strictEqual(
+      res.status,
+      403,
+      `an editor MEMBER whose system role is viewer must not restore: ${res.status} -> ${JSON.stringify(data)}`
+    );
+  });
+
+  // ── Agent delegation: agent execution is a SYSTEM-role capability ──
+  // EVERY delegated agent runs edit/bash/task tools inside the app container
+  // (docker.sock mounted rw + data/jwt.secret, no file jail — even a denied
+  // agent can read the secret or another project's files), so project
+  // membership alone must not reach it, whatever the agent's capability label:
+  // the same bar POST /api/embed/session applies.
+  test('viewer member with project-editor role CANNOT launch a write agent (403 — agent execution needs a system editor)', async (t) => {
+    if (!escalationCreated) return t.skip('escalation project could not be created');
+    // Deterministic even when opencode is offline: the role bar and the access
+    // gate run BEFORE the server probe, so this is a 403 in every environment.
+    const res = await postWithBackoff(
+      '/opencode/delegate/' + escalationSlug,
+      { agent: 'backend-developer', prompt: 'touch /tmp/x' },
+      runAs(viewerToken).headers
+    );
+    const data = await res.json();
+    assert.strictEqual(
+      res.status,
+      403,
+      `an editor MEMBER whose system role is viewer must not launch a write agent: ${res.status} -> ${JSON.stringify(data)}`
+    );
+    assert.strictEqual(data.error, 'Access denied to this project');
+  });
+
+  test('viewer member with project-editor role CANNOT launch a READONLY agent either (403 — the bar is the SYSTEM role, not the capability)', async (t) => {
+    if (!escalationCreated) return t.skip('escalation project could not be created');
+    // 'readonly' is no longer an access tier. It used to be reachable by a
+    // viewer+, which was wrong: with no file jail a denied-tools agent can
+    // still read /app/data/jwt.secret (or another project's workspace) and
+    // return the text, so every delegation is the same privilege class.
+    // Deterministic even when opencode is offline: the system-role bar runs
+    // BEFORE the access gate and the server probe, so this is a 403 in every
+    // environment.
+    const res = await postWithBackoff(
+      '/opencode/delegate/' + escalationSlug,
+      { agent: 'code-reviewer', prompt: 'review' },
+      runAs(viewerToken).headers
+    );
+    const data = await res.json();
+    assert.strictEqual(
+      res.status,
+      403,
+      `an editor MEMBER whose system role is viewer must not launch a readonly agent: ${res.status} -> ${JSON.stringify(data)}`
+    );
+    assert.strictEqual(data.error, 'Access denied to this project');
+  });
+
+  test('admin CAN duplicate the escalation project (201 — the gate is min-role, not anti-duplicate)', async (t) => {
+    if (!escalationCreated) return t.skip('escalation project could not be created');
+    const res = await postWithBackoff(`/projects/${escalationSlug}/duplicate`, {
+      name: 'Escalation Duplicate',
+      slug: dupSlug,
+    }, authHeaders());
+    const data = await res.json();
+    assert.strictEqual(res.status, 201, `admin duplicate should be allowed: ${res.status} -> ${JSON.stringify(data)}`);
+    dupProjectSlug = String(data.project.slug || '');
+    assert.ok(dupProjectSlug, 'the response must name the new project slug');
+    assert.notStrictEqual(dupProjectSlug, escalationSlug, 'a duplicate is a NEW project, never the source');
   });
 
   test('add both users as project members', async () => {

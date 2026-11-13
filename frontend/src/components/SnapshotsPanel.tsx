@@ -13,6 +13,7 @@ import {
   type SnapshotSchedule,
 } from '../api';
 import { ConfirmModal } from './ConfirmModal';
+import { useAuth } from '../auth';
 
 const INTERVAL_OPTIONS = [
   { value: 60, label: 'Every hour' },
@@ -33,6 +34,8 @@ function fmtSize(bytes: number): string {
 
 export function SnapshotsPanel({ slug }: { slug: string }) {
   const [, setLocation] = useHashLocation();
+  const { user } = useAuth();
+  const canCreate = user?.role === 'admin' || user?.role === 'editor';
   const [snapshots, setSnapshots] = useState<SnapshotEntry[]>([]);
   const [schedule, setSchedule] = useState<SnapshotSchedule | null>(null);
   const [loading, setLoading] = useState(true);
@@ -289,9 +292,11 @@ export function SnapshotsPanel({ slug }: { slug: string }) {
             <button class="btn-ghost sm" title="Download" aria-label={`Download ${s.file} (${fmtSize(s.size)})`} onClick={() => download(s)}>
               <Download width={13} height={13} class="icon" />
             </button>
-            <button class="btn-ghost sm" title="Restore as a new project" aria-label={`Restore ${s.file} as a new project`} onClick={() => setConfirmRestore(s)}>
-              <History width={13} height={13} class="icon" /> Restore
-            </button>
+            {canCreate && (
+              <button class="btn-ghost sm" title="Restore as a new project" aria-label={`Restore ${s.file} as a new project`} onClick={() => setConfirmRestore(s)}>
+                <History width={13} height={13} class="icon" /> Restore
+              </button>
+            )}
             <button class="btn-ghost sm danger-icon" title="Delete snapshot" aria-label={`Delete snapshot ${s.file}`} onClick={() => setConfirmDelete(s)}>
               <Trash2 width={13} height={13} class="icon" />
             </button>

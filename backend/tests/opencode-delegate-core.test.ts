@@ -6,8 +6,9 @@
  *
  * Contract under test:
  *  - agentCapability: readonly requires BOTH `edit: deny` AND `bash: deny`
- *    together; EVERYTHING else (edit: allow, bash: allow, no permission
- *    block, junk) → write (safe by default / fail-closed).
+ *    together AND no `task` allow (a spawner can start another agent at
+ *    runtime); EVERYTHING else (edit: allow, bash: allow, task: allow,
+ *    no permission block, junk) → write (safe by default / fail-closed).
  *  - sanitizeDelegatePrompt: trim + 20k cap + rejects empty with 400.
  *  - buildDelegatePrompt: forces reading WSD_PROJECT.md + WSD_CANVAS.md
  *    first, embeds the task, picks a per-agent working-mode template.
@@ -28,9 +29,46 @@ import {
 } from '../src/services/opencode-delegate-core.ts';
 
 describe('agentCapability — safe-by-default classification', () => {
-  test('permission block with edit: deny AND bash: deny → readonly (the roster form)', () => {
+  test('permission block with edit: deny AND bash: deny and NO task → readonly (the roster form)', () => {
     const fm = `---\ndescription: Review only\ndmode: subagent\npermission:\n  edit: deny\n  bash: deny\n---\nbody`;
     assert.strictEqual(agentCapability(fm), 'readonly');
+  });
+
+  test('a `task` allow makes an edit+bash-denied agent a WRITER (orchestrator shape — it spawns a writer at runtime)', () => {
+    // The shipped orchestrator frontmatter: edit + bash denied, task allowed.
+    // It can start another agent (subagent_depth: 2), so its own denies say
+    // nothing about what the spawned agent may do.
+    const blockForm = `---\nmode: all\npermission:\n  edit: deny\n  bash: deny\n  task: allow\n---\nbody`;
+    assert.strictEqual(agentCapability(blockForm), 'write');
+    // Flow form of the same shape.
+    assert.strictEqual(agentCapability('---\npermission: {edit: deny, bash: deny, task: allow}\n---'), 'write');
+    // Truthy spellings, case-insensitive (over-classifying toward write is the
+    // only safe direction here).
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: deny\n  bash: deny\n  task: true\n---'), 'write');
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: deny\n  bash: deny\n  task: yes\n---'), 'write');
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: deny\n  bash: deny\n  task: ALLOW\n---'), 'write');
+    // A bare top-level task: allow is honored as well — the safe direction...
+    assert.strictEqual(agentCapability('---\ntask: allow\n---'), 'write');
+    // ...including when it sits unindented AFTER the permission block (which is
+    // exactly how the block ends, so that terminating line still counts).
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: deny\n  bash: deny\ntask: allow\n---'), 'write');
+    // A task DENY (or junk value) never changes anything.
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: deny\n  bash: deny\n  task: deny\n---'), 'readonly');
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: deny\n  bash: deny\n  task: maybe\n---'), 'readonly');
+  });
+
+  test('quoted YAML values are honored: task: "allow" is an allow, quoted denies still deny', () => {
+    // YAML accepts `key: "value"`; a hand-written or reformatted agent file
+    // must not slip past the spawner rule by quoting its value.
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: deny\n  bash: deny\n  task: "allow"\n---'), 'write');
+    assert.strictEqual(agentCapability("---\npermission:\n  edit: deny\n  bash: deny\n  task: 'allow'\n---"), 'write');
+    // Flow form and the bare top-level line carry the same tolerance.
+    assert.strictEqual(agentCapability('---\npermission: {edit: deny, bash: deny, task: "allow"}\n---'), 'write');
+    assert.strictEqual(agentCapability('---\ntask: "allow"\n---'), 'write');
+    // The deny direction keeps working when quoted (and stays fail-closed for a
+    // value that merely starts with a deny word).
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: "deny"\n  bash: "deny"\n---'), 'readonly');
+    assert.strictEqual(agentCapability('---\npermission:\n  edit: "denied"\n  bash: deny\n---'), 'write');
   });
 
   test('bash-capable agents are WRITERS even with edit: deny (pentester/incident-responder/log-analyst roster form)', () => {

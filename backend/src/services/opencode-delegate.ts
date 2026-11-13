@@ -13,10 +13,15 @@
  * (that bypasses permission denies).
  *
  * Security posture:
- *  - Capability classification from LIVE agent frontmatter (`edit: deny` AND
- *    `bash: deny` → readonly; any bash-capable agent is a writer). Readonly
- *    agents run for viewer+; write agents require editor+ via
- *    checkProjectAccess — enforced HERE, not in the router.
+ *  - EVERY run (readonly included) needs a SYSTEM role admin|editor and answers
+ *    the same 403 body; enforced TWICE — in the route before checkProjectAccess/
+ *    meta/probe, so it is no 404/503 oracle, and HERE after it as the
+ *    authoritative boundary. checkProjectAccess is only the project-level check.
+ *  - `agentCapability` is a LABEL (UI badge, audit, CLI-fallback safety), never an
+ *    access tier: `edit: deny` AND `bash: deny` → readonly; a `task:` allow →
+ *    WRITE (it can spawn a writer at subagent_depth: 2 — the orchestrator case).
+ *  - Reason: the agent runs INSIDE the app container (docker.sock rw,
+ *    data/jwt.secret, no file jail) — the embedded IDE's privilege class.
  *  - Singleflight per project slug (409 on overlap), double-checked AFTER the
  *    probe so no await gap lets parallel requests both insert; global cap.
  *  - Forced run timeout (WSD_DELEGATE_TIMEOUT_MS, default 5 min) via an
@@ -174,6 +179,17 @@ export async function startDelegation(
     capability === 'readonly' ? 'viewer' : 'editor',
   );
   if (!allowed) {
+    throw new HttpError(403, 'Access denied to this project');
+  }
+
+  // Authoritative SYSTEM-role gate — EVERY capability, `readonly` included. A
+  // delegated agent runs inside the app container (docker.sock mounted rw,
+  // data/jwt.secret on disk) with no file jail, so a "readonly" agent can still
+  // read another project's workspace or the signing secret and return it; the
+  // capability only labels the run and gates the CLI fallback below. The role
+  // gate is asserted HERE as well because this service is the authoritative
+  // boundary: any future caller must not be able to skip the route's copy.
+  if (user.role !== 'admin' && user.role !== 'editor') {
     throw new HttpError(403, 'Access denied to this project');
   }
 

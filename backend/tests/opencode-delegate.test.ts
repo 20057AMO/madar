@@ -10,14 +10,19 @@
  *   3. 400 empty / whitespace / junk prompt (opencode must be up â€” the route
  *      probes `/global/health` before any validation).
  *   4. 404 unknown agent (valid kebab not on the roster + invalid name shape).
-*   5. Capability-gated access matrix: outsider viewer 403 (write AND
- *      readonly — a non-member viewer never passes), viewer member 403 on a
- *      write agent, editor (+ member of the project) launches a write agent
- *      201 {capability:'write'}, viewer member launches a readonly agent 201
- *      {capability:'readonly'}, **viewer member 403 on a bash-capable agent
- *      (pentester / incident-responder / log-analyst: `edit: deny` + `bash:
- *      allow` ≡ a WRITER — the old readonly gate would have handed viewers
- *      root command execution)**.
+*   5. System-role-gated access matrix: EVERY launch needs the SYSTEM editor
+ *      role — outsider viewer 403 (both classes), viewer member 403 on BOTH
+ *      classes (readonly is a label, not an access tier: even an edit+bash
+ *      denied agent can read /app/data/jwt.secret or another project's
+ *      workspace and return it), editor (+ member of the project) launches a
+ *      write agent 201 {capability:'write'}, a system editor launches a
+ *      readonly agent 201 {capability:'readonly'}, **viewer member 403 on
+ *      (a) a bash-capable agent (pentester / incident-responder / log-analyst:
+ *      `edit: deny` + `bash: allow` ≡ a WRITER — the old readonly gate would
+ *      have handed viewers root command execution) and (b) a `task: allow`
+ *      agent (orchestrator: edit+bash denied but it spawns a writer at
+ *      runtime) — both classify WRITE**. Read-only surfaces (state/history)
+ *      stay open to a viewer member.
  *   6. Singleflight 409 on the SAME project while its task is active, and the
  *      global 429 once MAX_CONCURRENT (=2) tasks are running â€” both asserted
  *      MILLISECONDS after their 201s (a background run can never finish in
@@ -145,7 +150,7 @@ function contOpencode(pid: string): void {
 
 describe('Opencode agent delegation (real Docker container)', () => {
   const slugA = uniqueId('zde-a'); // editor member + viewer member â€” write-agent launch, history, 409
-  const slugB = uniqueId('zde-b'); // viewer member only â€” readonly-agent launch
+  const slugB = uniqueId('zde-b'); // viewer member only — readonly launch by a SYSTEM editor (the role bar, not membership)
   const slugC = uniqueId('zde-c'); // no members â€” concurrency-cap target (global editor), idle-state probe
   const slugD = uniqueId('zde-d'); // optional real-run project (global editor)
   const editorName = `zdee_${Date.now().toString(36)}`;
@@ -359,10 +364,22 @@ describe('Opencode agent delegation (real Docker container)', () => {
     assert.strictEqual(readonly.body.error, 'Access denied to this project');
   });
 
-test('viewer member is 403 on a write agent but may read state/history', async (t) => {
+  test('viewer member is 403 on EVERY agent class — the bar is the SYSTEM role, not the capability label — but may read state/history', async (t) => {
     if (!ocUp) { t.skip('opencode web unreachable — route probe pre-empts the access check'); return; }
     const write = await rawReq('POST', `/opencode/delegate/${slugA}`, { agent: WRITE_AGENT, prompt: 'x' }, runAs(viewerToken));
     assert.strictEqual(write.status, 403, JSON.stringify(write.body));
+    assert.strictEqual(write.body.error, 'Access denied to this project');
+    // A "readonly" agent is only a label now: it still runs as root inside the
+    // app container (docker.sock + data/jwt.secret in reach), so membership
+    // alone never unlocks a launch.
+    const readonly = await rawReq('POST', `/opencode/delegate/${slugA}`, { agent: READONLY_AGENT, prompt: 'x' }, runAs(viewerToken));
+    assert.strictEqual(readonly.status, 403, JSON.stringify(readonly.body));
+    assert.strictEqual(readonly.body.error, 'Access denied to this project');
+    // `task: allow` (orchestrator) classifies WRITE, so it is refused too — the
+    // role bar makes the classification moot for a viewer, but assert it.
+    const orchestrator = await rawReq('POST', `/opencode/delegate/${slugA}`, { agent: 'orchestrator', prompt: 'x' }, runAs(viewerToken));
+    assert.strictEqual(orchestrator.status, 403, JSON.stringify(orchestrator.body));
+    assert.strictEqual(orchestrator.body.error, 'Access denied to this project');
     // Read-only surfaces stay open to the viewer.
     const state = await rawReq('GET', `/opencode/delegate/${slugA}`, undefined, runAs(viewerToken));
     assert.strictEqual(state.status, 200);
@@ -401,9 +418,13 @@ test('viewer member is 403 on a write agent but may read state/history', async (
     assert.match(String(dup.body.error), /already running/);
   });
 
-  test('viewer member launches a READONLY agent 201 {capability:readonly}; a third project hits the global 429 cap', async (t) => {
+  // The readonly launch is actor-switched: the project keeps only a VIEWER
+  // member (that is the point of the fixture), while the launcher is a SYSTEM
+  // editor — a global editor needs no membership at all. That is exactly the
+  // new contract: the bar is the system role, never the capability label.
+  test('a SYSTEM editor (non-member) launches a READONLY agent 201 {capability:readonly}; a third project hits the global 429 cap', async (t) => {
     if (!ocUp) { t.skip('opencode web unreachable'); return; }
-    const launched = await rawReq('POST', `/opencode/delegate/${slugB}`, { agent: READONLY_AGENT, prompt: 'audit this workspace' }, runAs(viewerToken));
+    const launched = await rawReq('POST', `/opencode/delegate/${slugB}`, { agent: READONLY_AGENT, prompt: 'audit this workspace' }, runAs(globalEditorToken));
     assert.strictEqual(launched.status, 201, JSON.stringify(launched.body));
     assert.strictEqual(launched.body.capability, 'readonly');
     task2Id = launched.body.id;
@@ -458,9 +479,10 @@ test('viewer member is 403 on a write agent but may read state/history', async (
     assert.strictEqual(ghost.status, 404);
     assert.strictEqual(ghost.body.error, 'Delegation not found');
 
-    // Viewer member can READ history but never DELETE (editor+ gate).
+    // Viewer member can READ history but never DELETE (system editor+ gate).
     const delViewer = await rawReq('DELETE', `/opencode/delegate/${slugA}/history/${task1Id}`, undefined, runAs(viewerToken));
     assert.strictEqual(delViewer.status, 403, JSON.stringify(delViewer.body));
+    assert.strictEqual(delViewer.body.error, 'Access denied to this project');
 
     const delEditor = await rawReq('DELETE', `/opencode/delegate/${slugA}/history/${task1Id}`, undefined, runAs(editorToken));
     assert.strictEqual(delEditor.status, 200, JSON.stringify(delEditor.body));
@@ -468,6 +490,23 @@ test('viewer member is 403 on a write agent but may read state/history', async (
 
     const gone = await rawReq('GET', `/opencode/delegate/${slugA}/history/${task1Id}`, undefined, runAs(editorToken));
     assert.strictEqual(gone.status, 404);
+  });
+
+  // L6 regression: the DELETE route carries its OWN SYSTEM-role bar, not only
+  // project membership. A project EDITOR member whose SYSTEM role is viewer is
+  // exactly the actor `requireProjectAccess('editor')` alone would admit, so a
+  // bogus id discriminates the two gates: 403 (the role gate, uniform body, runs
+  // FIRST) vs the old 404 admission. The system-editor control reaches the
+  // handler and gets that 404, proving the 403 is the gate and not a dead route.
+  test('history DELETE is gated by the SYSTEM role: a project editor whose system role is viewer is 403, a system editor gets the 404 admission', async () => {
+    const promote = await reqAuth('POST', `/projects/${slugB}/members`, { userId: viewerId, role: 'editor' });
+    assert.strictEqual(promote.status, 200, `promote viewer to project editor on B: ${JSON.stringify(await promote.json())}`);
+    const denied = await rawReq('DELETE', `/opencode/delegate/${slugB}/history/d-aaaaaa-bbbbbb`, undefined, runAs(viewerToken));
+    assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
+    assert.strictEqual(denied.body.error, 'Access denied to this project');
+    const control = await rawReq('DELETE', `/opencode/delegate/${slugB}/history/d-aaaaaa-bbbbbb`, undefined, runAs(globalEditorToken));
+    assert.strictEqual(control.status, 404, JSON.stringify(control.body));
+    assert.strictEqual(control.body.error, 'Delegation not found');
   });
 
   // â”€â”€ Activity feed (started event is written synchronously at launch) â”€

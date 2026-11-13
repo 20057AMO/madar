@@ -31,12 +31,18 @@ export const DELEGATIONS_MAX_ENTRIES = 20;
 /**
  * Classify an agent's capability from its live frontmatter.
  * Safe by default (fail-closed): 'readonly' requires BOTH `edit: deny` AND
- * `bash: deny` under the agent's `permission:` block — a bash-capable agent
- * (even with edits denied) can execute root commands inside the container,
- * so it is a WRITER and stays editor-gated. Every other agent (no permission
- * block, an allow for either tool, a deny for an unknown/future tool, or a
- * deny in a place opencode would not honor) is treated as a WRITER so any
- * executable surface can never sneak past the editor gate as 'readonly'.
+ * `bash: deny` under the agent's `permission:` block AND no `task` allow — a
+ * bash-capable agent (even with edits denied) can execute root commands inside
+ * the container, so it is a WRITER. A `task`-capable agent is a WRITER too: it
+ * can spawn ANOTHER agent at runtime (`opencode.json` sets `subagent_depth: 2`)
+ * and the spawned agent's own permissions decide what it may do, so the
+ * parent's denies say nothing about the resulting capability. The orchestrator
+ * ships exactly this shape (`edit: deny` / `bash: deny` / `task: allow`), so
+ * without this rule it classified 'readonly' while being able to start a
+ * bash-capable writer. Every other agent (no permission block, an allow for
+ * any of these tools, a deny for an unknown/future tool, or a deny in a place
+ * opencode would not honor) is treated as a WRITER so any executable surface
+ * can never be classified 'readonly' by omission.
  */
 export function agentCapability(frontmatter: string): DelegateCapability {
   const fm = String(frontmatter ?? '');
@@ -44,6 +50,7 @@ export function agentCapability(frontmatter: string): DelegateCapability {
   const body = m ? m[1] : fm;
   let editDenied = false;
   let bashDenied = false;
+  let taskAllowed = false;
   const lines = body.split('\n');
   let inPermission = false;
   for (const rawLine of lines) {
@@ -52,33 +59,49 @@ export function agentCapability(frontmatter: string): DelegateCapability {
       const flow = /^permission:[ \t]*\{([^}]*)\}[ \t]*$/i.exec(rawLine.trim());
       if (flow) {
         const inner = flow[1];
-        const edit = /edit:[ \t]*(deny|false|no)/i.test(inner);
-        const bash = /bash:[ \t]*(deny|false|no)/i.test(inner);
-        // An explicit allow of either tool defeats the readonly claim.
-        if (/edit:[ \t]*(allow|true|yes)/i.test(inner) || /bash:[ \t]*(allow|true|yes)/i.test(inner)) {
+        // YAML values may be quoted (`task: "allow"`); the quote is tolerated
+        // and a word boundary keeps `denied` from reading as `deny`.
+        const edit = /edit:[ \t]*["']?(deny|false|no)\b/i.test(inner);
+        const bash = /bash:[ \t]*["']?(deny|false|no)\b/i.test(inner);
+        // An explicit allow of ANY of these tools defeats the readonly claim.
+        if (
+          /edit:[ \t]*["']?(allow|true|yes)/i.test(inner) ||
+          /bash:[ \t]*["']?(allow|true|yes)/i.test(inner) ||
+          /task:[ \t]*["']?(allow|true|yes)/i.test(inner)
+        ) {
           return 'write';
         }
         return edit && bash ? 'readonly' : 'write';
       }
+      // A `task` allow anywhere we can see it can only over-classify toward
+      // write — the safe direction, and the only one worth guessing at.
+      if (/^task:[ \t]*["']?(allow|true|yes)\b/i.test(rawLine.trim())) return 'write';
       if (/^permission:[ \t]*$/.test(rawLine)) {
         inPermission = true;
       }
       continue;
     }
-    // An unindented non-empty line ends the permission block.
+    // An unindented non-empty line ends the permission block. That line is
+    // itself top-level, so a `task: allow` written right after the block
+    // (past its indentation) must still be honored before we move on.
     if (/^\S/.test(rawLine) && rawLine.trim()) {
       inPermission = false;
+      if (/^task:[ \t]*["']?(allow|true|yes)\b/i.test(rawLine.trim())) return 'write';
       continue;
     }
     const trimmed = rawLine.trim();
-    if (/^edit:[ \t]*(deny|false|no)\b/.test(trimmed)) editDenied = true;
-    else if (/^bash:[ \t]*(deny|false|no)\b/.test(trimmed)) bashDenied = true;
-    else if (/^edit:[ \t]*(allow|true|yes)\b/.test(trimmed)) editDenied = false;
-    else if (/^bash:[ \t]*(allow|true|yes)\b/.test(trimmed)) bashDenied = false;
+    if (/^edit:[ \t]*["']?(deny|false|no)\b/.test(trimmed)) editDenied = true;
+    else if (/^bash:[ \t]*["']?(deny|false|no)\b/.test(trimmed)) bashDenied = true;
+    else if (/^edit:[ \t]*["']?(allow|true|yes)\b/.test(trimmed)) editDenied = false;
+    else if (/^bash:[ \t]*["']?(allow|true|yes)\b/.test(trimmed)) bashDenied = false;
+    // `task` is an allow-list tool: case-insensitive on purpose (missing an
+    // allow would mislabel a spawner as readonly, the unsafe direction, while
+    // the deny rules above stay case-sensitive for the mirror-image reason).
+    else if (/^task:[ \t]*["']?(allow|true|yes)\b/i.test(trimmed)) taskAllowed = true;
     // A deny of any OTHER tool is a future executable surface — it can never
     // grant readonly on its own; the block stays write (fail-closed).
   }
-  return editDenied && bashDenied ? 'readonly' : 'write';
+  return editDenied && bashDenied && !taskAllowed ? 'readonly' : 'write';
 }
 
 /**

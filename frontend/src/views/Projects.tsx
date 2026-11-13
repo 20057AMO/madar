@@ -21,6 +21,7 @@ import {
   type ProjectStorage,
 } from '../api';
 import { Avatar } from '../components/Avatar';
+import { useAuth } from '../auth';
 import { useI18n } from '../i18n';
 import { fmtCpu, fmtMem } from '../lib/limits';
 import { fmtBytes } from '../lib/size';
@@ -74,6 +75,8 @@ function ProjectStorageChip({ slug, bySlug }: { slug: string; bySlug: Map<string
 export function Projects() {
   const [, setLocation] = useHashLocation();
   const { t } = useI18n();
+  const { user } = useAuth();
+  const canCreate = user?.role === 'admin' || user?.role === 'editor';
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -157,7 +160,13 @@ export function Projects() {
   // ws.openCreate in sessionStorage, then navigates here — we open the modal
   // once and consume the intent. (A ?create=1 query in the hash would defeat
   // wouter's route matching, so the intent is passed out-of-band instead.)
+  // `canCreate` is a dependency, not a mount-time constant: the intent may only
+  // be judged once auth has hydrated `user` (today the app shell waits for
+  // `loading === false` before mounting any route — an implicit coupling), and
+  // a role-less render must LEAVE the flag for the hydrated pass instead of
+  // destroying it, or the dashboard's New-project button dies for every role.
   useEffect(() => {
+    if (!canCreate) return;
     let open = false;
     try { open = sessionStorage.getItem('wsd.openCreate') === '1'; } catch { /* ignored */ }
     if (open) {
@@ -165,12 +174,13 @@ export function Projects() {
       setCreateOpen(true);
       try { sessionStorage.removeItem('wsd.openCreate'); } catch { /* ignored */ }
     }
-  }, []);
+  }, [canCreate]);
 
   // The sessionStorage handshake only fires on mount, so a palette "new
   // project" action taken while this page is already on screen would be lost.
   // The live event covers that case and consumes the flag too.
   useEffect(() => {
+    if (!canCreate) return;
     const openCreate = () => {
       setPageTab('projects');
       setCreateOpen(true);
@@ -178,7 +188,7 @@ export function Projects() {
     };
     window.addEventListener('wsd:openCreate', openCreate);
     return () => window.removeEventListener('wsd:openCreate', openCreate);
-  }, []);
+  }, [canCreate]);
 
   // Duplicate-project modal state.
   const [dupSrc, setDupSrc] = useState<Project | null>(null);
@@ -637,11 +647,15 @@ export function Projects() {
           <p class="hero-sub" style="margin:0">{t('projects.summary', { total: projects.length, running, stopped, crashed })}</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
-          <input ref={restoreInputRef} type="file" accept=".tar.gz,application/gzip" style="display:none" onChange={handleRestoreFile} />
-          <button class="btn-ghost" onClick={() => restoreInputRef.current?.click()} disabled={importing}>
-            <Upload class="icon" /> {importing ? t('dashboard.importing') : t('dashboard.restore')}
-          </button>
-          <button class="btn-primary" onClick={() => setCreateOpen(true)}>+ {t('dashboard.newProject')}</button>
+          {canCreate && (<>
+            <input ref={restoreInputRef} type="file" accept=".tar.gz,application/gzip" style="display:none" onChange={handleRestoreFile} />
+            <button class="btn-ghost" onClick={() => restoreInputRef.current?.click()} disabled={importing}>
+              <Upload class="icon" /> {importing ? t('dashboard.importing') : t('dashboard.restore')}
+            </button>
+          </>)}
+          {canCreate && (
+            <button class="btn-primary" onClick={() => setCreateOpen(true)}>+ {t('dashboard.newProject')}</button>
+          )}
         </div>
       </div>
 
@@ -711,7 +725,7 @@ export function Projects() {
         <div class="empty-state">
           <div class="big-icon"><FolderSearch width={30} height={30} class="icon" /></div>
           {projects.length === 0 ? t('projects.emptyAll') : t('projects.empty')}
-          {projects.length === 0 && (
+          {projects.length === 0 && canCreate && (
             <button class="btn-primary" style="margin-top:12px" onClick={() => setCreateOpen(true)}>+ {t('dashboard.newProject')}</button>
           )}
         </div>
@@ -785,9 +799,11 @@ export function Projects() {
                 <button class="btn-ghost sm" onClick={(e) => openProjectCard(e, p)}>
                   <ExternalLink width={13} height={13} class="icon" /> {t('common.open')}
                 </button>
-                <button class="btn-ghost sm" title={t('projects.duplicateTitle')} onClick={(e) => openDuplicate(e, p)}>
-                  <Copy width={13} height={13} class="icon" /> {t('projects.duplicate')}
-                </button>
+                {canCreate && (
+                  <button class="btn-ghost sm" title={t('projects.duplicateTitle')} onClick={(e) => openDuplicate(e, p)}>
+                    <Copy width={13} height={13} class="icon" /> {t('projects.duplicate')}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -882,9 +898,11 @@ export function Projects() {
                     <button class="btn-ghost sm" title={t('common.open')} onClick={(e) => openProjectCard(e, p)}>
                       <FolderOpen width={12} height={12} class="icon" />
                     </button>
-                    <button class="btn-ghost sm" title={t('projects.duplicateTitle')} onClick={(e) => openDuplicate(e, p)}>
-                      <Copy width={12} height={12} class="icon" />
-                    </button>
+                    {canCreate && (
+                      <button class="btn-ghost sm" title={t('projects.duplicateTitle')} onClick={(e) => openDuplicate(e, p)}>
+                        <Copy width={12} height={12} class="icon" />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -935,7 +953,7 @@ export function Projects() {
         </div>
       )}
 
-      {createOpen && (
+      {canCreate && createOpen && (
         <div class="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setCreateOpen(false); }}>
           <div class="create-card modal-dialog" style="max-width:500px;width:100%">
             <div class="create-title">{t('create.title')}</div>

@@ -17,6 +17,7 @@ import { CrashBadge } from '../components/CrashBadge';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { VSCodeIcon, OpencodeIcon } from '../components/brand-icons';
 import { useI18n } from '../i18n';
+import { useAuth } from '../auth';
 import { useToast } from '../components/ToastProvider';
 import {
   listProjects,
@@ -50,6 +51,8 @@ function formatMemBytes(bytes: number): string {
 export function Dashboard() {
   const [, setLocation] = useHashLocation();
   const { t, t2 } = useI18n();
+  const { user } = useAuth();
+  const canCreate = user?.role === 'admin' || user?.role === 'editor';
   const toast = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [info, setInfo] = useState<ServerInfo | null>(null);
@@ -286,23 +289,29 @@ export function Dashboard() {
       {/* ── Quick Actions ─────────────────────────────────── */}
       <div class="dash-qa-section">
         <div class="dash-qa-grid">
-          <button class="qa-tile" onClick={handleNewProject}>
-            <Plus width={18} height={18} class="icon" />
-            <span>{t('dashboard.newProject')}</span>
-          </button>
-          <button class="qa-tile" onClick={() => restoreInputRef.current?.click()} disabled={importing}>
-            {importing
-              ? <Loader2 width={18} height={18} class="icon spin" />
-              : <Upload width={18} height={18} class="icon" />}
-            <span>{importing ? t('dashboard.importing') : t('dashboard.restore')}</span>
-          </button>
-          <input
-            ref={restoreInputRef}
-            type="file"
-            accept=".tar.gz,application/gzip"
-            class="dash-restore-input"
-            onChange={handleRestoreFile}
-          />
+          {canCreate && (
+            <button class="qa-tile" onClick={handleNewProject}>
+              <Plus width={18} height={18} class="icon" />
+              <span>{t('dashboard.newProject')}</span>
+            </button>
+          )}
+          {canCreate && (
+            <button class="qa-tile" onClick={() => restoreInputRef.current?.click()} disabled={importing}>
+              {importing
+                ? <Loader2 width={18} height={18} class="icon spin" />
+                : <Upload width={18} height={18} class="icon" />}
+              <span>{importing ? t('dashboard.importing') : t('dashboard.restore')}</span>
+            </button>
+          )}
+          {canCreate && (
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".tar.gz,application/gzip"
+              class="dash-restore-input"
+              onChange={handleRestoreFile}
+            />
+          )}
           <button class="qa-tile" onClick={handleStartAll} disabled={!!qaBusy || stoppedCount === 0}>
             <Play width={18} height={18} class="icon" />
             <span>{t('dashboard.startAll')}</span>
@@ -399,7 +408,9 @@ export function Dashboard() {
         <div class="dash-empty-state">
           <div class="big-icon"><FolderOpen width={30} height={30} class="icon" /></div>
           {t('dashboard.emptyTitle')}
-          <button class="btn-primary dash-empty-cta" onClick={handleNewProject}>+ {t('dashboard.newProject')}</button>
+          {canCreate && (
+            <button class="btn-primary dash-empty-cta" onClick={handleNewProject}>+ {t('dashboard.newProject')}</button>
+          )}
         </div>
       ) : (
         <div class="projects-grid">
