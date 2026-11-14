@@ -303,8 +303,6 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     }
 
     ws.onopen = () => {
-      reconnectAttemptRef.current = 0;
-      setStatus('ready');
       setCloseNotice('');
       fit.fit();
       if (ws && ws.readyState === 1) {
@@ -338,7 +336,13 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       if (typeof ev.data === 'string') {
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === 'error') {
+          if (msg.type === 'ready') {
+            if (disposed) return;
+            reconnectAttemptRef.current = 0;
+            setStatus('ready');
+            setCloseNotice('');
+          } else if (msg.type === 'error') {
+            if (disposed) return;
             setStatus('error');
             lastErrorRef.current = String(msg.message || 'Terminal error');
             term.writeln('\r\n\x1b[1;31m' + (String(msg.message || 'Terminal error')) + '\x1b[0m\r\n');
@@ -376,6 +380,10 @@ export function ProjectTerminal({ slug }: { slug: string }) {
 
     return () => {
       disposed = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       window.clearTimeout(startTimer);
       ws?.close();
       wsRef.current = null;

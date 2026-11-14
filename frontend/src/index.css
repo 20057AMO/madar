@@ -754,6 +754,7 @@ input.detail-title {
 }
 .term-header-left {
   display: flex; align-items: center; gap: 6px;
+  min-width: 0;
 }
 .term-reconnect-btn {
   padding: 3px 10px;
@@ -783,7 +784,7 @@ input.detail-title {
 .term-close-notice {
   min-width: 0;
   max-width: 34ch;
-  font-size: 11px;
+  font-size: 0.68rem;
   color: var(--yellow);
   white-space: nowrap;
   overflow: hidden;
@@ -894,6 +895,26 @@ input.detail-title {
 @keyframes term-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* Phones: the header stacked onto one line collapsed its only shrinkable
+   column (.term-header-left) to a few pixels while .term-controls kept its
+   flex-shrink: 0 width and painted over the Reconnect button. Give the left
+   column a full row and the controls their own row below it. Must come AFTER
+   the base .term-* rules above so it wins the cascade. */
+@media (max-width: 700px) {
+  .term-header { flex-wrap: wrap; row-gap: 8px; }
+  .term-header-left { flex: 1 1 100%; flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+  .term-header-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .term-close-notice { flex: 1 1 auto; min-width: 12ch; }
+  .term-controls { flex: 1 1 100%; flex-wrap: wrap; min-width: 0; }
+}
+
+/* Touch: the header's Reconnect control meets the 44px minimum target
+   (WCAG 2.5.8). No .term-* selector lived in a coarse-pointer block before,
+   so this rule sits next to the phone-width block above. */
+@media (hover: none) and (pointer: coarse) {
+  .term-reconnect-btn { min-width: 44px; min-height: 44px; }
 }
 
 /* Git */

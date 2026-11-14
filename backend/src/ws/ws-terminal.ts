@@ -155,7 +155,7 @@ export function handleTerminalSocket(
       });
     })
     .catch((err: unknown) => {
-      const failure = mapTerminalStartError(err, slug);
+      const failure = mapTerminalStartError(err, slug, mode);
       if (ws.readyState === WebSocket.OPEN) {
         sendJson(ws, { type: 'error', message: failure.message });
         ws.close(failure.code, failure.reason);

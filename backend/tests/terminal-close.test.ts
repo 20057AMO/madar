@@ -8,7 +8,11 @@
  *  - 4000 session-ended · 4404 container-missing · 4409 container-stopped ·
  *    4503 capacity · 4500 internal (1008 is ws-server's access refusal).
  *  - Docker's 404/409 (and a status-less message carrying the same meaning)
- *    classify; everything else is the retryable 4500.
+ *    classify; everything else is the retryable 4500. An explicit (finite,
+ *    non-zero) status always wins — the message text is only a fallback.
+ *  - 4404/4409 name the PROJECT container, so control mode (a pty in the app
+ *    container) can never produce them: it answers the retryable 4500 with
+ *    control-shell wording.
  *  - Hostile inputs (null, a string, a number, circular objects) never throw.
  *  - The message is always one non-empty line, capped and stack-free.
  *  - ws-terminal.ts has no bare ws.close() and no 1011/1013 left.
@@ -20,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import {
   TERMINAL_CLOSE,
   mapTerminalStartError,
+  type TerminalMode,
   type TerminalStartFailure,
 } from '../src/services/terminal-close.ts';
 
@@ -187,6 +192,113 @@ describe('mapTerminalStartError — message hygiene', () => {
   });
 });
 
+describe('mapTerminalStartError — an explicit status always beats the message text', () => {
+  test('a 500 whose text says "not found" is internal, never a missing container', () => {
+    const failure = map({
+      statusCode: 500,
+      message: 'exec: "bash": executable file not found in $PATH',
+    });
+    assert.strictEqual(failure.code, 4500);
+    assert.strictEqual(failure.code, TERMINAL_CLOSE.internal);
+    assert.strictEqual(failure.reason, 'terminal-failed');
+    assert.strictEqual(failure.message, 'exec: "bash": executable file not found in $PATH');
+    assert.ok(!failure.message.includes('wsd-'));
+  });
+
+  test('a 500 whose text says "is not running" is internal, never container-stopped', () => {
+    const failure = map({ statusCode: 500, message: 'session broke: the worker is not running' });
+    assert.strictEqual(failure.code, 4500);
+    assert.strictEqual(failure.reason, 'terminal-failed');
+    assert.strictEqual(failure.message, 'session broke: the worker is not running');
+    assert.ok(!failure.message.includes('Start the project'));
+  });
+
+  test('an explicit 404 wins even when the text is misleading', () => {
+    const failure = map({ statusCode: 404, message: 'exec: "bash": executable file not found in $PATH' });
+    assert.strictEqual(failure.code, 4404);
+    assert.strictEqual(failure.reason, 'container-missing');
+    assert.strictEqual(failure.message, `Project container 'wsd-${SLUG}' not found. Start the project first.`);
+  });
+
+  test('an explicit 409 wins even when the text is misleading', () => {
+    const failure = map({ status: '409', message: 'exec: "bash": executable file not found in $PATH' });
+    assert.strictEqual(failure.code, 4409);
+    assert.strictEqual(failure.reason, 'container-stopped');
+  });
+
+  test('a zero status counts as NO status, so the text may still classify', () => {
+    const missing = map({ statusCode: 0, message: 'No such container: wsd-x' });
+    assert.strictEqual(missing.code, 4404);
+    assert.strictEqual(missing.reason, 'container-missing');
+
+    const stopped = map({ status: 0, message: 'container wsd-x is not running' });
+    assert.strictEqual(stopped.code, 4409);
+    assert.strictEqual(stopped.reason, 'container-stopped');
+
+    const neither = map({ statusCode: 0, message: 'boom' });
+    assert.strictEqual(neither.code, 4500);
+    assert.strictEqual(neither.message, 'boom');
+  });
+});
+
+describe('mapTerminalStartError — control mode never blames a project container', () => {
+  const CONTROL: TerminalMode = 'control';
+
+  function projectWordsIn(message: string): string[] {
+    return ['Project container', 'wsd-', 'start the project', 'Start the project'].filter((word) =>
+      message.includes(word)
+    );
+  }
+
+  test('a "no such container" text is retryable 4500, worded for the control shell', () => {
+    const failure = mapTerminalStartError(new Error('No such container: whatever'), 'x', CONTROL);
+    assert.strictEqual(failure.code, 4500);
+    assert.strictEqual(failure.code, TERMINAL_CLOSE.internal);
+    assert.strictEqual(failure.reason, 'terminal-failed');
+    assert.deepStrictEqual(projectWordsIn(failure.message), []);
+    assert.ok(!/not running/i.test(failure.message), 'must not claim anything is stopped');
+    assert.match(failure.message, /control container/i);
+    assert.ok(Buffer.byteLength(failure.reason, 'utf8') <= MAX_REASON_BYTES);
+  });
+
+  test('explicit 404/409 statuses cannot reach 4404/4409 in control mode', () => {
+    assert.strictEqual(mapTerminalStartError({ statusCode: 404 }, SLUG, CONTROL).code, 4500);
+    assert.strictEqual(mapTerminalStartError({ status: '404' }, SLUG, CONTROL).code, 4500);
+    assert.strictEqual(
+      mapTerminalStartError({ statusCode: 409, message: 'container is not running' }, SLUG, CONTROL).code,
+      4500
+    );
+    assert.strictEqual(mapTerminalStartError({ status: 409 }, SLUG, CONTROL).code, 4500);
+  });
+
+  test('a pty spawn "File not found" (the real control failure) is 4500, not container-missing', () => {
+    const failure = mapTerminalStartError(new Error('File not found: /bin/bash'), SLUG, CONTROL);
+    assert.strictEqual(failure.code, 4500);
+    assert.strictEqual(failure.reason, 'terminal-failed');
+    assert.deepStrictEqual(projectWordsIn(failure.message), []);
+  });
+
+  test('an unrelated control failure keeps its own text', () => {
+    const failure = mapTerminalStartError({ statusCode: 500, message: 'spawn EAGAIN' }, SLUG, CONTROL);
+    assert.strictEqual(failure.code, 4500);
+    assert.strictEqual(failure.message, 'spawn EAGAIN');
+  });
+
+  test('an omitted mode behaves exactly like project mode', () => {
+    for (const err of [{ statusCode: 404 }, { status: 404 }, new Error('No such container: wsd-x')]) {
+      assert.deepStrictEqual(mapTerminalStartError(err, SLUG), mapTerminalStartError(err, SLUG, 'project'));
+    }
+    assert.strictEqual(
+      mapTerminalStartError({ statusCode: 404 }, SLUG).message,
+      `Project container 'wsd-${SLUG}' not found. Start the project first.`
+    );
+    assert.strictEqual(
+      mapTerminalStartError({ statusCode: 409 }, SLUG).message,
+      `Project container 'wsd-${SLUG}' is not running. Start the project, then reconnect.`
+    );
+  });
+});
+
 describe('ws-terminal.ts — structural guards', () => {
   const src = fs.readFileSync(fileURLToPath(new URL('../src/ws/ws-terminal.ts', import.meta.url)), 'utf8');
 
@@ -204,5 +316,9 @@ describe('ws-terminal.ts — structural guards', () => {
     assert.match(src, /TERMINAL_CLOSE\.sessionEnded/);
     assert.match(src, /mapTerminalStartError/);
     assert.match(src, /ws\.close\(failure\.code, failure\.reason\)/);
+  });
+
+  test('the terminal mode is forwarded to the mapper, not just available', () => {
+    assert.match(src, /mapTerminalStartError\(err, slug, mode\)/);
   });
 });
