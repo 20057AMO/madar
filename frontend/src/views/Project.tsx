@@ -1926,7 +1926,6 @@ function OverviewPanel({
                           class="btn-ghost sm"
                           onClick={() => setConfirmGitPull(true)}
                           disabled={gitWorking || gitPushing || !selectedGitRepo.upstream || selectedGitRepo.changes.length > 0}
-                          aria-describedby={selectedGitRepo.behind > 0 ? 'git-push-block-reason' : undefined}
                         >
                           {gitOperation === 'pull'
                             ? <Loader2 width={13} height={13} class="icon spin" />

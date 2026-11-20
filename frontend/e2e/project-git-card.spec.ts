@@ -447,7 +447,7 @@ test.describe('Git card accessibility (partial state + coarse pointer)', () => {
       const push = panel.getByRole('button', { name: 'Push', exact: true });
       const pull = panel.getByRole('button', { name: 'Pull', exact: true });
       await expect(push).toHaveAttribute('aria-describedby', 'git-push-block-reason');
-      await expect(pull).toHaveAttribute('aria-describedby', 'git-push-block-reason');
+      await expect(pull).not.toHaveAttribute('aria-describedby');
       await expect(panel.locator('#git-push-block-reason')).toHaveCount(1);
 
       const bounds = await page.evaluate(() => {
