@@ -108,6 +108,13 @@ export function handleTerminalSocket(
     release();
   };
 
+  const failSession = (err: unknown) => {
+    if (closed) return;
+    const f = mapTerminalStartError(err, slug, mode);
+    sendJson(ws, { type: 'error', message: f.message });
+    finish(f.code, f.reason);
+  };
+
   ws.on('message', (data, isBinary) => {
     if (closed) return;
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
@@ -131,14 +138,22 @@ export function handleTerminalSocket(
   ws.on('close', () => finish());
   ws.on('error', () => finish());
 
-  let notifyExit = finish;
+  const notifyExit = (info: { exitCode: number; signal?: number }) => {
+    if (info.exitCode !== 0 || info.signal) {
+      failSession(
+        new Error(`Terminal exited with code ${info.exitCode}${info.signal ? ` via signal ${info.signal}` : ''}`)
+      );
+    } else {
+      finish();
+    }
+  };
   // pty.spawn can throw SYNCHRONOUSLY (e.g. missing shell binary on exotic
   // hosts); a throw here would propagate through the ws connection handler
   // and take down the whole backend. Convert every failure path into a
   // graceful socket close.
   const start = (async () => {
-    if (mode === 'control') return startControlShell(slug, subdirInfo, send, () => notifyExit());
-    return startProjectExec(slug, subdirInfo, send, () => notifyExit());
+    if (mode === 'control') return startControlShell(slug, subdirInfo, send, (info) => notifyExit(info));
+    return startProjectExec(slug, subdirInfo, send, (info) => notifyExit(info), failSession);
   })();
 
   start
@@ -201,7 +216,7 @@ function startControlShell(
   slug: string,
   subdirInfo: { subdir: string },
   send: (d: Buffer) => void,
-  onExit: () => void
+  onExit: (info: { exitCode: number; signal?: number }) => void
 ): Promise<ShellHandle> {
   const base = path.join(WORKSPACES_ROOT, slug);
   const cwd = subdirInfo.subdir ? path.join(base, subdirInfo.subdir) : base;
@@ -221,10 +236,10 @@ function startControlShell(
     send(Buffer.from(data, 'utf-8'));
   });
 
-  ptyProcess.onExit(() => {
+  ptyProcess.onExit(({ exitCode, signal }) => {
     if (!exited) {
       exited = true;
-      onExit();
+      onExit({ exitCode, signal });
     }
   });
 
@@ -248,7 +263,8 @@ function startProjectExec(
   slug: string,
   subdirInfo: { subdir: string },
   send: (d: Buffer) => void,
-  onExit: () => void
+  onExit: (info: { exitCode: number; signal?: number }) => void,
+  failSession: (err: unknown) => void
 ): Promise<ShellHandle> {
   const workDir = subdirInfo.subdir ? `/workspace/${subdirInfo.subdir}` : '/workspace';
   return docker
@@ -271,12 +287,12 @@ function startProjectExec(
       const finish = () => {
         if (closed) return;
         closed = true;
-        onExit();
+        onExit({ exitCode: 0 });
       };
       stream.on('data', (d: Buffer) => send(d));
       stream.on('close', () => finish());
       stream.on('end', () => finish());
-      stream.on('error', () => finish());
+      stream.on('error', (err: unknown) => failSession(err));
       return {
         write: (d: Buffer) => {
           try {

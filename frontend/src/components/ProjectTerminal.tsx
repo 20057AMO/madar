@@ -6,7 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import { wsUrl } from '../api';
 
 type TermMode = 'project' | 'control';
-type TermStatus = 'connecting' | 'ready' | 'closed' | 'error';
+type TermStatus = 'connecting' | 'ready' | 'closed' | 'error' | 'exited';
 
 const THEME = {
   background: '#121318',
@@ -53,7 +53,7 @@ const TERMINAL_CLOSE = {
 
 const TERMINAL_STOP_NOTICE: Record<number, string> = {
   [TERMINAL_CLOSE.accessDenied]: 'Access denied for this project.',
-  [TERMINAL_CLOSE.sessionEnded]: 'Session ended. Reconnect to start a new shell.',
+  [TERMINAL_CLOSE.sessionEnded]: 'Shell exited. Start a new shell to continue.',
   [TERMINAL_CLOSE.containerMissing]: 'Project container not found — start the project, then reconnect.',
   [TERMINAL_CLOSE.containerStopped]: 'Project container is not running — start the project, then reconnect.',
   [TERMINAL_CLOSE.capacity]: 'This terminal is already open elsewhere, or the server is at capacity.',
@@ -92,6 +92,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastErrorRef = useRef('');
   const [status, setStatus] = useState<TermStatus>('connecting');
   const [reconnectNonce, setReconnectNonce] = useState(0);
@@ -229,13 +230,30 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     reconnectAttemptRef.current = 0;
   }, []);
 
+  const cancelNotice = useCallback(() => {
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = null;
+    }
+  }, []);
+
+  const announceNotice = useCallback((text: string) => {
+    cancelNotice();
+    setCloseNotice('');
+    noticeTimerRef.current = setTimeout(() => {
+      noticeTimerRef.current = null;
+      setCloseNotice(text);
+    }, 0);
+  }, [cancelNotice]);
+
   const manualReconnect = useCallback(() => {
     cancelReconnect();
+    cancelNotice();
     reconnectAttemptRef.current = 0;
     lastErrorRef.current = '';
     setCloseNotice('');
     setReconnectNonce((n) => n + 1);
-  }, [cancelReconnect]);
+  }, [cancelReconnect, cancelNotice]);
 
   // Cancel reconnect on tab switch
   useEffect(() => {
@@ -388,7 +406,6 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     };
 
     ws.onopen = () => {
-      setCloseNotice('');
       fitRef.current?.fit();
       sendResize();
     };
@@ -396,22 +413,31 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       if (disposed) return;
       const term = termRef.current;
       if (term) term.options.disableStdin = true;
-      const stop = TERMINAL_STOP_NOTICE[ev.code];
-      if (stop) {
+      const stop = TERMINAL_STOP_NOTICE[ev.code] || '';
+      if (ev.code === TERMINAL_CLOSE.sessionEnded) {
         const notice = lastErrorRef.current || stop;
-        setStatus('closed');
-        setCloseNotice(notice);
+        setStatus('exited');
+        announceNotice(notice);
         term?.write(`\r\n\x1b[1;33m${notice}\x1b[0m\r\n`);
         return;
       }
+      if (stop) {
+        const notice = lastErrorRef.current || ev.reason || stop;
+        setStatus(lastErrorRef.current ? 'error' : 'closed');
+        announceNotice(notice);
+        term?.write(`\r\n\x1b[1;33m${notice}\x1b[0m\r\n`);
+        return;
+      }
+      const reasonNotice = lastErrorRef.current || ev.reason || '';
       if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS) {
-        const notice = lastErrorRef.current || `Connection lost (${ev.code}). Reconnect to continue.`;
+        const notice = reasonNotice || `Connection lost (${ev.code}). Reconnect to continue.`;
         setStatus('error');
-        setCloseNotice(notice);
+        announceNotice(notice);
         term?.write(`\r\n\x1b[1;31m${notice}\x1b[0m\r\n`);
         return;
       }
-      setStatus('closed');
+      setStatus(lastErrorRef.current ? 'error' : 'closed');
+      announceNotice(reasonNotice);
       scheduleReconnect();
     };
     ws.onerror = () => {
@@ -428,6 +454,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'ready') {
             reconnectAttemptRef.current = 0;
+            cancelNotice();
             setStatus('ready');
             setCloseNotice('');
             if (term) {
@@ -455,6 +482,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
+      cancelNotice();
       ws.onopen = null;
       ws.onclose = null;
       ws.onerror = null;
@@ -464,7 +492,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       const term = termRef.current;
       if (term) term.options.disableStdin = true;
     };
-  }, [slug, currentMode, reconnectNonce, scheduleReconnect]);
+  }, [slug, currentMode, reconnectNonce, scheduleReconnect, announceNotice, cancelNotice]);
 
   const sendCommand = useCallback((cmd: string) => {
     if (!sendStdin(cmd + '\r')) return;
@@ -485,7 +513,15 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       ? ['git status', 'git log --oneline -10', 'npm run build', 'ls -la', 'cat package.json']
       : ['docker ps', `docker logs wsd-${slug} --tail 30`, 'git status', 'df -h', 'free -m'];
 
-  const statusLabel = status === 'ready' ? 'connected' : status === 'connecting' ? 'connecting…' : status === 'closed' ? 'disconnected' : 'error';
+  const statusLabel = status === 'ready'
+    ? 'connected'
+    : status === 'connecting'
+      ? 'connecting…'
+      : status === 'exited'
+        ? 'exited'
+        : status === 'closed'
+          ? 'disconnected'
+          : 'error';
 
   const onTabListKeyDown = (e: KeyboardEvent) => {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -544,11 +580,24 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       <div class="term-header">
         <div class="term-header-left">
           <span class={`term-status-dot ${status}`} title={statusLabel} aria-hidden="true" />
-          <span class="term-header-label" role="status">{statusLabel}</span>
-          {closeNotice && <span class="term-close-notice" title={closeNotice}>{closeNotice}</span>}
-          {(status === 'closed' || status === 'error') && (
-            <button class="term-reconnect-btn" onClick={manualReconnect} title="Reconnect" aria-label="Reconnect">
-              ↻ Reconnect
+          <div
+            class="term-header-live"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}
+          >
+            <span class="term-header-label">{statusLabel}</span>
+            {closeNotice && <span class="term-close-notice" title={closeNotice}>{closeNotice}</span>}
+          </div>
+          {(status === 'closed' || status === 'error' || status === 'exited') && (
+            <button
+              class="term-reconnect-btn"
+              onClick={manualReconnect}
+              title={status === 'exited' ? 'Start new shell' : 'Reconnect'}
+              aria-label={status === 'exited' ? 'Start new shell' : 'Reconnect'}
+            >
+              {status === 'exited' ? '↻ Start new shell' : '↻ Reconnect'}
             </button>
           )}
         </div>

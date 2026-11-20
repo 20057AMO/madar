@@ -417,3 +417,50 @@ describe('ws-terminal.ts — session-slot structural guards (the spawn race)', (
     );
   });
 });
+
+describe('ws-terminal.ts — runtime failure honesty', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../src/ws/ws-terminal.ts', import.meta.url)), 'utf8');
+  const flat = src.replace(/\s+/g, ' ');
+
+  test('a stream error is reported through failSession, never disguised as a clean finish', () => {
+    assert.match(flat, /stream\.on\(\s*'error'\s*,\s*\(err: unknown\)\s*=>\s*failSession\(err\)\s*\)/);
+    assert.match(flat, /stream\.on\(\s*'close'\s*,\s*\(\)\s*=>\s*finish\(\)\s*\)/);
+    assert.match(flat, /stream\.on\(\s*'end'\s*,\s*\(\)\s*=>\s*finish\(\)\s*\)/);
+    assert.doesNotMatch(flat, /stream\.on\(\s*'error'\s*,\s*\(\)\s*=>\s*finish\(\)\s*\)/);
+  });
+
+  test('a pty exit carries exitCode and signal into the socket', () => {
+    assert.match(flat, /ptyProcess\.onExit\(\s*\(\s*\{\s*exitCode,\s*signal\s*\}\s*\)/);
+    assert.match(flat, /onExit\(\{\s*exitCode,\s*signal\s*\}\)/);
+  });
+
+  test('failSession sends an error frame before closing through the mapped failure', () => {
+    const at = src.indexOf('const failSession');
+    assert.ok(at >= 0, 'failSession must exist beside finish');
+    const body = src.slice(at, at + 400);
+    assert.match(body, /if \(closed\) return;/);
+    assert.match(body, /const f = mapTerminalStartError\(err, slug, mode\)/);
+    assert.match(body, /sendJson\(\s*ws,\s*\{\s*type: 'error',\s*message: f\.message\s*\}\s*\)/);
+    assert.match(body, /finish\(f\.code, f\.reason\)/);
+    assert.ok(
+      body.indexOf("type: 'error'") < body.indexOf('finish(f.code, f.reason)'),
+      'the error frame must be sent before the socket is closed'
+    );
+  });
+
+  test('finish still defaults to the pinned 4000 clean-exit close', () => {
+    assert.match(
+      flat,
+      /const finish = \(code: number = TERMINAL_CLOSE\.sessionEnded, reason: string = 'session ended'\)/
+    );
+  });
+
+  test('a non-zero pty exit or a signal goes through failSession, not the clean finish', () => {
+    const at = flat.indexOf('const notifyExit');
+    assert.ok(at >= 0, 'notifyExit must decide how a process exit is reported');
+    const body = flat.slice(at, at + 400);
+    assert.match(body, /exitCode !== 0 \|\| info\.signal/);
+    assert.match(body, /failSession\(/);
+    assert.match(body, /else \{ finish\(\); \}/);
+  });
+});
