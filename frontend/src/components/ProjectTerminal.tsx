@@ -36,6 +36,7 @@ const MIN_FONT_SIZE = 9;
 const MAX_FONT_SIZE = 24;
 const DEFAULT_FONT_SIZE = 13;
 const MAX_HISTORY = 100;
+const TERMINAL_SCROLLBACK = 2000;
 const RECONNECT_BASE_MS = 3000;
 const RECONNECT_MAX_MS = 30000;
 const RECONNECT_MAX_ATTEMPTS = 5;
@@ -217,8 +218,6 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   }, [currentMode, slug, cancelReconnect]);
 
   useEffect(() => {
-    lastErrorRef.current = '';
-
     const host = hostRef.current;
     if (!host) return;
 
@@ -231,6 +230,8 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       theme: THEME,
       allowProposedApi: true,
       drawBoldTextInBrightColors: true,
+      scrollback: TERMINAL_SCROLLBACK,
+      disableStdin: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -287,82 +288,20 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       return true;
     });
 
-    let disposed = false;
-    let ws: WebSocket | null = null;
     let ro: ResizeObserver | null = null;
     const startTimer = window.setTimeout(() => fit.fit(), 100);
 
-    const url = wsUrl(`/ws/projects/${encodeURIComponent(slug)}/terminal?mode=${currentMode}`);
-    ws = new WebSocket(url);
-    ws.binaryType = 'arraybuffer';
-    wsRef.current = ws;
-    setStatus('connecting');
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-
-    ws.onopen = () => {
-      setCloseNotice('');
-      fit.fit();
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-      }
-    };
-    ws.onclose = (ev: CloseEvent) => {
-      if (disposed) return;
-      const stop = TERMINAL_STOP_NOTICE[ev.code];
-      if (stop) {
-        const notice = lastErrorRef.current || stop;
-        setStatus('closed');
-        setCloseNotice(notice);
-        term.write(`\r\n\x1b[1;33m${notice}\x1b[0m\r\n`);
-        return;
-      }
-      if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS) {
-        const notice = lastErrorRef.current || `Connection lost (${ev.code}). Reconnect to continue.`;
-        setStatus('error');
-        setCloseNotice(notice);
-        term.write(`\r\n\x1b[1;31m${notice}\x1b[0m\r\n`);
-        return;
-      }
-      setStatus('closed');
-      scheduleReconnect();
-    };
-    ws.onerror = () => {
-      if (!disposed) setStatus('error');
-    };
-    ws.onmessage = (ev: MessageEvent) => {
-      if (typeof ev.data === 'string') {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg.type === 'ready') {
-            if (disposed) return;
-            reconnectAttemptRef.current = 0;
-            setStatus('ready');
-            setCloseNotice('');
-          } else if (msg.type === 'error') {
-            if (disposed) return;
-            setStatus('error');
-            lastErrorRef.current = String(msg.message || 'Terminal error');
-            term.writeln('\r\n\x1b[1;31m' + (String(msg.message || 'Terminal error')) + '\x1b[0m\r\n');
-          } else if (msg.type === 'path') {
-            if (!disposed) setWorkPath(msg.subdir || msg.path || '');
-          }
-        } catch { /* ignore */ }
-      } else {
-        term.write(new Uint8Array(ev.data as ArrayBuffer));
-      }
-    };
-
     const onData = (data: string) => {
+      const ws = wsRef.current;
       if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(data));
     };
     const onResize = () => {
-      if (disposed || !host) return;
+      if (!host) return;
       try { fit.fit(); } catch { return; }
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      const ws = wsRef.current;
+      const activeTerm = termRef.current;
+      if (ws && ws.readyState === 1 && activeTerm) {
+        ws.send(JSON.stringify({ type: 'resize', cols: activeTerm.cols, rows: activeTerm.rows }));
       }
     };
     const termDisposer = term.onData(onData);
@@ -379,14 +318,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     host.addEventListener('wheel', wheelHandler, { passive: false });
 
     return () => {
-      disposed = true;
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
       window.clearTimeout(startTimer);
-      ws?.close();
-      wsRef.current = null;
       termDisposer.dispose();
       resizeDisposer.dispose();
       ro?.disconnect();
@@ -395,7 +327,107 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [slug, currentMode, changeFontSize, scheduleReconnect, cancelReconnect, reconnectNonce]);
+  }, [slug, currentMode, changeFontSize]);
+
+  useEffect(() => {
+    lastErrorRef.current = '';
+    setStatus('connecting');
+
+    let disposed = false;
+    const url = wsUrl(`/ws/projects/${encodeURIComponent(slug)}/terminal?mode=${currentMode}`);
+    const ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    wsRef.current = ws;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    const sendResize = () => {
+      const term = termRef.current;
+      if (term && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    };
+
+    ws.onopen = () => {
+      setCloseNotice('');
+      fitRef.current?.fit();
+      sendResize();
+    };
+    ws.onclose = (ev: CloseEvent) => {
+      if (disposed) return;
+      const term = termRef.current;
+      if (term) term.options.disableStdin = true;
+      const stop = TERMINAL_STOP_NOTICE[ev.code];
+      if (stop) {
+        const notice = lastErrorRef.current || stop;
+        setStatus('closed');
+        setCloseNotice(notice);
+        term?.write(`\r\n\x1b[1;33m${notice}\x1b[0m\r\n`);
+        return;
+      }
+      if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS) {
+        const notice = lastErrorRef.current || `Connection lost (${ev.code}). Reconnect to continue.`;
+        setStatus('error');
+        setCloseNotice(notice);
+        term?.write(`\r\n\x1b[1;31m${notice}\x1b[0m\r\n`);
+        return;
+      }
+      setStatus('closed');
+      scheduleReconnect();
+    };
+    ws.onerror = () => {
+      if (disposed) return;
+      setStatus('error');
+      const term = termRef.current;
+      if (term) term.options.disableStdin = true;
+    };
+    ws.onmessage = (ev: MessageEvent) => {
+      if (disposed) return;
+      const term = termRef.current;
+      if (typeof ev.data === 'string') {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'ready') {
+            reconnectAttemptRef.current = 0;
+            setStatus('ready');
+            setCloseNotice('');
+            if (term) {
+              term.options.disableStdin = false;
+              fitRef.current?.fit();
+            }
+            sendResize();
+          } else if (msg.type === 'error') {
+            setStatus('error');
+            const message = String(msg.message || 'Terminal error');
+            lastErrorRef.current = message;
+            term?.writeln('\r\n\x1b[1;31m' + message + '\x1b[0m\r\n');
+          } else if (msg.type === 'path') {
+            setWorkPath(msg.subdir || msg.path || '');
+          }
+        } catch { /* ignore */ }
+      } else {
+        term?.write(new Uint8Array(ev.data as ArrayBuffer));
+      }
+    };
+
+    return () => {
+      disposed = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      ws.onopen = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.close();
+      if (wsRef.current === ws) wsRef.current = null;
+      const term = termRef.current;
+      if (term) term.options.disableStdin = true;
+    };
+  }, [slug, currentMode, reconnectNonce, scheduleReconnect]);
 
   const sendCommand = useCallback((cmd: string) => {
     const ws = wsRef.current;
