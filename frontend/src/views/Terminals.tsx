@@ -10,7 +10,7 @@ const LS_LAST = 'wsd.terminals.lastProject';
 export function Terminals({ params }: { params: { slug?: string } }) {
   const slug = params?.slug;
   const [, setLocation] = useHashLocation();
-  const { t, t2 } = useI18n();
+  const { t } = useI18n();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -65,7 +65,7 @@ export function Terminals({ params }: { params: { slug?: string } }) {
         <button class="btn-ghost sm" onClick={() => setLocation('/')}>
           <ArrowLeft width={13} height={13} class="icon" /> {t('nav.dashboard')}
         </button>
-        <h1 style="font-weight:600;font-size:0.9rem;margin:0;margin-inline-start:8px">{t2('الطرفيات', 'Terminals')}</h1>
+        <h1 style="font-weight:600;font-size:0.9rem;margin:0;margin-inline-start:8px">{t('terminal.hub.title')}</h1>
         <span style="flex:1" />
       </div>
 
@@ -80,7 +80,7 @@ export function Terminals({ params }: { params: { slug?: string } }) {
             <input
               class="modern-input"
               style="width:100%;font-size:0.72rem;padding:5px 8px 5px 24px;box-sizing:border-box"
-              placeholder={t2('تصفية المشاريع…', 'Filter projects…')}
+              placeholder={t('terminal.hub.filter')}
               value={query}
               onInput={(e: any) => setQuery(e.target.value)}
             />
@@ -88,7 +88,7 @@ export function Terminals({ params }: { params: { slug?: string } }) {
           {loading ? (
             <p style="color:var(--text-3);font-size:0.75rem" role="status">{t('common.loading')}</p>
           ) : visible.length === 0 ? (
-            <p style="color:var(--text-3);font-size:0.75rem" role="status">{t2('لا مشاريع مطابقة.', 'No projects match.')}</p>
+            <p style="color:var(--text-3);font-size:0.75rem" role="status">{t('terminal.hub.noMatch')}</p>
           ) : (
             visible.map((p) => {
               const active = selected === p.slug;
@@ -126,7 +126,7 @@ export function Terminals({ params }: { params: { slug?: string } }) {
           ) : (
             <div class="empty-state" style="margin:auto;text-align:center">
               <p style="color:var(--text-3);font-size:0.82rem">
-                {t2('اختر مشروعاً لفتح طرفيته — أطراف المشروع والتحكم والتبويبات وسجل الأوامر والأوامر السريعة تعمل هنا لكل مشروع.', 'Select a project to open its terminal — project and control shells, tabs, command history and quick commands all work here for every project.')}
+                {t('terminal.hub.empty')}
               </p>
             </div>
           )}

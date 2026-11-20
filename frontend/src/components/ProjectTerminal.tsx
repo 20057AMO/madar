@@ -4,6 +4,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { wsUrl } from '../api';
+import { useI18n } from '../i18n';
 
 type TermMode = 'project' | 'control';
 type TermStatus = 'connecting' | 'ready' | 'closed' | 'error' | 'exited';
@@ -51,14 +52,6 @@ const TERMINAL_CLOSE = {
   accessDenied: 1008,
 } as const;
 
-const TERMINAL_STOP_NOTICE: Record<number, string> = {
-  [TERMINAL_CLOSE.accessDenied]: 'Access denied for this project.',
-  [TERMINAL_CLOSE.sessionEnded]: 'Shell exited. Start a new shell to continue.',
-  [TERMINAL_CLOSE.containerMissing]: 'Project container not found — start the project, then reconnect.',
-  [TERMINAL_CLOSE.containerStopped]: 'Project container is not running — start the project, then reconnect.',
-  [TERMINAL_CLOSE.capacity]: 'This terminal is already open elsewhere, or the server is at capacity.',
-};
-
 interface Tab {
   id: string;
   label: string;
@@ -86,6 +79,14 @@ function saveHistory(slug: string, mode: TermMode, hist: string[]): void {
 let tabSeq = 0;
 
 export function ProjectTerminal({ slug }: { slug: string }) {
+  const { t } = useI18n();
+  const TERMINAL_STOP_NOTICE: Record<number, string> = {
+    [TERMINAL_CLOSE.accessDenied]: t('terminal.notice.accessDenied'),
+    [TERMINAL_CLOSE.sessionEnded]: t('terminal.notice.shellExited'),
+    [TERMINAL_CLOSE.containerMissing]: t('terminal.notice.containerMissing'),
+    [TERMINAL_CLOSE.containerStopped]: t('terminal.notice.containerStopped'),
+    [TERMINAL_CLOSE.capacity]: t('terminal.notice.capacity'),
+  };
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -107,7 +108,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     catch { return DEFAULT_FONT_SIZE; }
   });
   const [tabs, setTabs] = useState<Tab[]>(() => [
-    { id: `t-${Date.now()}-${++tabSeq}`, label: 'Terminal 1', mode: 'project' },
+    { id: `t-${Date.now()}-${++tabSeq}`, label: t('terminal.tabs.first'), mode: 'project' },
   ]);
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0]?.id || '');
   const [history, setHistory] = useState<string[]>(() => loadHistory(slug, 'project'));
@@ -171,27 +172,27 @@ export function ProjectTerminal({ slug }: { slug: string }) {
 
   const addTab = useCallback(() => {
     if (!canAddTab) return;
-    const usedModes = new Set(tabs.map((t) => t.mode));
+    const usedModes = new Set(tabs.map((tab) => tab.mode));
     const newMode: TermMode = usedModes.has('project') ? 'control' : 'project';
     const id = `t-${Date.now()}-${++tabSeq}`;
-    const newTab: Tab = { id, label: newMode === 'project' ? 'Project' : 'Control', mode: newMode };
+    const newTab: Tab = { id, label: newMode === 'project' ? t('terminal.tabs.project') : t('terminal.tabs.control'), mode: newMode };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
-  }, [canAddTab, tabs]);
+  }, [canAddTab, tabs, t]);
 
   const closeTab = useCallback((id: string) => {
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
       if (next.length === 0) {
         const newId = `t-${Date.now()}-${++tabSeq}`;
-        next.push({ id: newId, label: 'Terminal 1', mode: 'project' });
+        next.push({ id: newId, label: t('terminal.tabs.first'), mode: 'project' });
         setActiveTabId(newId);
       } else if (id === activeTabId) {
         setActiveTabId(next[next.length - 1].id);
       }
       return next;
     });
-  }, [activeTabId]);
+  }, [activeTabId, t]);
 
   const switchTabMode = useCallback((id: string, newMode: TermMode) => {
     // Check if another tab already uses this mode
@@ -430,7 +431,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       }
       const reasonNotice = lastErrorRef.current || ev.reason || '';
       if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS) {
-        const notice = reasonNotice || `Connection lost (${ev.code}). Reconnect to continue.`;
+        const notice = reasonNotice || t('terminal.notice.connectionLost', { code: ev.code });
         setStatus('error');
         announceNotice(notice);
         term?.write(`\r\n\x1b[1;31m${notice}\x1b[0m\r\n`);
@@ -464,7 +465,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
             sendResize();
           } else if (msg.type === 'error') {
             setStatus('error');
-            const message = String(msg.message || 'Terminal error');
+            const message = String(msg.message || t('terminal.notice.terminalError'));
             lastErrorRef.current = message;
             term?.writeln('\r\n\x1b[1;31m' + message + '\x1b[0m\r\n');
           } else if (msg.type === 'path') {
@@ -514,14 +515,14 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       : ['docker ps', `docker logs wsd-${slug} --tail 30`, 'git status', 'df -h', 'free -m'];
 
   const statusLabel = status === 'ready'
-    ? 'connected'
+    ? t('terminal.status.connected')
     : status === 'connecting'
-      ? 'connecting…'
+      ? t('terminal.status.connecting')
       : status === 'exited'
-        ? 'exited'
+        ? t('terminal.status.exited')
         : status === 'closed'
-          ? 'disconnected'
-          : 'error';
+          ? t('terminal.status.closed')
+          : t('terminal.status.error');
 
   const onTabListKeyDown = (e: KeyboardEvent) => {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -544,34 +545,34 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     <div class="term-wrap">
       {/* ── Tabs Bar ── */}
       <div class="term-tabs-bar">
-        <div class="term-tabs-list" role="tablist" aria-label="Terminal tabs" onKeyDown={onTabListKeyDown}>
-          {tabs.map((t) => (
+        <div class="term-tabs-list" role="tablist" aria-label={t('terminal.tabs.aria')} onKeyDown={onTabListKeyDown}>
+          {tabs.map((tab) => (
             <div
-              key={t.id}
-              id={`${panelId}-tab-${t.id}`}
-              data-term-tab={t.id}
+              key={tab.id}
+              id={`${panelId}-tab-${tab.id}`}
+              data-term-tab={tab.id}
               role="tab"
-              aria-selected={t.id === activeTabId}
+              aria-selected={tab.id === activeTabId}
               aria-controls={panelId}
-              tabIndex={t.id === activeTabId ? 0 : -1}
-              class={`term-tab ${t.id === activeTabId ? 'active' : ''}`}
-              onClick={() => setActiveTabId(t.id)}
+              tabIndex={tab.id === activeTabId ? 0 : -1}
+              class={`term-tab ${tab.id === activeTabId ? 'active' : ''}`}
+              onClick={() => setActiveTabId(tab.id)}
               onKeyDown={(e: KeyboardEvent) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  setActiveTabId(t.id);
+                  setActiveTabId(tab.id);
                 }
               }}
             >
-              <span class="term-tab-mode-dot" title={t.mode === 'project' ? 'Project shell' : 'Control shell'} />
-              <span class="term-tab-label">{t.label}</span>
+              <span class="term-tab-mode-dot" title={tab.mode === 'project' ? t('terminal.tabs.projectShell') : t('terminal.tabs.controlShell')} />
+              <span class="term-tab-label">{tab.label}</span>
               {tabs.length > 1 && (
-                <button class="term-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }} title="Close tab" aria-label={`Close tab ${t.label}`}>×</button>
+                <button class="term-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} title={t('terminal.tabs.close')} aria-label={t('terminal.tabs.closeAria', { label: tab.label })}>×</button>
               )}
             </div>
           ))}
           {canAddTab && (
-            <button class="term-tab-add" onClick={addTab} title="New terminal tab" aria-label="New terminal tab">+</button>
+            <button class="term-tab-add" onClick={addTab} title={t('terminal.tabs.add')} aria-label={t('terminal.tabs.add')}>+</button>
           )}
         </div>
       </div>
@@ -594,10 +595,10 @@ export function ProjectTerminal({ slug }: { slug: string }) {
             <button
               class="term-reconnect-btn"
               onClick={manualReconnect}
-              title={status === 'exited' ? 'Start new shell' : 'Reconnect'}
-              aria-label={status === 'exited' ? 'Start new shell' : 'Reconnect'}
+              title={status === 'exited' ? t('terminal.action.startShell') : t('terminal.action.reconnect')}
+              aria-label={status === 'exited' ? t('terminal.action.startShell') : t('terminal.action.reconnect')}
             >
-              {status === 'exited' ? '↻ Start new shell' : '↻ Reconnect'}
+              {status === 'exited' ? `↻ ${t('terminal.action.startShell')}` : `↻ ${t('terminal.action.reconnect')}`}
             </button>
           )}
         </div>
@@ -611,10 +612,10 @@ export function ProjectTerminal({ slug }: { slug: string }) {
 
         <div class="term-controls">
           <div class="term-font-controls">
-            <button class="term-ctrl-btn" onClick={() => changeFontSize(-1)} title="Zoom out (Ctrl+Scroll)" aria-label="Decrease terminal font size">A-</button>
+            <button class="term-ctrl-btn" onClick={() => changeFontSize(-1)} title={t('terminal.action.zoomOut')} aria-label={t('terminal.action.zoomOutAria')}>A-</button>
             <span class="term-font-label">{fontSize}px</span>
-            <button class="term-ctrl-btn" onClick={() => changeFontSize(1)} title="Zoom in (Ctrl+Scroll)" aria-label="Increase terminal font size">A+</button>
-            <button class="term-ctrl-btn" onClick={() => changeFontSize(DEFAULT_FONT_SIZE - fontSize)} title="Reset font size" aria-label="Reset font size">↺</button>
+            <button class="term-ctrl-btn" onClick={() => changeFontSize(1)} title={t('terminal.action.zoomIn')} aria-label={t('terminal.action.zoomInAria')}>A+</button>
+            <button class="term-ctrl-btn" onClick={() => changeFontSize(DEFAULT_FONT_SIZE - fontSize)} title={t('terminal.action.resetFont')} aria-label={t('terminal.action.resetFont')}>↺</button>
           </div>
 
           <div class="term-font-controls">
@@ -622,8 +623,8 @@ export function ProjectTerminal({ slug }: { slug: string }) {
               ref={a11yToggleRef}
               class="term-ctrl-btn"
               onClick={toggleA11yKeys}
-              title="Release Tab and Escape to the browser"
-              aria-label="Release Tab and Escape to the browser"
+              title={t('terminal.action.a11yKeys')}
+              aria-label={t('terminal.action.a11yKeys')}
               aria-pressed={a11yKeys}
             >
               <Keyboard width={12} height={12} class="icon" />
@@ -634,18 +635,18 @@ export function ProjectTerminal({ slug }: { slug: string }) {
             <button
               class={`term-mode-btn ${currentMode === 'project' ? 'active' : ''}`}
               onClick={() => activeTab && switchTabMode(activeTab.id, 'project')}
-              disabled={currentMode !== 'project' && tabs.some((t) => t.id !== activeTabId && t.mode === 'project')}
-              title="Shell inside the project container (dev toolchain)"
+              disabled={currentMode !== 'project' && tabs.some((tab) => tab.id !== activeTabId && tab.mode === 'project')}
+              title={t('terminal.action.modeProject')}
             >
-              <span class="term-mode-icon"><Package width={12} height={12} class="icon" /> Project</span>
+              <span class="term-mode-icon"><Package width={12} height={12} class="icon" /> {t('terminal.tabs.project')}</span>
             </button>
             <button
               class={`term-mode-btn ${currentMode === 'control' ? 'active' : ''}`}
               onClick={() => activeTab && switchTabMode(activeTab.id, 'control')}
-              disabled={currentMode !== 'control' && tabs.some((t) => t.id !== activeTabId && t.mode === 'control')}
-              title="Shell in the app container (git + docker CLI)"
+              disabled={currentMode !== 'control' && tabs.some((tab) => tab.id !== activeTabId && tab.mode === 'control')}
+              title={t('terminal.action.modeControl')}
             >
-              <span class="term-mode-icon"><Settings2 width={12} height={12} class="icon" /> Control</span>
+              <span class="term-mode-icon"><Settings2 width={12} height={12} class="icon" /> {t('terminal.tabs.control')}</span>
             </button>
           </div>
         </div>

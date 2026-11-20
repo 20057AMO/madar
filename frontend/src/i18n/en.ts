@@ -859,6 +859,53 @@ export const en = {
     announceDismissed: '“{title}” dismissed.',
     announceRefreshed: 'Suggestions refreshed — {n} item(s).',
   },
+  terminal: {
+    tabs: {
+      aria: 'Terminal tabs',
+      first: 'Terminal 1',
+      project: 'Project',
+      control: 'Control',
+      projectShell: 'Project shell',
+      controlShell: 'Control shell',
+      close: 'Close tab',
+      closeAria: 'Close tab {label}',
+      add: 'New terminal tab',
+    },
+    status: {
+      connected: 'connected',
+      connecting: 'connecting…',
+      exited: 'exited',
+      closed: 'disconnected',
+      error: 'error',
+    },
+    action: {
+      startShell: 'Start new shell',
+      reconnect: 'Reconnect',
+      zoomOut: 'Zoom out (Ctrl+Scroll)',
+      zoomOutAria: 'Decrease terminal font size',
+      zoomIn: 'Zoom in (Ctrl+Scroll)',
+      zoomInAria: 'Increase terminal font size',
+      resetFont: 'Reset font size',
+      a11yKeys: 'Release Tab and Escape to the browser',
+      modeProject: 'Shell inside the project container (dev toolchain)',
+      modeControl: 'Shell in the app container (git + docker CLI)',
+    },
+    notice: {
+      accessDenied: 'Access denied for this project.',
+      shellExited: 'Shell exited. Start a new shell to continue.',
+      containerMissing: 'Project container not found — start the project, then reconnect.',
+      containerStopped: 'Project container is not running — start the project, then reconnect.',
+      capacity: 'This terminal is already open elsewhere, or the server is at capacity.',
+      connectionLost: 'Connection lost ({code}). Reconnect to continue.',
+      terminalError: 'Terminal error',
+    },
+    hub: {
+      title: 'Terminals',
+      filter: 'Filter projects…',
+      noMatch: 'No projects match.',
+      empty: 'Select a project to open its terminal — project and control shells, tabs, command history and quick commands all work here for every project.',
+    },
+  },
 };
 
 /** Type-level contract: ar.ts must satisfy exactly this shape. */
