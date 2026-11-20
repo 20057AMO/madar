@@ -1340,7 +1340,7 @@ export const startServe = (slug: string, port?: number) =>
 export const stopServe = (slug: string) =>
   api<{ serve: ServeState }>(`/api/projects/${slug}/serve/stop`, { method: 'POST' });
 export const cloneProject = (slug: string, url: string) =>
-  api<{ target: string; output: string }>(`/api/projects/${slug}/clone`, {
+  api<{ target: string }>(`/api/projects/${slug}/clone`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
@@ -1350,6 +1350,7 @@ export interface ProjectGitChange {
   status: string;
   staged: boolean;
   unstaged: boolean;
+  originalPath?: string;
 }
 export interface ProjectGitRepository {
   path: string;

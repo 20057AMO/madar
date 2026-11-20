@@ -39,6 +39,7 @@ import {
 import { ensureServeRunning, probeServe } from './project-serve';
 import { publicProject, publicProjects } from './project-public';
 import { resolveContainedPath } from './workspace-paths-core';
+import { commandEnvironment, gitArgs, isAllowedGitRemote } from './project-git';
 
 // Re-exported so the rest of the app can import these helpers from the
 // docker-manager barrel as before.
@@ -1177,12 +1178,18 @@ export async function runProjectScript(slug: string, script: string): Promise<Sc
   return collectExecOutput(exec, { timeoutMs: 180_000, maxOutput: 300_000 });
 }
 
+function cloneFailure(statusCode: number): HttpError {
+  const err = new HttpError(statusCode, 'Git clone failed') as HttpError & { code: string };
+  err.code = 'CLONE_FAILED';
+  return err;
+}
+
 /** git clone into the project workspace (empty workspace → root, else subdir). */
 export async function cloneIntoWorkspace(
   slug: string,
   url: string,
   userId?: string
-): Promise<{ target: string; output: string }> {
+): Promise<{ target: string }> {
   const projectSlug = validateProjectSlug(slug);
   // The base comes from the shared containment primitive, not from
   // `path.resolve(WORKSPACES_ROOT, slug)`. `validateProjectSlug` folds the slug
@@ -1196,26 +1203,14 @@ export async function cloneIntoWorkspace(
   if (!fs.existsSync(base)) throw new HttpError(404, `Project workspace '${projectSlug}' not found`);
 
   const cleanUrl = String(url ?? '').trim();
-  const validHttp = /^[a-z][a-z0-9+.-]*:\/\/[^\s]+$/i.test(cleanUrl);
-  const validScp = /^[\w.-]+@[\w.-]+:[\w./-]+$/i.test(cleanUrl);
-  const validShort = /^[\w.-]+\/[\w.-]+(\.git)?$/.test(cleanUrl);
-  if (!validHttp && !validScp && !validShort) {
+  if (!isAllowedGitRemote(cleanUrl)) {
     throw new HttpError(400, 'Invalid git repository URL');
   }
 
   const existing = fs.readdirSync(base).filter((f) => f !== '.git');
-  let target = existing.length === 0 ? base : path.join(base, repoName(cleanUrl));
-  // The clone target is resolved through the primitive as well, with
-  // mustExist:false because git is what creates it. Two reasons this is not
-  // optional: (1) `repoName` could return a name containing a separator, and
-  // `path.join` would then resolve outside the base; (2) a link PLANTED at
-  // exactly that name makes `git clone` write through it — git creates the
-  // directory itself, so nothing about the clone refuses a link the way an
-  // O_NOFOLLOW open does, and a planted `<repoName> -> /app/data` turns a clone
-  // into an arbitrary write. The primitive refuses both.
-  resolveContainedPath(WORKSPACES_ROOT, projectSlug, relativeCloneTarget(base, target), {
-    mustExist: false,
-  });
+  const target = existing.length === 0 ? base : path.join(base, repoName(cleanUrl));
+  const relTarget = relativeCloneTarget(base, target);
+  resolveContainedPath(WORKSPACES_ROOT, projectSlug, relTarget, { mustExist: false });
 
   // If we're cloning into the root, the only thing there may be the auto-init
   // .git scaffold (no commits) created for opencode registration — drop it so
@@ -1235,28 +1230,49 @@ export async function cloneIntoWorkspace(
     }
   }
 
+  // `git clone` creates the destination itself, so a link planted after the
+  // containment check above would be followed. Pre-create it with a single
+  // non-recursive mkdir — atomic, and it refuses an existing leaf — then
+  // re-prove containment through the primitive before handing it to git.
+  if (relTarget !== '') {
+    try {
+      fs.mkdirSync(target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw cloneFailure(502);
+      resolveContainedPath(WORKSPACES_ROOT, projectSlug, relTarget, { mustExist: true });
+      const stat = fs.lstatSync(target);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw cloneFailure(502);
+    }
+    resolveContainedPath(WORKSPACES_ROOT, projectSlug, relTarget, { mustExist: true });
+  }
+
   return new Promise((resolve, reject) => {
-    const proc = spawn('git', ['clone', '--depth', '1', '--progress', cleanUrl, target], { cwd: '/' });
-    let output = '';
-    const onData = (d: Buffer) => {
-      output += d.toString('utf8');
-      if (output.length > 5000) output = output.slice(-5000);
-    };
-    proc.stdout?.on('data', onData);
-    proc.stderr?.on('data', onData);
-    const timer = setTimeout(() => proc.kill('SIGKILL'), 300000);
+    let timedOut = false;
+    const proc = spawn('git', gitArgs(['clone', '--depth', '1', '--progress', '--', cleanUrl, target]), {
+      cwd: '/',
+      env: commandEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proc.stdout.on('data', () => {});
+    proc.stderr.on('data', () => {});
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGKILL');
+    }, 300000);
     proc.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) {
+      if (code === 0 && !timedOut) {
         recordActivity(projectSlug, 'cloned', { userId });
-        resolve({ target: path.relative(base, target).split(path.sep).join('/'), output });
+        resolve({ target: relTarget });
       } else {
-        reject(new Error(`git clone failed (exit ${code}): ${output.slice(-2000)}`));
+        console.warn(`[git] clone failed for '${projectSlug}'`, code ?? 'unknown', timedOut ? 'timeout' : '');
+        reject(cloneFailure(timedOut ? 504 : 502));
       }
     });
-    proc.on('error', (err) => {
+    proc.on('error', () => {
       clearTimeout(timer);
-      reject(err);
+      console.warn(`[git] clone could not be started for '${projectSlug}'`);
+      reject(cloneFailure(503));
     });
   });
 }

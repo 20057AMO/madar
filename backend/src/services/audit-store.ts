@@ -96,6 +96,7 @@ export type AuditEvent =
   | 'digest-delete'
   | 'suggestion-dismiss'
   | 'suggestion-accept'
+  | 'git-clone'
   | 'git-stage'
   | 'git-unstage'
   | 'git-commit'

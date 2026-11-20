@@ -55,6 +55,7 @@ import type {
   FilePreview,
   ChatContext,
   ProjectGitRepository,
+  ProjectGitChange,
 } from '../api';
 import { NotesPanel } from '../components/NotesPanel';
 import { ReviewsPanel } from '../components/ReviewsPanel';
@@ -936,10 +937,17 @@ function OverviewPanel({
   const [activeSec, setActiveSec] = useState<string>('ov-links');
   const selectedGitRepo = gitRepositories.find((repo) => repo.path === gitRepoPath) || gitRepositories[0] || null;
 
-  const refreshGitStatus = async (): Promise<boolean> => {
+  const gitChangePath = (change: ProjectGitChange) => {
+    const originalPath = change.originalPath;
+    return (change.status.includes('R') || change.status.includes('C')) && originalPath
+      ? `${originalPath} → ${change.path}`
+      : change.path;
+  };
+
+  const refreshGitStatus = async (quiet = false): Promise<boolean> => {
     const requestId = ++gitRequestRef.current;
     setGitLoading(true);
-    setGitMsg(null);
+    if (!quiet) setGitMsg(null);
     try {
       const { repositories } = await getProjectGit(slug);
       if (requestId !== gitRequestRef.current) return false;
@@ -949,9 +957,9 @@ function OverviewPanel({
         : (repositories[0]?.path ?? ''));
       setSelectedGitFiles([]);
       return true;
-    } catch (err: any) {
-      if (requestId === gitRequestRef.current) {
-        setGitMsg(err?.message || t('project.gitLoadFailed'));
+    } catch {
+      if (requestId === gitRequestRef.current && !quiet) {
+        setGitMsg(t('project.gitLoadFailed'));
       }
       return false;
     } finally {
@@ -966,11 +974,10 @@ function OverviewPanel({
     setGitMsg(null);
     try {
       await pushProjectGit(slug, selectedGitRepo.path);
-      if (await refreshGitStatus()) {
-        setGitMsg(t('project.gitPushSuccess', { branch: selectedGitRepo.branch || '' }));
-      }
-    } catch (err: any) {
-      setGitMsg(`${t('project.gitPushFailed')}: ${err?.message || 'Unknown error'}`);
+      setGitMsg(t('project.gitPushSuccess', { branch: selectedGitRepo.branch || '' }));
+      void refreshGitStatus(true);
+    } catch {
+      setGitMsg(t('project.gitPushFailed'));
     } finally {
       setGitPushing(false);
     }
@@ -987,9 +994,10 @@ function OverviewPanel({
     setGitMsg(null);
     try {
       const result = await operation();
-      if (await refreshGitStatus()) setGitMsg(successMessage(result));
-    } catch (err: any) {
-      setGitMsg(`${failureLabel}: ${err?.message || 'Unknown error'}`);
+      setGitMsg(successMessage(result));
+      void refreshGitStatus(true);
+    } catch {
+      setGitMsg(failureLabel);
     } finally {
       setGitWorking(false);
       setGitOperation(null);
@@ -1075,7 +1083,7 @@ function OverviewPanel({
   const effectiveStats = liveStats || stats;
 
   useEffect(() => {
-    if (activeSec === 'ov-links') void refreshGitStatus();
+    if (activeSec === 'ov-git') void refreshGitStatus();
     return () => { gitRequestRef.current++; };
   }, [slug, activeSec]);
 
@@ -1206,12 +1214,12 @@ function OverviewPanel({
       setCloneMsg(t('cfg.cloneOk', { target: r.target || t('cfg.cloneRoot') }));
       setCloneUrl('');
       onChanged();
-      await refreshGitStatus();
-    } catch (err: any) {
-      setCloneMsg(t('cfg.cloneFail', { error: err.message }));
+    } catch {
+      setCloneMsg(t('cfg.cloneFailGeneric'));
     } finally {
       setCloning(false);
     }
+    void refreshGitStatus(true);
   };
 
   const saveEnv = async () => {
@@ -1463,22 +1471,25 @@ function OverviewPanel({
 
       {/* ── Quick-nav ── */}
         <nav class="ov-nav" aria-label={t('misc.a11yOverviewNav')}>
-          <button type="button" class={`ov-nav-btn${activeSec === 'ov-links' ? ' active' : ''}`} onClick={() => setActiveSec('ov-links')}>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-links' ? ' active' : ''}`} aria-current={activeSec === 'ov-links' ? 'location' : undefined} onClick={() => setActiveSec('ov-links')}>
             {t('project.secLinks')}
           </button>
-          <button type="button" class={`ov-nav-btn${activeSec === 'ov-info' ? ' active' : ''}`} onClick={() => setActiveSec('ov-info')}>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-info' ? ' active' : ''}`} aria-current={activeSec === 'ov-info' ? 'location' : undefined} onClick={() => setActiveSec('ov-info')}>
             {t('project.secInfo')}
           </button>
-          <button type="button" class={`ov-nav-btn${activeSec === 'ov-config' ? ' active' : ''}`} onClick={() => setActiveSec('ov-config')}>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-git' ? ' active' : ''}`} aria-current={activeSec === 'ov-git' ? 'location' : undefined} onClick={() => setActiveSec('ov-git')}>
+            {t('project.secGit')}
+          </button>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-config' ? ' active' : ''}`} aria-current={activeSec === 'ov-config' ? 'location' : undefined} onClick={() => setActiveSec('ov-config')}>
             {t('project.secConfig')}
           </button>
-          <button type="button" class={`ov-nav-btn${activeSec === 'ov-ctx' ? ' active' : ''}`} onClick={() => setActiveSec('ov-ctx')}>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-ctx' ? ' active' : ''}`} aria-current={activeSec === 'ov-ctx' ? 'location' : undefined} onClick={() => setActiveSec('ov-ctx')}>
             {t('project.secCtx')}
           </button>
-          <button type="button" class={`ov-nav-btn${activeSec === 'ov-runtime' ? ' active' : ''}`} onClick={() => setActiveSec('ov-runtime')}>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-runtime' ? ' active' : ''}`} aria-current={activeSec === 'ov-runtime' ? 'location' : undefined} onClick={() => setActiveSec('ov-runtime')}>
             {t('project.secRuntime')}
           </button>
-          <button type="button" class={`ov-nav-btn${activeSec === 'ov-activity' ? ' active' : ''}`} onClick={() => setActiveSec('ov-activity')}>
+          <button type="button" class={`ov-nav-btn${activeSec === 'ov-activity' ? ' active' : ''}`} aria-current={activeSec === 'ov-activity' ? 'location' : undefined} onClick={() => setActiveSec('ov-activity')}>
             {t('project.secActivity')}
           </button>
         </nav>
@@ -1695,11 +1706,74 @@ function OverviewPanel({
           )}
         </div>
 
+      </div>
+      )}
+
+      {/* ── Project info ── */}
+      {activeSec === 'ov-info' && (
+      <div class="panel" id="ov-info">
+        <h2 class="panel-title">{t('project.secInfo')}</h2>
+          <div class="kv-list">
+            <div class="kv">
+              <span>{t('project.description')}</span>
+              <div style="display:flex; gap:8px; align-items:flex-start; justify-content:flex-end; flex:1">
+                {editDesc ? (
+                  <>
+                    <textarea
+                      class="modern-input"
+                      style="flex:1; resize:vertical; min-height:48px"
+                      rows={3}
+                      aria-label={t('project.description')}
+                      value={descText}
+                      onInput={(e: any) => setDescText(e.target.value)}
+                      onKeyDown={(e: any) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') saveDescription(); if (e.key === 'Escape') { setEditDesc(false); setDescText(project?.description || ''); } }}
+                    />
+                    <div style="display:flex; gap:6px">
+                      <button class="btn-primary sm" onClick={saveDescription}>{t('common.save')}</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span style="text-align:right">{project?.description || '—'}</span>
+                    <button class="btn-ghost sm" onClick={() => { setDescText(project?.description || ''); setEditDesc(true); }}>{t('project.edit')}</button>
+                  </>
+                )}
+              </div>
+            </div>
+            <div class="kv">
+              <span>{t('project.image')}</span>
+              <b>{project?.image || 'wsd/workspace:latest'}</b>
+            </div>
+            <div class="kv">
+              <span>{t('project.containerId')}</span>
+              <div style="display:flex; gap:8px; align-items:center">
+                <b class="mono">{project?.containerId ? project.containerId.slice(0, 12) : '—'}</b>
+                {project?.containerId && (
+                  <button class="btn-ghost sm" onClick={() => copy(project.containerId!)}>{t('project.copy')}</button>
+                )}
+              </div>
+            </div>
+                <div class="kv">
+                  <span>{t('project.created')}</span>
+                  <b>{project?.createdAt ? fmtTime(project.createdAt) : '—'}</b>
+                </div>
+                <div class="kv">
+                  <span>{t('project.uptime')}</span>
+                  <b>{effectiveStats?.running ? fmtUptime(effectiveStats.startedAt) : project?.status === 'running' ? '…' : t('project.stoppedLower')}</b>
+                </div>
+                </div>
+        </div>
+        )}
+
+      {/* ── Git ── */}
+      {activeSec === 'ov-git' && (
+      <div class="panel ov-git" id="ov-git">
+        <h2 class="panel-title">{t('project.secGit')}</h2>
         <div class="git-panel">
           <div class="git-panel-head">
             <div class="git-panel-title">
               <GitBranch width={15} height={15} class="icon" />
-              <span>{t('project.gitChanges')}</span>
+              <h3>{t('project.gitChanges')}</h3>
             </div>
             <button
               type="button"
@@ -1857,38 +1931,40 @@ function OverviewPanel({
                           </button>
                         </div>
                       )}
-                      <div class="git-file-list" aria-label={t('project.gitChanges')}>
+                      <ul class="git-file-list" role="list" aria-label={t('project.gitChanges')}>
                         {selectedGitRepo.changes.map((change) => (
-                          <label class="git-file-row" key={`${change.status}:${change.path}`}>
-                            {!readOnly && (
-                              <input
-                                type="checkbox"
-                                aria-label={t('project.gitSelectFile', { path: change.path })}
-                                checked={selectedGitFiles.includes(change.path)}
-                                disabled={gitWorking || gitPushing}
-                                onChange={(e: any) => {
-                                  const checked = e.currentTarget.checked;
-                                  setSelectedGitFiles((current) => checked
-                                    ? [...current, change.path]
-                                    : current.filter((value) => value !== change.path));
-                                }}
-                              />
-                            )}
-                            <span class={`git-file-status ${
-                              change.status.includes('?') || change.status.includes('A')
-                                ? 'status-added'
-                                : change.status.includes('D')
-                                  ? 'status-deleted'
-                                  : change.status.includes('M')
-                                    ? 'status-modified'
-                                    : 'status-changed'
-                            }`}>{change.status}</span>
-                            <code title={change.path}>{change.path}</code>
-                            {change.staged && <span class="git-file-state">{t('project.gitStaged')}</span>}
-                            {change.unstaged && <span class="git-file-state">{t('project.gitUnstaged')}</span>}
-                          </label>
+                          <li key={`${change.status}:${change.path}`}>
+                            <label class="git-file-row">
+                              {!readOnly && (
+                                <input
+                                  type="checkbox"
+                                  aria-label={t('project.gitSelectFile', { path: gitChangePath(change) })}
+                                  checked={selectedGitFiles.includes(change.path)}
+                                  disabled={gitWorking || gitPushing}
+                                  onChange={(e: any) => {
+                                    const checked = e.currentTarget.checked;
+                                    setSelectedGitFiles((current) => checked
+                                      ? [...current, change.path]
+                                      : current.filter((value) => value !== change.path));
+                                  }}
+                                />
+                              )}
+                              <span class={`git-file-status ${
+                                change.status.includes('?') || change.status.includes('A')
+                                  ? 'status-added'
+                                  : change.status.includes('D')
+                                    ? 'status-deleted'
+                                    : change.status.includes('M')
+                                      ? 'status-modified'
+                                      : 'status-changed'
+                              }`}>{change.status}</span>
+                              <code dir="ltr" title={gitChangePath(change)}>{gitChangePath(change)}</code>
+                              {change.staged && <span class="git-file-state">{t('project.gitStaged')}</span>}
+                              {change.unstaged && <span class="git-file-state">{t('project.gitUnstaged')}</span>}
+                            </label>
+                          </li>
                         ))}
-                      </div>
+                      </ul>
                     </>
                   )}
                   {!readOnly && (
@@ -1965,7 +2041,7 @@ function OverviewPanel({
               )}
             </>
           )}
-          {gitMsg && <div class="git-message" role="status">{gitMsg}</div>}
+          <div class="git-message" role="status" aria-live="polite">{gitMsg}</div>
 
           <div class="git-clone">
             <div>
@@ -1979,7 +2055,7 @@ function OverviewPanel({
                 <input
                   class="modern-input"
                   aria-label={t('project.cloneFromGit')}
-                  placeholder="https://github.com/org/repo.git"
+                  placeholder={t('project.gitCloneUrlPlaceholder')}
                   value={cloneUrl}
                   onInput={(e: any) => setCloneUrl(e.target.value)}
                   onKeyDown={(e: any) => e.key === 'Enter' && void doClone()}
@@ -1992,67 +2068,11 @@ function OverviewPanel({
                 </button>
               </div>
             )}
-            {cloneMsg && <div class="git-message" role="status">{cloneMsg}</div>}
+            <div class="git-message" role="status" aria-live="polite">{cloneMsg ?? ''}</div>
           </div>
         </div>
       </div>
       )}
-
-      {/* ── Project info ── */}
-      {activeSec === 'ov-info' && (
-      <div class="panel" id="ov-info">
-        <h2 class="panel-title">{t('project.secInfo')}</h2>
-          <div class="kv-list">
-            <div class="kv">
-              <span>{t('project.description')}</span>
-              <div style="display:flex; gap:8px; align-items:flex-start; justify-content:flex-end; flex:1">
-                {editDesc ? (
-                  <>
-                    <textarea
-                      class="modern-input"
-                      style="flex:1; resize:vertical; min-height:48px"
-                      rows={3}
-                      aria-label={t('project.description')}
-                      value={descText}
-                      onInput={(e: any) => setDescText(e.target.value)}
-                      onKeyDown={(e: any) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') saveDescription(); if (e.key === 'Escape') { setEditDesc(false); setDescText(project?.description || ''); } }}
-                    />
-                    <div style="display:flex; gap:6px">
-                      <button class="btn-primary sm" onClick={saveDescription}>{t('common.save')}</button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <span style="text-align:right">{project?.description || '—'}</span>
-                    <button class="btn-ghost sm" onClick={() => { setDescText(project?.description || ''); setEditDesc(true); }}>{t('project.edit')}</button>
-                  </>
-                )}
-              </div>
-            </div>
-            <div class="kv">
-              <span>{t('project.image')}</span>
-              <b>{project?.image || 'wsd/workspace:latest'}</b>
-            </div>
-            <div class="kv">
-              <span>{t('project.containerId')}</span>
-              <div style="display:flex; gap:8px; align-items:center">
-                <b class="mono">{project?.containerId ? project.containerId.slice(0, 12) : '—'}</b>
-                {project?.containerId && (
-                  <button class="btn-ghost sm" onClick={() => copy(project.containerId!)}>{t('project.copy')}</button>
-                )}
-              </div>
-            </div>
-                <div class="kv">
-                  <span>{t('project.created')}</span>
-                  <b>{project?.createdAt ? fmtTime(project.createdAt) : '—'}</b>
-                </div>
-                <div class="kv">
-                  <span>{t('project.uptime')}</span>
-                  <b>{effectiveStats?.running ? fmtUptime(effectiveStats.startedAt) : project?.status === 'running' ? '…' : t('project.stoppedLower')}</b>
-                </div>
-                </div>
-        </div>
-        )}
 
         {/* ── Runtime ── */}
         {activeSec === 'ov-runtime' && (
@@ -2231,6 +2251,7 @@ function OverviewPanel({
             upstream: selectedGitRepo?.upstream || '',
           })}
           confirmLabel={t('project.gitPush')}
+          loading={gitPushing}
           onConfirm={pushGitChanges}
           onCancel={() => setConfirmGitPush(false)}
         />

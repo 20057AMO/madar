@@ -12,6 +12,7 @@ const {
   checkoutProjectGitBranch,
   commitProjectGit,
   isAllowedGitPushRemote,
+  isAllowedGitRemote,
   listProjectGitRepositories,
   pullProjectGit,
   pushProjectGit,
@@ -171,6 +172,111 @@ test('Git push remotes accept HTTPS and SSH and reject local or helper protocols
   assert.strictEqual(isAllowedGitPushRemote('http://github.com/org/repo.git'), false);
   assert.strictEqual(isAllowedGitPushRemote('ssh://-oProxyCommand=invalid/repo'), false);
   assert.strictEqual(isAllowedGitPushRemote('-oProxyCommand@github.com:org/repo.git'), false);
+});
+
+test('Git remote policy rejects scp/file/git/ext/leading-dash URLs and SSRF metadata hosts', () => {
+  const allowed = [
+    'https://github.com/org/repo.git',
+    'ssh://git@github.com/org/repo.git',
+    'git@github.com:org/repo.git',
+    'https://gitlab.com/org/repo.git',
+    'https://github.com./org/repo.git',
+  ];
+  const rejected = [
+    'file:///etc/passwd',
+    'git://github.com/org/repo.git',
+    'ext::sh -c whoami',
+    'ext://sh -c whoami',
+    'http://github.com/org/repo.git',
+    'ssh://-evil/repo',
+    'ssh://-oProxyCommand=invalid/repo',
+    '-oProxyCommand@github.com:org/repo.git',
+    'https://metadata.goog/latest/meta-data',
+    'https://metadata.google.internal/computeMetadata/v1/',
+    'https://100.100.100.200/latest/meta-data',
+    'https://169.254.169.254/latest/meta-data',
+    'https://[fe80::1]/repo',
+    'https://github.com/org/repo.git\0extra',
+    'https://metadata.google.internal./',
+    'https://169.254.169.254./',
+    'https://[::ffff:169.254.169.254]/',
+    'https://[::ffff:100.100.100.200]/',
+    'https://metadata.google.internal./computeMetadata/v1/',
+    'https://169.254.169.254./latest/meta-data',
+    'https://[::ffff:169.254.169.254]/repo',
+    'https://[::ffff:100.100.100.200]/repo',
+  ];
+  for (const url of allowed) assert.strictEqual(isAllowedGitRemote(url), true, url);
+  for (const url of rejected) assert.strictEqual(isAllowedGitRemote(url), false, url);
+  assert.strictEqual(isAllowedGitPushRemote, isAllowedGitRemote);
+});
+
+test('Git commit rejects control characters in the message before spawning Git', async () => {
+  const { root, workspace } = createWorkspace();
+  initRepository(workspace);
+  fs.writeFileSync(path.join(workspace, 'tracked.txt'), 'updated\n');
+  await stageProjectGitFiles(root, 'git-test', '', ['tracked.txt']);
+  for (const message of ['ok\0injected', 'line\nbreak', 'tab\there', 'del\x7fhere']) {
+    await assert.rejects(
+      commitProjectGit(root, 'git-test', '', message, 'Author', 'author@example.invalid'),
+      /Commit message/i,
+    );
+  }
+});
+
+test('Git branch rejects control characters before running Git', async () => {
+  const { root, workspace } = createWorkspace();
+  initRepository(workspace);
+  for (const branch of ['bad\0branch', 'line\nbreak', 'tab\there', 'del\x7fhere']) {
+    await assert.rejects(
+      checkoutProjectGitBranch(root, 'git-test', '', branch, true),
+      /Invalid branch/i,
+    );
+  }
+});
+
+test('Git clone surfaces a fixed error and never returns raw stderr or output', () => {
+  const dockerSource = fs.readFileSync(new URL('../src/services/docker-manager.ts', import.meta.url), 'utf8');
+  const start = dockerSource.indexOf('export async function cloneIntoWorkspace');
+  const end = dockerSource.indexOf('\nfunction repoName', start);
+  assert(start > -1 && end > start);
+  const body = dockerSource.slice(start, end);
+  const failureStart = dockerSource.indexOf('function cloneFailure');
+  assert(failureStart > -1 && failureStart < start);
+  const failure = dockerSource.slice(failureStart, dockerSource.indexOf('\n}', failureStart) + 2);
+  assert.match(failure, /Git clone failed/);
+  assert.match(failure, /CLONE_FAILED/);
+  assert.match(body, /gitArgs\(/);
+  assert.match(body, /commandEnvironment\(\)/);
+  assert.match(body, /resolveContainedPath\(/);
+  assert.match(body, /fs\.mkdirSync\(target\)/);
+  assert.match(body, /isAllowedGitRemote\(/);
+  assert.doesNotMatch(body, /resolve\(\{[^}]*\boutput\b/);
+  assert.doesNotMatch(body, /reject\(new HttpError/);
+  assert.doesNotMatch(body, /\$\{[^}]*(stderr|err\.message|message)/);
+  assert.doesNotMatch(body, /\b(?:stderr|stdout)\s*\+=/);
+
+  const indexSource = fs.readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+  const routeStart = indexSource.indexOf("app.post('/api/projects/:slug/clone'");
+  const routeEnd = indexSource.indexOf('\napp.', routeStart + 1);
+  assert(routeStart > -1 && routeEnd > routeStart);
+  const route = indexSource.slice(routeStart, routeEnd);
+  assert.match(route, /userWriteLimiter/);
+  assert.match(route, /recordAudit\('git-clone'/);
+  assert.match(route, /err\.code/);
+});
+
+test('Every git spawn uses the shared argument and environment hardening', () => {
+  for (const file of ['../src/services/project-git.ts', '../src/services/docker-manager.ts']) {
+    const source = fs.readFileSync(new URL(file, import.meta.url), 'utf8');
+    const spawns = [...source.matchAll(/spawn\('git'/g)];
+    assert(spawns.length > 0, `expected a git spawn in ${file}`);
+    for (const spawn of spawns) {
+      const tail = source.slice(spawn.index ?? 0, (spawn.index ?? 0) + 500);
+      assert.match(tail, /gitArgs\(/, `${file} spawn is missing gitArgs`);
+      assert.match(tail, /commandEnvironment\(\)/, `${file} spawn is missing commandEnvironment`);
+    }
+  }
 });
 
 test('Git push refuses a configured remote that uses a non-HTTPS/SSH transport', async () => {

@@ -60,7 +60,7 @@ interface GitResult {
   truncated: boolean;
 }
 
-function commandEnvironment(): NodeJS.ProcessEnv {
+export function commandEnvironment(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.startsWith('GIT_') && key !== 'GIT_SSH_AUTH_SOCK') delete env[key];
@@ -70,7 +70,7 @@ function commandEnvironment(): NodeJS.ProcessEnv {
   return env;
 }
 
-function gitArgs(args: string[]): string[] {
+export function gitArgs(args: string[]): string[] {
   return [...GIT_CONFIG_ARGS, ...args];
 }
 
@@ -135,6 +135,16 @@ function inside(root: string, candidate: string): boolean {
   return rel === '' || (!path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`));
 }
 
+function safeRealpath(target: string): string | null {
+  try {
+    return fs.realpathSync(target);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') return null;
+    throw err;
+  }
+}
+
 function repositoryMarker(dir: string): boolean {
   try {
     const stat = fs.lstatSync(path.join(dir, '.git'));
@@ -184,9 +194,9 @@ async function repositoryStatus(root: string, repoPath: string, dir: string): Pr
   const gitDir = await gitOutput(dir, ['rev-parse', '--absolute-git-dir']);
   if (!top || !gitDir || !inside(root, gitDir)) return null;
 
-  const realTop = fs.realpathSync(top);
-  const realDir = fs.realpathSync(dir);
-  if (realTop !== realDir || !inside(root, realTop)) return null;
+  const realTop = safeRealpath(top);
+  const realDir = safeRealpath(dir);
+  if (!realTop || !realDir || realTop !== realDir || !inside(root, realTop)) return null;
 
   const branchName = await gitOutput(dir, ['branch', '--show-current']);
   const branch = branchName || null;
@@ -380,21 +390,41 @@ export async function listProjectGitRepositories(
 
 export function isAllowedGitRemote(url: string): boolean {
   const value = url.trim();
-  if (!value || /[\s\0]/.test(value)) return false;
+  if (!value || value.startsWith('-') || /[\s\0]/.test(value)) return false;
+  let host: string;
   if (/^(https|ssh):\/\//i.test(value)) {
     try {
       const parsed = new URL(value);
       const username = decodeURIComponent(parsed.username);
-      return (parsed.protocol === 'https:' || parsed.protocol === 'ssh:')
+      if (!((parsed.protocol === 'https:' || parsed.protocol === 'ssh:')
         && Boolean(parsed.hostname)
         && parsed.pathname.length > 1
         && !parsed.hostname.startsWith('-')
-        && (!username || /^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(username));
+        && (!username || /^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(username)))) return false;
+      host = parsed.hostname;
     } catch {
       return false;
     }
+  } else {
+    const scp = value.match(/^([A-Za-z0-9._][A-Za-z0-9._-]*)@([A-Za-z0-9][A-Za-z0-9.-]*):([^\s:][^\s]*)$/);
+    if (!scp) return false;
+    host = scp[2];
   }
-  return /^[A-Za-z0-9._][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[^\s:][^\s]*$/.test(value);
+  const hostname = host.toLowerCase().replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
+  const mapped = hostname.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  let normalized = hostname.replace(/^::ffff:/, '');
+  if (mapped) {
+    const hi = parseInt(mapped[1], 16);
+    const lo = parseInt(mapped[2], 16);
+    normalized = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  return !(
+    normalized === 'metadata.goog' ||
+    normalized === 'metadata.google.internal' ||
+    normalized === '100.100.100.200' ||
+    normalized.startsWith('169.254.') ||
+    normalized.startsWith('fe80:')
+  );
 }
 
 export const isAllowedGitPushRemote = isAllowedGitRemote;
@@ -485,7 +515,7 @@ export async function commitProjectGit(
   rawAuthorEmail: unknown,
 ): Promise<{ branch: string | null; commit: string }> {
   const { projectRoot, repoPath, dir } = resolveProjectRepository(workspacesRoot, rawSlug, rawRepoPath);
-  if (typeof rawMessage !== 'string' || !rawMessage.trim() || rawMessage.length > 5000) {
+  if (typeof rawMessage !== 'string' || !rawMessage.trim() || rawMessage.length > 5000 || /[\0-\x1F\x7F]/.test(rawMessage)) {
     throw new ProjectGitError(400, 'Commit message is required and must be at most 5000 characters');
   }
   const authorName = typeof rawAuthorName === 'string' ? rawAuthorName.trim() : '';
@@ -570,7 +600,7 @@ export async function checkoutProjectGitBranch(
   create: boolean,
 ): Promise<{ branch: string }> {
   const { projectRoot, repoPath, dir } = resolveProjectRepository(workspacesRoot, rawSlug, rawRepoPath);
-  if (typeof rawBranch !== 'string' || rawBranch.length > 255 || rawBranch.trim() !== rawBranch || !rawBranch) {
+  if (typeof rawBranch !== 'string' || rawBranch.length > 255 || rawBranch.trim() !== rawBranch || !rawBranch || /[\0-\x1F\x7F]/.test(rawBranch)) {
     throw new ProjectGitError(400, 'Invalid branch name');
   }
   const refCheck = await runGit(dir, ['check-ref-format', '--branch', rawBranch]);

@@ -3213,16 +3213,18 @@ app.post('/api/projects/:slug/serve/stop', requireProjectAccess('editor'), userW
 });
 
 // git clone into the workspace
-app.post('/api/projects/:slug/clone', requireProjectAccess('editor'), async (req: any, res) => {
+app.post('/api/projects/:slug/clone', requireProjectAccess('editor'), userWriteLimiter, async (req: any, res) => {
   try {
     const { url } = req.body || {};
     if (!url || !String(url).trim()) {
       return res.status(400).json({ error: 'Git repository URL is required' });
     }
     const result = await cloneIntoWorkspace(req.params.slug, url, req.user?.id);
+    recordAudit('git-clone', true, req.ip, req.user?.id, { slug: req.params.slug });
     res.status(201).json(result);
   } catch (err: any) {
-    res.status(err.statusCode || 500).json({ error: err.message });
+    recordAudit('git-clone', false, req.ip, req.user?.id, { slug: req.params.slug });
+    res.status(err.statusCode || 500).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
 });
 
