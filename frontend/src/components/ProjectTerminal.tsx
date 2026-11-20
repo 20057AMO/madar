@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'preact/hooks';
-import { Package, Settings2 } from 'lucide-preact';
+import { useEffect, useRef, useState, useCallback, useId } from 'preact/hooks';
+import { Keyboard, Package, Settings2 } from 'lucide-preact';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -22,7 +22,7 @@ const THEME = {
   magenta: '#bc8cff',
   cyan: '#39c5cf',
   white: '#e8e9ea',
-  brightBlack: '#5c6068',
+  brightBlack: '#8b8f98',
   brightRed: '#f85149',
   brightGreen: '#56d364',
   brightYellow: '#e3b341',
@@ -97,6 +97,10 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const [closeNotice, setCloseNotice] = useState('');
   const [workPath, setWorkPath] = useState('');
+  const [a11yKeys, setA11yKeys] = useState(() => {
+    try { return localStorage.getItem('wsd.terminal.a11yKeys') === 'true'; }
+    catch { return false; }
+  });
   const [fontSize, setFontSize] = useState(() => {
     try { return parseInt(localStorage.getItem('wsd.term.fontSize') || String(DEFAULT_FONT_SIZE), 10); }
     catch { return DEFAULT_FONT_SIZE; }
@@ -111,11 +115,22 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   const historyIdxRef = useRef(historyIdx);
   const fontSizeRef = useRef(fontSize);
   const statusRef = useRef(status);
+  const a11yKeysRef = useRef(a11yKeys);
+  const a11yToggleRef = useRef<HTMLButtonElement | null>(null);
+  const panelId = useId();
 
   useEffect(() => { historyRef.current = history; }, [history]);
   useEffect(() => { historyIdxRef.current = historyIdx; }, [historyIdx]);
   useEffect(() => { fontSizeRef.current = fontSize; }, [fontSize]);
   useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { a11yKeysRef.current = a11yKeys; }, [a11yKeys]);
+
+  const toggleA11yKeys = () => {
+    const next = !a11yKeysRef.current;
+    a11yKeysRef.current = next;
+    setA11yKeys(next);
+    try { localStorage.setItem('wsd.terminal.a11yKeys', String(next)); } catch { return; }
+  };
 
   const canSendStdin = () =>
     termRef.current?.options.disableStdin === false && wsRef.current?.readyState === 1;
@@ -242,6 +257,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       drawBoldTextInBrightColors: true,
       scrollback: TERMINAL_SCROLLBACK,
       disableStdin: true,
+      screenReaderMode: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -254,6 +270,17 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       if (!canSendStdin()) return false;
 
       if (e.type !== 'keydown') return true;
+
+      if (a11yKeysRef.current && e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'm' || e.key === 'M')) return false;
+
+      if (a11yKeysRef.current && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'Tab' || e.key === 'Escape')) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          a11yToggleRef.current?.focus();
+        }
+        return false;
+      }
 
       if (e.key === 'ArrowUp') {
         const hist = historyRef.current;
@@ -485,9 +512,11 @@ export function ProjectTerminal({ slug }: { slug: string }) {
           {tabs.map((t) => (
             <div
               key={t.id}
+              id={`${panelId}-tab-${t.id}`}
               data-term-tab={t.id}
               role="tab"
               aria-selected={t.id === activeTabId}
+              aria-controls={panelId}
               tabIndex={t.id === activeTabId ? 0 : -1}
               class={`term-tab ${t.id === activeTabId ? 'active' : ''}`}
               onClick={() => setActiveTabId(t.id)}
@@ -514,7 +543,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       {/* ── Header ── */}
       <div class="term-header">
         <div class="term-header-left">
-          <span class={`term-status-dot ${status}`} title={statusLabel} />
+          <span class={`term-status-dot ${status}`} title={statusLabel} aria-hidden="true" />
           <span class="term-header-label" role="status">{statusLabel}</span>
           {closeNotice && <span class="term-close-notice" title={closeNotice}>{closeNotice}</span>}
           {(status === 'closed' || status === 'error') && (
@@ -533,10 +562,23 @@ export function ProjectTerminal({ slug }: { slug: string }) {
 
         <div class="term-controls">
           <div class="term-font-controls">
-            <button class="term-ctrl-btn" onClick={() => changeFontSize(-1)} title="Zoom out (Ctrl+Scroll)">A-</button>
+            <button class="term-ctrl-btn" onClick={() => changeFontSize(-1)} title="Zoom out (Ctrl+Scroll)" aria-label="Decrease terminal font size">A-</button>
             <span class="term-font-label">{fontSize}px</span>
-            <button class="term-ctrl-btn" onClick={() => changeFontSize(1)} title="Zoom in (Ctrl+Scroll)">A+</button>
+            <button class="term-ctrl-btn" onClick={() => changeFontSize(1)} title="Zoom in (Ctrl+Scroll)" aria-label="Increase terminal font size">A+</button>
             <button class="term-ctrl-btn" onClick={() => changeFontSize(DEFAULT_FONT_SIZE - fontSize)} title="Reset font size" aria-label="Reset font size">↺</button>
+          </div>
+
+          <div class="term-font-controls">
+            <button
+              ref={a11yToggleRef}
+              class="term-ctrl-btn"
+              onClick={toggleA11yKeys}
+              title="Release Tab and Escape to the browser"
+              aria-label="Release Tab and Escape to the browser"
+              aria-pressed={a11yKeys}
+            >
+              <Keyboard width={12} height={12} class="icon" />
+            </button>
           </div>
 
           <div class="term-mode-switch">
@@ -572,6 +614,9 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       {/* ── Terminal canvas ── */}
       <div
         class="term-host mono"
+        id={panelId}
+        role="tabpanel"
+        aria-labelledby={`${panelId}-tab-${activeTab.id}`}
         ref={hostRef}
         onClick={() => termRef.current?.focus()}
       />
