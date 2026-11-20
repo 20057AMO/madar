@@ -117,6 +117,16 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   useEffect(() => { fontSizeRef.current = fontSize; }, [fontSize]);
   useEffect(() => { statusRef.current = status; }, [status]);
 
+  const canSendStdin = () =>
+    termRef.current?.options.disableStdin === false && wsRef.current?.readyState === 1;
+
+  const sendStdin = (data: string | Uint8Array): boolean => {
+    const ws = wsRef.current;
+    if (!canSendStdin() || !ws) return false;
+    ws.send(typeof data === 'string' ? new TextEncoder().encode(data) : data);
+    return true;
+  };
+
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const currentMode = activeTab?.mode || 'project';
 
@@ -241,6 +251,8 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     fitRef.current = fit;
 
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (!canSendStdin()) return false;
+
       if (e.type !== 'keydown') return true;
 
       if (e.key === 'ArrowUp') {
@@ -249,14 +261,12 @@ export function ProjectTerminal({ slug }: { slug: string }) {
         const newIdx = historyIdxRef.current < 0
           ? hist.length - 1
           : Math.max(0, historyIdxRef.current - 1);
-        setHistoryIdx(newIdx);
         const cmd = hist[newIdx];
-        if (cmd) {
-          const ws = wsRef.current;
-          if (ws && ws.readyState === 1) {
-            ws.send(new TextEncoder().encode('\x1b[2K\r' + cmd));
-          }
+        if (cmd && sendStdin('\x1b[2K\r' + cmd)) {
+          setHistoryIdx(newIdx);
         }
+        e.preventDefault();
+        e.stopPropagation();
         return false;
       }
 
@@ -264,23 +274,24 @@ export function ProjectTerminal({ slug }: { slug: string }) {
         if (historyIdxRef.current < 0) return true;
         const newIdx = historyIdxRef.current + 1;
         const hist = historyRef.current;
-        const ws = wsRef.current;
         if (newIdx >= hist.length) {
-          setHistoryIdx(-1);
-          if (ws && ws.readyState === 1) {
-            ws.send(new TextEncoder().encode('\x1b[2K\r'));
+          if (sendStdin('\x1b[2K\r')) {
+            setHistoryIdx(-1);
           }
         } else {
-          setHistoryIdx(newIdx);
           const cmd = hist[newIdx];
-          if (cmd && ws && ws.readyState === 1) {
-            ws.send(new TextEncoder().encode('\x1b[2K\r' + cmd));
+          if (cmd && sendStdin('\x1b[2K\r' + cmd)) {
+            setHistoryIdx(newIdx);
           }
         }
+        e.preventDefault();
+        e.stopPropagation();
         return false;
       }
 
       if (e.ctrlKey && e.key === 'l') {
+        e.preventDefault();
+        e.stopPropagation();
         term.clear();
         return false;
       }
@@ -292,8 +303,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
     const startTimer = window.setTimeout(() => fit.fit(), 100);
 
     const onData = (data: string) => {
-      const ws = wsRef.current;
-      if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(data));
+      sendStdin(new TextEncoder().encode(data));
     };
     const onResize = () => {
       if (!host) return;
@@ -430,19 +440,16 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   }, [slug, currentMode, reconnectNonce, scheduleReconnect]);
 
   const sendCommand = useCallback((cmd: string) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === 1) {
-      ws.send(new TextEncoder().encode(cmd + '\r'));
-      const trimmed = cmd.trim();
-      if (trimmed) {
-        setHistory((prev) => {
-          if (trimmed === prev[prev.length - 1]) return prev;
-          const next = [...prev, trimmed];
-          saveHistory(slug, currentMode, next);
-          return next;
-        });
-        setHistoryIdx(-1);
-      }
+    if (!sendStdin(cmd + '\r')) return;
+    const trimmed = cmd.trim();
+    if (trimmed) {
+      setHistory((prev) => {
+        if (trimmed === prev[prev.length - 1]) return prev;
+        const next = [...prev, trimmed];
+        saveHistory(slug, currentMode, next);
+        return next;
+      });
+      setHistoryIdx(-1);
     }
   }, [slug, currentMode]);
 
