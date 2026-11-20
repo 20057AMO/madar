@@ -921,6 +921,8 @@ input.detail-title {
   .term-ctrl-btn,
   .term-quick-btn,
   .term-mode-btn { min-width: 44px; min-height: 44px; }
+  .git-select-all { min-height: 44px; padding-inline: 6px; }
+  .git-select-all input { width: 24px; height: 24px; }
 }
 
 /* Git */
@@ -1900,7 +1902,7 @@ textarea.agent-prompt-input {
 .git-count.ahead { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
 .git-count.behind { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 10%, transparent); }
 .git-status-note, .git-empty { color: var(--text-3); font-size: 0.7rem; line-height: 1.45; }
-.git-empty { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+.git-empty { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 2px 0; }
 .git-push-button { margin-inline-start: auto; }
 .git-push-button:disabled { opacity: 0.52; cursor: not-allowed; }
 .git-file-list {
@@ -1934,6 +1936,17 @@ textarea.agent-prompt-input {
 .git-commit-row textarea { flex: 1 1 220px; min-width: 0; resize: vertical; }
 .git-file-actions { justify-content: flex-end; }
 .git-file-actions .git-status-note { margin-inline-end: auto; }
+.git-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 0.68rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.git-select-all input { flex: 0 0 auto; margin: 0; accent-color: var(--blue); }
 .git-diff { border-top: 1px solid var(--border); padding-top: 10px; }
 .git-diff summary { color: var(--text-2); cursor: pointer; font-size: 0.7rem; }
 .git-diff pre {
@@ -1947,8 +1960,13 @@ textarea.agent-prompt-input {
   color: var(--text-2);
   font: 0.66rem/1.5 var(--mono);
   white-space: pre;
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
 }
 .git-message { color: var(--text-2); font-size: 0.72rem; overflow-wrap: anywhere; }
+.git-message.ok { color: var(--green); }
+.git-message.err { color: var(--red); }
 .git-message:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .git-clone {
   display: flex;

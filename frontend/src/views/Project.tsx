@@ -872,6 +872,11 @@ function OverviewPanel({
   const [gitWorking, setGitWorking] = useState(false);
   const [gitOperation, setGitOperation] = useState<'stage' | 'unstage' | 'commit' | 'pull' | 'branch-create' | 'branch-switch' | null>(null);
   const [gitMsg, setGitMsg] = useState<string | null>(null);
+  const [gitMsgTone, setGitMsgTone] = useState<'ok' | 'err' | null>(null);
+  const setGitMessage = (text: string | null, tone: 'ok' | 'err' | null = null) => {
+    setGitMsg(text);
+    setGitMsgTone(tone);
+  };
   const [confirmGitPush, setConfirmGitPush] = useState(false);
   const [confirmGitPull, setConfirmGitPull] = useState(false);
   const [selectedGitFiles, setSelectedGitFiles] = useState<string[]>([]);
@@ -880,6 +885,8 @@ function OverviewPanel({
   const [gitEmail, setGitEmail] = useState(gitAuthorEmail);
   const [gitNewBranch, setGitNewBranch] = useState('');
   const gitRequestRef = useRef(0);
+  const cloneUrlRef = useRef<HTMLInputElement | null>(null);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
 
   const [envText, setEnvText] = useState('');
   // Project payloads no longer carry env (secrets). Editors fetch the real
@@ -943,11 +950,32 @@ function OverviewPanel({
       ? `${originalPath} → ${change.path}`
       : change.path;
   };
+  const gitAllPaths = selectedGitRepo?.changes.map((change) => change.path) ?? [];
+  const gitPushBlockReason = selectedGitRepo
+    ? !selectedGitRepo.upstream
+      ? t('project.gitNoUpstream')
+      : selectedGitRepo.behind > 0
+        ? t('project.gitPullBeforePush')
+        : selectedGitRepo.changes.length > 0
+          ? t('project.gitCommitFirst')
+          : selectedGitRepo.ahead === 0
+            ? t('project.gitNothingToPush')
+            : null
+    : null;
+  useEffect(() => {
+    const gitSelN = selectedGitFiles.filter((p) => gitAllPaths.includes(p)).length;
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = gitSelN > 0 && gitSelN < gitAllPaths.length;
+    }
+  }, [selectedGitFiles, gitAllPaths]);
+  const gitMessageNode = (
+    <div class={`git-message${gitMsgTone ? ' ' + gitMsgTone : ''}`} role="status" aria-live="polite">{gitMsg}</div>
+  );
 
   const refreshGitStatus = async (quiet = false): Promise<boolean> => {
     const requestId = ++gitRequestRef.current;
     setGitLoading(true);
-    if (!quiet) setGitMsg(null);
+    if (!quiet) setGitMessage(null);
     try {
       const { repositories } = await getProjectGit(slug);
       if (requestId !== gitRequestRef.current) return false;
@@ -959,7 +987,7 @@ function OverviewPanel({
       return true;
     } catch {
       if (requestId === gitRequestRef.current && !quiet) {
-        setGitMsg(t('project.gitLoadFailed'));
+        setGitMessage(t('project.gitLoadFailed'), 'err');
       }
       return false;
     } finally {
@@ -971,13 +999,13 @@ function OverviewPanel({
     if (!selectedGitRepo) return;
     setConfirmGitPush(false);
     setGitPushing(true);
-    setGitMsg(null);
+    setGitMessage(null);
     try {
       await pushProjectGit(slug, selectedGitRepo.path);
-      setGitMsg(t('project.gitPushSuccess', { branch: selectedGitRepo.branch || '' }));
+      setGitMessage(t('project.gitPushSuccess', { branch: selectedGitRepo.branch || '' }), 'ok');
       void refreshGitStatus(true);
     } catch {
-      setGitMsg(t('project.gitPushFailed'));
+      setGitMessage(t('project.gitPushFailed'), 'err');
     } finally {
       setGitPushing(false);
     }
@@ -991,13 +1019,13 @@ function OverviewPanel({
   ) => {
     setGitWorking(true);
     setGitOperation(kind);
-    setGitMsg(null);
+    setGitMessage(null);
     try {
       const result = await operation();
-      setGitMsg(successMessage(result));
+      setGitMessage(successMessage(result), 'ok');
       void refreshGitStatus(true);
     } catch {
-      setGitMsg(failureLabel);
+      setGitMessage(failureLabel, 'err');
     } finally {
       setGitWorking(false);
       setGitOperation(null);
@@ -1790,9 +1818,29 @@ function OverviewPanel({
           </div>
 
           {gitLoading && gitRepositories.length === 0 ? (
-            <div class="git-empty"><Loader2 width={14} height={14} class="icon spin" /> {t('project.gitLoading')}</div>
+            <>
+              <div class="git-empty"><Loader2 width={14} height={14} class="icon spin" /> {t('project.gitLoading')}</div>
+              {gitMessageNode}
+            </>
           ) : gitRepositories.length === 0 ? (
-            <div class="git-empty">{t('project.gitNoRepository')}</div>
+            <>
+              <div class="git-empty">
+                {t('project.gitNoRepository')}
+                {!readOnly && (
+                  <button
+                    type="button"
+                    class="btn-ghost sm"
+                    onClick={() => {
+                      cloneUrlRef.current?.focus();
+                      cloneUrlRef.current?.scrollIntoView({ block: 'nearest' });
+                    }}
+                  >
+                    {t('project.gitCloneHere')}
+                  </button>
+                )}
+              </div>
+              {gitMessageNode}
+            </>
           ) : (
             <>
               {gitRepositories.length > 1 && (
@@ -1869,8 +1917,7 @@ function OverviewPanel({
                   <div class="git-status-row">
                     {selectedGitRepo.ahead > 0 && <span class="git-count ahead">{t('project.gitAhead', { count: selectedGitRepo.ahead })}</span>}
                     {selectedGitRepo.behind > 0 && <span class="git-count behind">{t('project.gitBehind', { count: selectedGitRepo.behind })}</span>}
-                    {!selectedGitRepo.upstream && <span class="git-status-note">{t('project.gitNoUpstream')}</span>}
-                    {selectedGitRepo.changes.length > 0 && <span class="git-status-note">{t('project.gitCommitFirst')}</span>}
+                    {gitPushBlockReason && <span id="git-push-block-reason" class="git-status-note" title={gitPushBlockReason}>{gitPushBlockReason}</span>}
                     {gitOperation === 'branch-switch' && <span class="git-status-note">{t('project.gitSwitchingBranch')}</span>}
                     {!readOnly && (
                       <>
@@ -1879,6 +1926,7 @@ function OverviewPanel({
                           class="btn-ghost sm"
                           onClick={() => setConfirmGitPull(true)}
                           disabled={gitWorking || gitPushing || !selectedGitRepo.upstream || selectedGitRepo.changes.length > 0}
+                          aria-describedby={selectedGitRepo.behind > 0 ? 'git-push-block-reason' : undefined}
                         >
                           {gitOperation === 'pull'
                             ? <Loader2 width={13} height={13} class="icon spin" />
@@ -1890,6 +1938,7 @@ function OverviewPanel({
                           class="btn-primary sm git-push-button"
                           onClick={() => setConfirmGitPush(true)}
                           disabled={gitWorking || gitPushing || !selectedGitRepo.upstream || selectedGitRepo.ahead === 0 || selectedGitRepo.behind > 0}
+                          aria-describedby={gitPushBlockReason ? 'git-push-block-reason' : undefined}
                         >
                           {gitPushing
                             ? <Loader2 width={13} height={13} class="icon spin" />
@@ -1899,12 +1948,33 @@ function OverviewPanel({
                       </>
                     )}
                   </div>
-
+                </>
+              )}
+              {gitMessageNode}
+              {selectedGitRepo && (
+                <>
                   {selectedGitRepo.changes.length > 0 && (
                     <>
                       {!readOnly && (
                         <div class="git-file-actions">
-                          <span class="git-status-note">
+                          <label class="git-select-all">
+                            <input
+                              ref={selectAllRef}
+                              type="checkbox"
+                              aria-label={t('project.gitSelectAll')}
+                              aria-describedby="git-selected-count"
+                              checked={gitAllPaths.length > 0 && gitAllPaths.every((path) => selectedGitFiles.includes(path))}
+                              disabled={gitWorking || gitPushing}
+                              onChange={(e: any) => {
+                                const checked = e.currentTarget.checked;
+                                setSelectedGitFiles((current) => checked
+                                  ? [...new Set([...current, ...gitAllPaths])]
+                                  : current.filter((value) => !gitAllPaths.includes(value)));
+                              }}
+                            />
+                            <span>{t('project.gitSelectAll')}</span>
+                          </label>
+                          <span id="git-selected-count" class="git-status-note">
                             {t('project.gitSelectedCount', { count: selectedGitFiles.length })}
                           </span>
                           <button
@@ -2041,7 +2111,6 @@ function OverviewPanel({
               )}
             </>
           )}
-          <div class="git-message" role="status" aria-live="polite">{gitMsg}</div>
 
           <div class="git-clone">
             <div>
@@ -2053,6 +2122,7 @@ function OverviewPanel({
             ) : (
               <div class="ov-field git-clone-row">
                 <input
+                  ref={cloneUrlRef}
                   class="modern-input"
                   aria-label={t('project.cloneFromGit')}
                   placeholder={t('project.gitCloneUrlPlaceholder')}
