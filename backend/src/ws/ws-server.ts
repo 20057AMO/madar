@@ -137,7 +137,7 @@ export function attachWebSockets(server: http.Server): void {
         ws.close(1013, 'too many connections for terminal');
         return;
       }
-      handleTerminalSocket(ws, slug, mode, releaseRoom(room));
+      handleTerminalSocket(ws, slug, mode, authUser?.id ?? '', releaseRoom(room));
       return;
     }
 

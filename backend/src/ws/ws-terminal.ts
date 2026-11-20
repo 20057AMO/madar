@@ -13,9 +13,18 @@
  *   4000 session-ended     — the shell/pty/exec stream ended
  *   4404 container-missing — Docker answered 404 (no such container)
  *   4409 container-stopped — Docker answered 409 (container exists, not running)
- *   4503 capacity          — this slug:mode terminal is already open / global cap
+ *   4503 capacity          — this slug:mode terminal is already open (held by
+ *                            another session, possibly another user) or the
+ *                            global session cap is reached
  *   4500 internal          — anything else that failed to start (retryable)
  * 1008 (project access denied) is produced by ws-server.ts, not here.
+ *
+ * Session slots (services/terminal-lock-core.ts): the `slug:mode` slot is
+ * reserved SYNCHRONOUSLY as the first statement of handleTerminalSocket, before
+ * the project subdir is resolved and before any socket handler or shell spawn —
+ * so two concurrent connections can never both pass the check. The reservation
+ * carries an ownership token, and this socket frees only its own slot; a second
+ * session is refused as `busy` WITHOUT naming whoever holds it.
  */
 import { WebSocket } from 'ws';
 import Docker from 'dockerode';
@@ -24,11 +33,11 @@ import * as pty from 'node-pty';
 import { WORKSPACES_ROOT } from '../services/docker-manager';
 import { resolveProjectSubdir } from '../services/workspace-files';
 import { TERMINAL_CLOSE, mapTerminalStartError } from '../services/terminal-close';
+import { createTerminalSlots, TERMINAL_MAX_SESSIONS } from '../services/terminal-lock-core';
 
 const docker = new Docker();
 
-const active = new Set<string>();
-const MAX_SESSIONS = 16;
+const slots = createTerminalSlots({ max: TERMINAL_MAX_SESSIONS });
 
 interface ShellHandle {
   write: (data: Buffer) => void;
@@ -40,26 +49,33 @@ export function handleTerminalSocket(
   ws: WebSocket,
   slug: string,
   mode: 'project' | 'control',
+  userId: string,
   onRelease: () => void
 ): void {
-  const key = `${slug}:${mode}`;
+  // Reserve the slug:mode slot SYNCHRONOUSLY, before anything async. This is the
+  // whole lock: a check-then-set across an await let two sockets spawn two
+  // shells for one project. `busy` here means another session (this user's or
+  // another's) already holds it; the message never names the holder.
+  const reservation = slots.reserve({ slug, mode, userId });
+  const myToken = reservation.ok ? reservation.reservation.token : '';
+
   // Idempotent: the `start` promise and the socket's `close` event can both finish.
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
+    slots.release(myToken);
     onRelease();
   };
 
-  if (active.has(key)) {
-    sendJson(ws, { type: 'error', message: `A ${mode} terminal for '${slug}' is already open. Close it first.` });
-    ws.close(TERMINAL_CLOSE.capacity, 'session busy');
-    release();
-    return;
-  }
-  if (active.size >= MAX_SESSIONS) {
-    sendJson(ws, { type: 'error', message: 'Too many open terminals. Close another one first.' });
-    ws.close(TERMINAL_CLOSE.capacity, 'too many sessions');
+  if (!reservation.ok) {
+    if (reservation.reason === 'busy') {
+      sendJson(ws, { type: 'error', message: `A ${mode} terminal for '${slug}' is already open. Close it first.` });
+      ws.close(TERMINAL_CLOSE.capacity, 'session busy');
+    } else {
+      sendJson(ws, { type: 'error', message: 'Too many open terminals. Close another one first.' });
+      ws.close(TERMINAL_CLOSE.capacity, 'too many sessions');
+    }
     release();
     return;
   }
@@ -77,15 +93,10 @@ export function handleTerminalSocket(
   let shell: ShellHandle | null = null;
   let ready = false;
   let closed = false;
-  let registered = false;
 
   const finish = (code: number = TERMINAL_CLOSE.sessionEnded, reason: string = 'session ended') => {
     if (closed) return;
     closed = true;
-    if (registered) {
-      active.delete(key);
-      registered = false;
-    }
     if (shell) {
       try {
         shell.close();
@@ -138,8 +149,6 @@ export function handleTerminalSocket(
         return;
       }
       shell = sh;
-      active.add(key);
-      registered = true;
       ready = true;
       while (queue.length > 0) {
         sh.write(queue.shift()!);

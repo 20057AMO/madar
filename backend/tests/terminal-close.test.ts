@@ -322,3 +322,98 @@ describe('ws-terminal.ts — structural guards', () => {
     assert.match(src, /mapTerminalStartError\(err, slug, mode\)/);
   });
 });
+
+describe('ws-terminal.ts — session-slot structural guards (the spawn race)', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../src/ws/ws-terminal.ts', import.meta.url)), 'utf8');
+  const serverSrc = fs.readFileSync(fileURLToPath(new URL('../src/ws/ws-server.ts', import.meta.url)), 'utf8');
+  /** Whitespace-insensitive view, so reformatting cannot make a guard vacuous. */
+  const flat = src.replace(/\s+/g, ' ');
+  const serverFlat = serverSrc.replace(/\s+/g, ' ');
+
+  test('the reservation registry is imported and used, and the advisory Set is gone', () => {
+    assert.match(
+      src,
+      /from '\.\.\/services\/terminal-lock-core'/,
+      'ws-terminal.ts must take its session lock from services/terminal-lock-core.ts'
+    );
+    assert.match(flat, /createTerminalSlots\(/, 'the registry must actually be constructed');
+    assert.match(flat, /slots\.reserve\(/, 'the socket must reserve through the registry');
+    assert.doesNotMatch(
+      flat,
+      /const active = new Set/,
+      'the old advisory `active` Set is the defect (check before the spawn, write after it) — it must not come back'
+    );
+  });
+
+  test('there is no `active` set left to mutate — no add/delete/has anywhere', () => {
+    for (const call of ['active.add(', 'active.delete(', 'active.has(']) {
+      assert.ok(
+        !flat.includes(call),
+        `${call} is the unchecked, ownership-blind path this stage removed; a slot may only be reserved and released through the registry`
+      );
+    }
+  });
+
+  test('the reservation is taken BEFORE anything async — subdir resolution, handlers, and the spawn', () => {
+    const reserveAt = src.indexOf('slots.reserve(');
+    assert.ok(reserveAt >= 0, 'slots.reserve( must appear in ws-terminal.ts');
+
+    const anchors: Array<[string, RegExp]> = [
+      ['resolveProjectSubdir(', /resolveProjectSubdir\(/],
+      ["ws.on('message'", /ws\.on\(\s*'message'/],
+      ['the start IIFE', /const start = \(async/],
+      ['startProjectExec(', /startProjectExec\(/],
+      ['startControlShell(', /startControlShell\(/],
+    ];
+    for (const [label, re] of anchors) {
+      const at = src.search(re);
+      assert.ok(at >= 0, `${label} not found — the guard would be vacuous`);
+      assert.ok(
+        reserveAt < at,
+        `the slug:mode slot must be reserved before ${label}; reserving later reopens the window where two sockets both spawn a shell`
+      );
+    }
+  });
+
+  test('release is the owner-only path and carries the reservation token', () => {
+    assert.match(flat, /const myToken\b/, 'the socket must hold its own ownership token');
+    assert.match(
+      flat,
+      /slots\.release\(\s*myToken\s*\)/,
+      'release() must free the slot through the token it reserved, never by slug:mode'
+    );
+  });
+
+  test('handleTerminalSocket takes a userId, and ws-server passes the authenticated id', () => {
+    assert.match(
+      flat,
+      /export function handleTerminalSocket\(\s*ws: WebSocket, slug: string, mode: 'project' \| 'control', userId: string,/,
+      'the handler must receive the identity that holds the slot (honest messaging + a per-user policy seam)'
+    );
+    assert.match(
+      serverFlat,
+      /handleTerminalSocket\(\s*ws, slug, mode, authUser\?\.id \?\? '', releaseRoom\(room\)\s*\)/,
+      "ws-server.ts must forward the already-verified authUser id into handleTerminalSocket"
+    );
+  });
+
+  test('busy and capacity both close through TERMINAL_CLOSE.capacity, and the refusal names no user', () => {
+    assert.match(flat, /ws\.close\(\s*TERMINAL_CLOSE\.capacity, 'session busy'\s*\)/);
+    assert.match(flat, /ws\.close\(\s*TERMINAL_CLOSE\.capacity, 'too many sessions'\s*\)/);
+    assert.doesNotMatch(
+      flat,
+      /ws\.close\(\s*1008/,
+      '1008 is ws-server.ts project-access denial — the terminal handler must never emit it'
+    );
+    assert.doesNotMatch(
+      flat,
+      /is already open[^'`]*\$\{userId\}/,
+      'the busy refusal must not name the holder (anti-oracle: same message whoever holds the slot)'
+    );
+    assert.match(
+      flat,
+      /A \$\{mode\} terminal for '\$\{slug\}' is already open\. Close it first\./,
+      'the busy message shape is part of the contract the client shows'
+    );
+  });
+});
