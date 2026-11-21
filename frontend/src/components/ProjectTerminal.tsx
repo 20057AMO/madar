@@ -140,6 +140,8 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
   const statusRef = useRef(status);
   const a11yKeysRef = useRef(a11yKeys);
   const a11yToggleRef = useRef<HTMLButtonElement | null>(null);
+  const tabsBarRef = useRef<HTMLDivElement | null>(null);
+  const pendingFocusRef = useRef<string | null>(null);
   const panelId = useId();
 
   useEffect(() => { historyRef.current = history; }, [history]);
@@ -147,6 +149,15 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
   useEffect(() => { fontSizeRef.current = fontSize; }, [fontSize]);
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { a11yKeysRef.current = a11yKeys; }, [a11yKeys]);
+  useEffect(() => {
+    const id = pendingFocusRef.current;
+    if (!id) return;
+    const bar = tabsBarRef.current;
+    const target = bar?.querySelector<HTMLElement>(`[data-term-tab-close="${id}"]`)
+      || bar?.querySelector<HTMLElement>(`[data-term-tab="${id}"]`);
+    target?.focus();
+    pendingFocusRef.current = null;
+  }, [tabs, activeTabId]);
 
   const toggleA11yKeys = () => {
     const next = !a11yKeysRef.current;
@@ -210,18 +221,18 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
   }, [allowedModes, tabs, t]);
 
   const closeTab = useCallback((id: string) => {
-    setTabs((prev) => {
-      const next = prev.filter((t) => t.id !== id);
-      if (next.length === 0) {
-        const newId = `t-${Date.now()}-${++tabSeq}`;
-        next.push({ id: newId, label: t('terminal.tabs.first'), mode: 'project' });
-        setActiveTabId(newId);
-      } else if (id === activeTabId) {
-        setActiveTabId(next[next.length - 1].id);
-      }
-      return next;
-    });
-  }, [activeTabId, t]);
+    const remaining = tabs.filter((tab) => tab.id !== id);
+    let nextActiveId = activeTabId;
+    if (remaining.length === 0) {
+      nextActiveId = `t-${Date.now()}-${++tabSeq}`;
+      remaining.push({ id: nextActiveId, label: t('terminal.tabs.first'), mode: 'project' });
+    } else if (id === activeTabId) {
+      nextActiveId = remaining[remaining.length - 1].id;
+    }
+    pendingFocusRef.current = nextActiveId;
+    setTabs(remaining);
+    setActiveTabId(nextActiveId);
+  }, [activeTabId, tabs, t]);
 
   const switchTabMode = useCallback((id: string, newMode: TermMode) => {
     setTabs((prev) => {
@@ -608,7 +619,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     <div class="term-wrap">
       {/* ── Tabs Bar ── */}
       <div class="term-tabs-bar">
-        <div class="term-tabs-list" role="tablist" aria-label={t('terminal.tabs.aria')} onKeyDown={onTabListKeyDown}>
+        <div ref={tabsBarRef} class="term-tabs-list" role="tablist" aria-label={t('terminal.tabs.aria')} onKeyDown={onTabListKeyDown}>
           {tabs.map((tab) => (
             <div
               key={tab.id}
@@ -630,7 +641,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
               <span class="term-tab-mode-dot" title={tab.mode === 'project' ? t('terminal.tabs.projectShell') : t('terminal.tabs.controlShell')} />
               <span class="term-tab-label">{tab.label}</span>
               {tabs.length > 1 && (
-                <button class="term-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} title={t('terminal.tabs.close')} aria-label={t('terminal.tabs.closeAria', { label: tab.label })}>×</button>
+                <button class="term-tab-close" data-term-tab-close={tab.id} tabIndex={0} onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} title={t('terminal.tabs.close')} aria-label={t('terminal.tabs.closeAria', { label: tab.label })}>×</button>
               )}
             </div>
           ))}

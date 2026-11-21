@@ -4,6 +4,8 @@
  */
 import type { Dict } from './en';
 
+const iso = (s: string) => '\u2066' + s + '\u2069';
+
 export const ar: Dict = {
   status: {
     running: 'يعمل',
@@ -853,7 +855,7 @@ export const ar: Dict = {
   terminal: {
     tabs: {
       aria: 'تبويبات الطرفية',
-      first: 'الطرفية 1',
+      first: 'الطرفية ' + iso('1'),
       project: 'المشروع',
       control: 'التحكم',
       projectShell: 'طرفية المشروع',
@@ -872,22 +874,22 @@ export const ar: Dict = {
     },
     access: {
       aria: 'الوصول إلى الطرفية مقيد',
-      projectTitle: 'صلاحية editor مطلوبة',
-      projectBody: 'تحتاج إلى صلاحية editor لهذا المشروع لفتح طرفيته. اطلب الوصول من مسؤول المشروع.',
-      controlTitle: 'صلاحية admin مطلوبة',
-      controlBody: 'يتطلب فتح طرفية التحكم صلاحية admin لهذا المشروع. أداة docker CLI غير متاحة للمشاهدين أو المحررين.',
+      projectTitle: 'صلاحية ' + iso('editor') + ' مطلوبة',
+      projectBody: 'تحتاج إلى صلاحية ' + iso('editor') + ' لهذا المشروع لفتح طرفيته. اطلب الوصول من مسؤول المشروع.',
+      controlTitle: 'صلاحية ' + iso('admin') + ' مطلوبة',
+      controlBody: 'يتطلب فتح طرفية التحكم صلاحية ' + iso('admin') + ' لهذا المشروع. أداة ' + iso('docker CLI') + ' غير متاحة للمشاهدين أو المحررين.',
     },
     action: {
       startShell: 'بدء جلسة جديدة',
       reconnect: 'إعادة الاتصال',
-      zoomOut: 'تصغير الخط (Ctrl+Scroll)',
+      zoomOut: 'تصغير الخط ' + iso('(Ctrl+Scroll)'),
       zoomOutAria: 'تقليل حجم خط الطرفية',
-      zoomIn: 'تكبير الخط (Ctrl+Scroll)',
+      zoomIn: 'تكبير الخط ' + iso('(Ctrl+Scroll)'),
       zoomInAria: 'زيادة حجم خط الطرفية',
       resetFont: 'إعادة ضبط حجم الخط',
-      a11yKeys: 'تحرير Tab و Escape للمتصفح',
+      a11yKeys: 'تحرير ' + iso('Tab') + ' و ' + iso('Escape') + ' للمتصفح',
       modeProject: 'طرفية داخل حاوية المشروع (أدوات التطوير)',
-      modeControl: 'طرفية في حاوية التطبيق (git + docker CLI)',
+      modeControl: 'طرفية في حاوية التطبيق ' + iso('(git + docker CLI)'),
     },
     notice: {
       accessDenied: 'تم رفض الوصول إلى هذا المشروع.',
@@ -895,7 +897,7 @@ export const ar: Dict = {
       containerMissing: 'لم يتم العثور على حاوية المشروع — شغّل المشروع ثم أعد الاتصال.',
       containerStopped: 'حاوية المشروع غير قيد التشغيل — شغّل المشروع ثم أعد الاتصال.',
       capacity: 'هذه الطرفية مفتوحة في مكان آخر، أو أن الخادم عند سعته القصوى.',
-      connectionLost: 'انقطع الاتصال ({code}). أعد الاتصال للمتابعة.',
+      connectionLost: 'انقطع الاتصال ' + iso('({code})') + '. أعد الاتصال للمتابعة.',
       roomLimit: 'عدد كبير جداً من اتصالات الطرفية. أغلق تبويب طرفية آخر، ثم أعد الاتصال.',
       socketError: 'خطأ في اتصال الطرفية.',
       terminalError: 'خطأ في الطرفية',
