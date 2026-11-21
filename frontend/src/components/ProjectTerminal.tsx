@@ -37,10 +37,20 @@ const MIN_FONT_SIZE = 9;
 const MAX_FONT_SIZE = 24;
 const DEFAULT_FONT_SIZE = 13;
 const MAX_HISTORY = 100;
+const MAX_HISTORY_ITEM_LENGTH = 2000;
 const TERMINAL_SCROLLBACK = 2000;
 const RECONNECT_BASE_MS = 3000;
 const RECONNECT_MAX_MS = 30000;
 const RECONNECT_MAX_ATTEMPTS = 5;
+
+function clampFontSize(value: unknown): number {
+  if (value === null || value === undefined) return DEFAULT_FONT_SIZE;
+  const raw = typeof value === 'string' ? value.trim() : String(value);
+  if (raw === '') return DEFAULT_FONT_SIZE;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_FONT_SIZE;
+  return Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Math.round(parsed)));
+}
 
 // Mirrors the close-code contract in backend/src/services/terminal-close.ts — keep both in sync.
 const TERMINAL_CLOSE = {
@@ -63,9 +73,18 @@ function getHistoryKey(slug: string, mode: TermMode): string {
   return `wsd.term.history.${slug}.${mode}`;
 }
 
+function sanitizeHistory(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const HISTORY_CONTROL = /[\u0000-\u001F\u007F\u2028\u2029]/;
+  return raw
+    .filter((item): item is string => typeof item === 'string' && !HISTORY_CONTROL.test(item))
+    .map((item) => item.slice(0, MAX_HISTORY_ITEM_LENGTH))
+    .slice(-MAX_HISTORY);
+}
+
 function loadHistory(slug: string, mode: TermMode): string[] {
   try {
-    return JSON.parse(localStorage.getItem(getHistoryKey(slug, mode)) || '[]');
+    return sanitizeHistory(JSON.parse(localStorage.getItem(getHistoryKey(slug, mode)) || '[]'));
   } catch {
     return [];
   }
@@ -73,7 +92,7 @@ function loadHistory(slug: string, mode: TermMode): string[] {
 
 function saveHistory(slug: string, mode: TermMode, hist: string[]): void {
   try {
-    localStorage.setItem(getHistoryKey(slug, mode), JSON.stringify(hist.slice(-MAX_HISTORY)));
+    localStorage.setItem(getHistoryKey(slug, mode), JSON.stringify(sanitizeHistory(hist.slice(-MAX_HISTORY))));
   } catch { /* ignore */ }
 }
 
@@ -106,7 +125,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     catch { return false; }
   });
   const [fontSize, setFontSize] = useState(() => {
-    try { return parseInt(localStorage.getItem('wsd.term.fontSize') || String(DEFAULT_FONT_SIZE), 10); }
+    try { return clampFontSize(localStorage.getItem('wsd.term.fontSize')); }
     catch { return DEFAULT_FONT_SIZE; }
   });
   const [tabs, setTabs] = useState<Tab[]>(() => [
@@ -163,7 +182,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
 
   const changeFontSize = useCallback((delta: number) => {
     setFontSize((prev) => {
-      const next = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, prev + delta));
+      const next = clampFontSize(prev + delta);
       try { localStorage.setItem('wsd.term.fontSize', String(next)); } catch { /* blocked */ }
       requestAnimationFrame(() => {
         const term = termRef.current;
@@ -296,7 +315,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
 
     const term = new XTerm({
       cursorBlink: true,
-      fontSize: fontSizeRef.current,
+      fontSize: clampFontSize(fontSizeRef.current),
       lineHeight: 1.4,
       convertEol: true,
       fontFamily: '"JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace',
@@ -541,7 +560,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     if (trimmed) {
       setHistory((prev) => {
         if (trimmed === prev[prev.length - 1]) return prev;
-        const next = [...prev, trimmed];
+        const next = sanitizeHistory([...sanitizeHistory(prev), trimmed].slice(-MAX_HISTORY));
         saveHistory(slug, currentMode, next);
         return next;
       });
@@ -659,7 +678,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
         <div class="term-controls">
           <div class="term-font-controls">
             <button class="term-ctrl-btn" onClick={() => changeFontSize(-1)} title={t('terminal.action.zoomOut')} aria-label={t('terminal.action.zoomOutAria')}>A-</button>
-            <span class="term-font-label">{fontSize}px</span>
+            <span class="term-font-label" aria-live="polite" aria-atomic="true">{fontSize}px</span>
             <button class="term-ctrl-btn" onClick={() => changeFontSize(1)} title={t('terminal.action.zoomIn')} aria-label={t('terminal.action.zoomInAria')}>A+</button>
             <button class="term-ctrl-btn" onClick={() => changeFontSize(DEFAULT_FONT_SIZE - fontSize)} title={t('terminal.action.resetFont')} aria-label={t('terminal.action.resetFont')}>↺</button>
           </div>
