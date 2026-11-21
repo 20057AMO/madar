@@ -14,6 +14,72 @@ export interface ServeState {
   error?: string | null;
 }
 
+export type WorkspaceNodeChannel = 'lts' | 'current';
+
+export interface WorkspaceToolchainDeclared {
+  ubuntuVersionId: string;
+  nodeMajor: number;
+  nodeChannel: WorkspaceNodeChannel;
+}
+
+export interface WorkspaceToolchainActual extends WorkspaceToolchainDeclared {
+  ubuntuPrettyName: string;
+  node: string;
+  npm: string;
+  dockerCli: boolean;
+}
+
+export type WorkspaceImageSource = 'container-marker' | 'image-label' | 'unavailable';
+export type WorkspaceImageDrift = 'ok' | 'declared_actual_mismatch' | 'target_mismatch' | 'unknown';
+
+export interface WorkspaceDaemonVersion {
+  version: string;
+  apiVersion: string;
+}
+
+export interface WorkspaceImageProjectState {
+  slug: string;
+  containerId: string | null;
+  imageId: string | null;
+  imageCurrent: boolean;
+  running: boolean;
+}
+
+export interface LastWorkspaceRefresh {
+  at: string;
+  ok: boolean;
+  durationMs: number;
+  buildId: string | null;
+  errorCode: string | null;
+}
+
+export interface WorkspaceImageDetails {
+  name: string;
+  installed: boolean;
+  imageId: string | null;
+  buildId: string | null;
+  builtAt: string | null;
+  stale: boolean;
+  declared: WorkspaceToolchainDeclared | null;
+  actual: WorkspaceToolchainActual | null;
+  source: WorkspaceImageSource;
+  drift: WorkspaceImageDrift;
+  reasons: string[];
+}
+
+export interface WorkspaceImageStatus {
+  workspaceImage: WorkspaceImageDetails;
+  daemon: WorkspaceDaemonVersion | null;
+  projects: WorkspaceImageProjectState[];
+  lastRefresh: LastWorkspaceRefresh | null;
+  checkedAt: string;
+}
+
+export interface WorkspaceImageRefreshResult {
+  status: 'ok';
+  lastRefresh: LastWorkspaceRefresh;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -39,6 +105,7 @@ export interface Project {
   crash?: CrashInfo;
   /** Static-site serve config; config-only on lists (active:false), live probe on detail. */
   serve?: ServeState;
+  imageCurrent?: boolean;
 }
 
 /**
@@ -382,7 +449,7 @@ export const apiLogoutAll = (accountPassword: string) =>
     skipAuthRedirect: true,
   });
 
-export type ApiError = Error & { status?: number; code?: string };
+export type ApiError = Error & { status?: number; code?: string; retryAfter?: number };
 
 type ApiInit = RequestInit & { skipAuthRedirect?: boolean };
 
@@ -440,6 +507,16 @@ async function api<T>(path: string, init?: ApiInit): Promise<T> {
     err.code = data?.error;
     if (data?.message && data?.error) err.message = `${data.error}: ${data.message}`;
     err.status = res.status;
+    const retryAfter = res.headers.get('Retry-After');
+    if (retryAfter !== null) {
+      const seconds = Number(retryAfter.trim());
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        err.retryAfter = seconds;
+      } else {
+        const at = Date.parse(retryAfter);
+        if (Number.isFinite(at)) err.retryAfter = Math.max(0, Math.ceil((at - Date.now()) / 1000));
+      }
+    }
     throw err;
   }
   return data as T;
@@ -449,6 +526,15 @@ export const listProjects = () => api<{ projects: Project[] }>('/api/projects');
 /** Disk-usage metrics (server-side TTL cache; `fresh` forces a rescan). */
 export const getStorageMetrics = (fresh = false) =>
   api<StorageMetrics>(`/api/storage${fresh ? '?fresh=1' : ''}`);
+
+export const getWorkspaceImageStatus = (fresh = false) =>
+  api<WorkspaceImageStatus>(`/api/workspace-image/status${fresh ? '?fresh=1' : ''}`);
+
+export const refreshWorkspaceImage = () =>
+  api<WorkspaceImageRefreshResult>('/api/workspace-image/refresh', {
+    method: 'POST',
+  });
+
 export const getProject = (slug: string) => api<{ project: Project }>(`/api/projects/${slug}`);
 export const createProject = (body: { name: string; description?: string; ports?: number[]; env?: Record<string, string>; limits?: ProjectLimits }) =>
   api<{ project: Project }>('/api/projects', {

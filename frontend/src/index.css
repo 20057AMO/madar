@@ -157,6 +157,12 @@ select.modern-input { appearance: none; cursor: pointer; }
   cursor: default;
   pointer-events: none;
 }
+.btn-primary[aria-disabled='true'],
+.btn-ghost[aria-disabled='true'],
+.btn-danger[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
 
 /* The keyboard focus ring for every control lives further down with the rest
    of the effects layer (`:focus-visible` → --focus-ring). */
@@ -564,6 +570,13 @@ select.modern-input { appearance: none; cursor: pointer; }
 .meta-chip.people .people-extra { opacity: 0.75; margin-left: 3px; }
 .meta-chip.storage { color: #7dd3fc; border-color: rgba(125,211,252,0.25); white-space: nowrap; }
 .meta-chip.storage .icon { vertical-align: -2px; margin-right: 2px; }
+.meta-chip.recreate {
+  color: var(--yellow);
+  border-color: color-mix(in srgb, var(--yellow) 35%, transparent);
+  background: color-mix(in srgb, var(--yellow) 8%, var(--bg-2));
+  white-space: nowrap;
+}
+.meta-chip.recreate .icon { vertical-align: -2px; margin-inline-end: 2px; }
 .card-footer { display: flex; gap: 8px; }
 .card-footer .btn-ghost { flex: 1; justify-content: center; }
 
@@ -2775,6 +2788,45 @@ button.tag-chip.active {
 .upd-msg-ok { color: var(--green, #3fb950); font-size: 0.72rem; display: inline-flex; align-items: center; gap: 5px; }
 .upd-msg-err { color: var(--red, #f85149); font-size: 0.72rem; }
 .upd-msg-warn { color: var(--yellow, #d29922); font-size: 0.72rem; }
+
+.wim-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wim-live { min-height: 1em; margin-top: 8px; font-size: 0.72rem; color: var(--text-2); }
+.wim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.wim-card { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
+.wim-card h3 { margin: 0 0 8px; font-size: 0.78rem; color: var(--text); }
+.wim-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  min-width: 0; padding: 4px 0; border-top: 1px solid var(--border); font-size: 0.72rem;
+}
+.wim-row:first-of-type { border-top: 0; }
+.wim-key { color: var(--text-3); flex-shrink: 0; }
+.wim-val { min-width: 0; color: var(--text-2); text-align: end; overflow-wrap: anywhere; }
+.wim-val.mono { font-family: var(--mono); }
+.wim-iso { direction: ltr; unicode-bidi: isolate; }
+.wim-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.wim-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.68rem; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-2); white-space: nowrap;
+}
+.wim-badge.good { color: var(--green); border-color: color-mix(in srgb, var(--green) 35%, transparent); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.wim-badge.warn { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 35%, transparent); background: color-mix(in srgb, var(--yellow) 10%, transparent); }
+.wim-badge.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.wim-notes { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.wim-note {
+  font-size: 0.72rem; line-height: 1.55; color: var(--text-2);
+  padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-2) 70%, transparent);
+}
+.wim-note.warn { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 30%, transparent); }
+.wim-reasons { margin: 6px 0 0; padding-inline-start: 18px; color: var(--text-2); font-size: 0.72rem; line-height: 1.6; }
+.wim-slugs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.wim-last { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.72rem; color: var(--text-2); }
+@media (max-width: 700px) {
+  .wim-grid { grid-template-columns: 1fr; }
+  .wim-row { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .wim-val { text-align: start; }
+}
 
 .nav-btn-wrap { position: relative; display: flex; }
 /* Reserve room at the inline-end edge so the status dot never sits on

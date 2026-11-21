@@ -4,6 +4,7 @@ import { ArrowUpRight, LayoutGrid } from 'lucide-preact';
 import { listProjects } from '../api';
 import type { Project } from '../api';
 import { CrashBadge } from '../components/CrashBadge';
+import { ImageCurrentChip } from '../components/ImageCurrentChip';
 import { useI18n } from '../i18n';
 import { fmtCpu, fmtMem } from '../lib/limits';
 import { relTime } from '../lib/time';
@@ -149,6 +150,7 @@ const handleCardKeyDown = (path: string) => (e: KeyboardEvent) => {
                   }
                   {p.limits?.cpu && <span class="meta-chip" title={t('misc.cpuLimitChip')}>{fmtCpu(p.limits.cpu)}</span>}
                   {p.limits?.memory && <span class="meta-chip" title={t('misc.memLimitChip')}>RAM {fmtMem(p.limits.memory)}</span>}
+                  <ImageCurrentChip imageCurrent={p.imageCurrent} />
                 </div>
                 <div class="card-footer planner-footer">
                   <span class={`plan-edit ${edited ? '' : 'plan-new'}`}>

@@ -2,9 +2,34 @@
 # Base image for every project container.
 # Built once (docker compose build workspace) as: wsd/workspace:latest
 #
-# Includes: git, curl, wget, Node 22, Python 3, build tools
+# Includes: git, curl, wget, Node 24 LTS, Python 3, build tools
 
-FROM ubuntu:24.04
+ARG UBUNTU_VERSION=26.04
+ARG NODE_MAJOR=24
+ARG NODE_CHANNEL=lts
+ARG MADAR_BUILD_ID=unknown
+ARG MADAR_BUILD_AT=unknown
+FROM ubuntu:${UBUNTU_VERSION}
+
+ARG UBUNTU_VERSION
+ARG NODE_MAJOR
+ARG NODE_CHANNEL
+ARG MADAR_BUILD_ID
+ARG MADAR_BUILD_AT
+
+LABEL io.madar.workspace.toolchain.schema="1" \
+      io.madar.workspace.toolchain.image="wsd/workspace:latest" \
+      io.madar.workspace.toolchain.build-id="${MADAR_BUILD_ID}" \
+      io.madar.workspace.toolchain.built-at="${MADAR_BUILD_AT}" \
+      io.madar.workspace.toolchain.marker="/etc/madar/workspace-toolchain.json" \
+      io.madar.workspace.toolchain.marker-schema="1" \
+      io.madar.workspace.toolchain.ubuntu-version-id="${UBUNTU_VERSION}" \
+      io.madar.workspace.toolchain.node-major="${NODE_MAJOR}" \
+      io.madar.workspace.toolchain.node-channel="${NODE_CHANNEL}" \
+      org.opencontainers.image.title="wsd/workspace" \
+      org.opencontainers.image.vendor="Madar" \
+      org.opencontainers.image.version="${MADAR_BUILD_ID}" \
+      org.opencontainers.image.created="${MADAR_BUILD_AT}"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -18,10 +43,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Node.js 22 (LTS)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+# Node.js 24 LTS (NodeSource)
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Build-time toolchain smoke checks + in-image marker
+RUN set -eu; \
+    . /etc/os-release; \
+    [ "$ID" = "ubuntu" ]; \
+    [ "$VERSION_ID" = "26.04" ]; \
+    node --version; \
+    npm --version; \
+    [ "$(node -p "process.versions.node.split('.')[0]")" = "24" ]; \
+    [ "$(node -p "process.release.lts ? 'lts' : 'current'")" = "lts" ]; \
+    if command -v docker >/dev/null 2>&1; then \
+      echo "docker CLI must not be installed in the workspace image" >&2; \
+      exit 1; \
+    fi; \
+    mkdir -p /etc/madar; \
+    MADAR_BUILD_ID="$MADAR_BUILD_ID" MADAR_BUILD_AT="$MADAR_BUILD_AT" \
+    UBUNTU_VERSION="$UBUNTU_VERSION" NODE_MAJOR="$NODE_MAJOR" NODE_CHANNEL="$NODE_CHANNEL" \
+    node -e 'const fs=require("fs");const cp=require("child_process"); \
+      const os=fs.readFileSync("/etc/os-release","utf8"); \
+      const pick=(k)=>{const m=os.match(new RegExp("^"+k+"=(.*)$","m"));return m?m[1].replace(/^"|"$/g,""):"";}; \
+      const marker={ \
+        schema:1, \
+        image:"wsd/workspace:latest", \
+        buildId:process.env.MADAR_BUILD_ID, \
+        builtAt:process.env.MADAR_BUILD_AT, \
+        declared:{ubuntuVersionId:process.env.UBUNTU_VERSION,nodeMajor:Number(process.env.NODE_MAJOR),nodeChannel:process.env.NODE_CHANNEL}, \
+        actual:{ \
+          ubuntuVersionId:pick("VERSION_ID"), \
+          ubuntuPrettyName:pick("PRETTY_NAME"), \
+          node:process.version.slice(1), \
+          nodeMajor:Number(process.versions.node.split(".")[0]), \
+          nodeChannel:process.release.lts?"lts":"current", \
+          npm:cp.execFileSync("npm",["--version"],{encoding:"utf8"}).trim(), \
+          dockerCli:false \
+        }, \
+        checks:{ubuntu:"pass",nodeMajor:"pass",nodeLts:"pass",npm:"pass",dockerCliAbsent:"pass"} \
+      }; \
+      fs.writeFileSync("/etc/madar/workspace-toolchain.json.tmp",JSON.stringify(marker,null,2)+"\n");' ; \
+    mv /etc/madar/workspace-toolchain.json.tmp /etc/madar/workspace-toolchain.json; \
+    chmod 0644 /etc/madar/workspace-toolchain.json; \
+    node -e "JSON.parse(require('fs').readFileSync('/etc/madar/workspace-toolchain.json','utf8'))"
 
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

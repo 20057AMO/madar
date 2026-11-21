@@ -220,7 +220,9 @@ else
 fi
 
 info "جارٍ بناء وتشغيل حاويات Madar ..."
-docker compose up -d --build
+# Workspace image toolchain pinned at build time (Ubuntu 26.04 / Node 24 LTS) via
+# the compose build args; later refreshes are admin-gated in the UI (no auto-upgrade).
+UBUNTU_VERSION=26.04 NODE_MAJOR=24 NODE_CHANNEL=lts docker compose up -d --build
 
 wait_for_health() {
   local deadline=$(( SECONDS + 120 )) remaining timeout body

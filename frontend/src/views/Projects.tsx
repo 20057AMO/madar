@@ -3,6 +3,7 @@ import { FolderSearch,ExternalLink, FolderOpen, Copy, Upload, Globe, Trash2, Loa
 import { useHashLocation } from 'wouter/use-hash-location';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { CrashBadge } from '../components/CrashBadge';
+import { ImageCurrentChip } from '../components/ImageCurrentChip';
 import { TrashPanel } from '../components/TrashPanel';
 import {
   listProjects,
@@ -791,6 +792,7 @@ export function Projects() {
                 {p.serve?.enabled && p.serve.port && (
                   <span class="meta-chip serve" title={t('misc.staticSiteChip')}><Globe width={11} height={11} class="icon" /> {t('misc.siteChip')} :{p.serve.port}</span>
                 )}
+                <ImageCurrentChip imageCurrent={p.imageCurrent} />
               </div>
               <div class="card-footer">
                 <button class="btn-ghost sm" onClick={(e) => handleAction(e, p.slug, p.status === 'running' ? 'stop' : 'start')}>
@@ -881,6 +883,7 @@ export function Projects() {
                   {p.serve?.enabled && p.serve.port && (
                     <span class="meta-chip serve" title={t('misc.staticSiteChip')}><Globe width={11} height={11} class="icon" /> {t('misc.siteChip')} :{p.serve.port}</span>
                   )}
+                  <ImageCurrentChip imageCurrent={p.imageCurrent} />
                   {p.tags && p.tags.length > 0 && <span class="dim" style="margin-left:4px;font-size:0.7rem">{p.tags.join(', ')}</span>}
                 </td>
                   <td onClick={(e) => e.stopPropagation()}><ProjectPeople p={p} /></td>

@@ -20,6 +20,7 @@ import {
   ScrollText,
   Gauge,
   Info,
+  Container,
 } from 'lucide-preact';
 import { useAuth } from '../auth';
 import {
@@ -56,6 +57,7 @@ import {
 import { PwMeter } from '../components/PwMeter';
 import { ReAuthModal } from '../components/ReAuthModal';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { WorkspaceImagePanel } from '../components/WorkspaceImagePanel';
 import { fmtBytes } from '../lib/size';
 import { readPerfMetrics, clearPerfMetrics, median, type PerfStore, type FramePerf, type ShellPerf } from '../lib/perf-metrics';
 import { type Msg, AuditLog, UPDATE_RUNNING_STATES } from './settings-shared';
@@ -396,6 +398,7 @@ export function Settings() {
   // Redirect inside an effect (never during render); the null return sits after
   // every hook so hook order stays stable across the user null→role transition.
   const isAdmin = !user || user.role === 'admin';
+  const confirmedAdmin = user?.role === 'admin';
   useEffect(() => {
     if (user && user.role !== 'admin') window.location.hash = '/profile';
   }, [user]);
@@ -408,6 +411,7 @@ export function Settings() {
     { id: 'sec-backup', icon: <DownloadCloud width={13} height={13} class="icon" />, label: t2('النسخ الاحتياطي', 'Backup') },
     { id: 'sec-activity', icon: <ScrollText width={13} height={13} class="icon" />, label: t2('النشاط', 'Activity') },
     { id: 'sec-updates', icon: <RefreshCw width={13} height={13} class="icon" />, label: t2('التحديثات', 'Updates') },
+    ...(confirmedAdmin ? [{ id: 'sec-workspace-image', icon: <Container width={13} height={13} class="icon" />, label: t('workspaceImage.nav') }] : []),
     { id: 'sec-perf', icon: <Gauge width={13} height={13} class="icon" />, label: t2('الأداء', 'Performance') },
     { id: 'sec-about', icon: <Info width={13} height={13} class="icon" />, label: t2('حول', 'About') },
   ];
@@ -480,7 +484,7 @@ export function Settings() {
       io.disconnect();
       main.removeEventListener('scroll', onScroll);
     };
-  }, [isAdmin]);
+  }, [isAdmin, confirmedAdmin]);
 
   const gotoSection = (id: string) => {
     setActiveSec(id);
@@ -1531,6 +1535,8 @@ export function Settings() {
           )}
         </div>
       </section>
+
+      {confirmedAdmin && <WorkspaceImagePanel />}
 
       {/* Performance measurements — real Navigation Timing + frame loads */}
       <PerfPanel />

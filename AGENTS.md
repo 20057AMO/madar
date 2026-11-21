@@ -115,7 +115,7 @@ cd backend && node --test --test-concurrency=1 "tests/**/*.test.ts"
 frontend/   ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Preact + TypeScript + Vite (served at /)
 backend/    ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Express 5 + Node 22 + WebSocket ws
 Dockerfile  ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Multi-stage: frontend build ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ backend build ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ runtime
-Dockerfile.workspace ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Ubuntu 24.04 base image for project containers
+Dockerfile.workspace ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Ubuntu 26.04 LTS + Node 24 LTS base image for project containers
 ```
 
 ## Architecture Notes

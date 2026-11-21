@@ -38,6 +38,13 @@ import {
   WORKSPACES_ROOT,
 } from './services/docker-manager';
 import { type ProjectLimits, getHostInfo } from './services/project-limits';
+import {
+  WORKSPACE_IMAGE_ERRORS,
+  WorkspaceImageError,
+  getWorkspaceImageStatus,
+  refreshWorkspaceImage,
+  type WorkspaceImageErrorCode,
+} from './services/workspace-image';
 import { startJanitor } from './services/workspace-janitor';
 import * as studio from './services/opencode-studio';
 import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile, renameWorkspacePath, deleteWorkspacePath, resolveProjectSubdir, streamWorkspaceFile } from './services/workspace-files';
@@ -277,6 +284,12 @@ const RATE_STRICT_MAX = rateCeil('WSD_RATE_STRICT_MAX', 10, 400); // dangerous e
 const RATE_AUTH_MAX = 10; // password-verification endpoints (brute-force guard)
 const RATE_USER_ADMIN_MAX = rateCeil('WSD_RATE_USER_ADMIN_MAX', 20, 2000); // admin user provisioning
 const RATE_USER_WRITE_MAX = process.env.WSD_TESTING === '1' ? 4000 : 120; // per-user write budget (write-heavy endpoints)
+// Resolved once and shared: the workspace-image refresh ceiling defaults to the
+// same budget as a component-update apply, and the existing update-apply limiter
+// reads the identical resolved value (never a second, drifting rateCeil call).
+const RESOLVED_UPDATE_APPLY_MAX = rateCeil('WSD_RATE_UPDATE_APPLY_MAX', 2, 20);
+const WORKSPACE_REFRESH_MAX = rateCeil('WSD_RATE_WORKSPACE_REFRESH_MAX', RESOLVED_UPDATE_APPLY_MAX, RESOLVED_UPDATE_APPLY_MAX);
+const WORKSPACE_STATUS_MAX = rateCeil('WSD_RATE_WORKSPACE_STATUS_MAX', 60, 600);
 
 // Per-user write limiter — keyed on the authenticated user id (falling back to
 // the shared IP when no user is present). For NAT-shared deployments a single
@@ -341,6 +354,79 @@ app.get('/api/health', (_req, res) => {
     version: 'BETA',
     timestamp: new Date().toISOString(),
   });
+});
+
+// ── Workspace image status + controlled refresh (admin) ───────
+// Registered BEFORE the global rate limit and auth middleware on purpose: this
+// surface has its own per-IP refresh limiter and its own exact {error,message}
+// gate (the generic middleware emits a different body, and a typed service
+// failure must map to its own status/error/message — not a bare 500).
+function sendWorkspaceImageError(res: any, code: WorkspaceImageErrorCode) {
+  const def = WORKSPACE_IMAGE_ERRORS[code];
+  return res.status(def.status).json({ error: def.error, message: def.message });
+}
+
+function workspaceImageAuth(req: any, res: any, next: any) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const user = verifyToken(token);
+  if (!user) return sendWorkspaceImageError(res, 'unauthorized');
+  // verifyToken resolves the LIVE role, so a demotion/refusal lands immediately.
+  if (user.role !== 'admin') return sendWorkspaceImageError(res, 'forbidden');
+  req.user = user;
+  next();
+}
+
+const workspaceRefreshLimiter = (req: any, res: any, next: any) => {
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const key = `workspace-refresh:${ip}`;
+  const now = Date.now();
+  const entry = rateBuckets.get(key);
+  if (!entry || entry.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + RATE_WINDOW });
+    return next();
+  }
+  entry.count += 1;
+  if (entry.count > WORKSPACE_REFRESH_MAX) {
+    res.set('Retry-After', String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))));
+    return sendWorkspaceImageError(res, 'rate_limited');
+  }
+  next();
+};
+
+const workspaceStatusLimiter = (req: any, res: any, next: any) => {
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const key = `workspace-status:${ip}`;
+  const now = Date.now();
+  const entry = rateBuckets.get(key);
+  if (!entry || entry.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + RATE_WINDOW });
+    return next();
+  }
+  entry.count += 1;
+  if (entry.count > WORKSPACE_STATUS_MAX) {
+    res.set('Retry-After', String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))));
+    return sendWorkspaceImageError(res, 'rate_limited');
+  }
+  next();
+};
+
+app.get('/api/workspace-image/status', workspaceImageAuth, workspaceStatusLimiter, async (req: any, res) => {
+  try {
+    const fresh = req.query.fresh === '1' || req.query.fresh === 'true';
+    res.json(await getWorkspaceImageStatus(fresh));
+  } catch {
+    res.status(500).json({ error: 'Internal error', message: 'Unable to read workspace image status' });
+  }
+});
+
+app.post('/api/workspace-image/refresh', workspaceImageAuth, workspaceRefreshLimiter, async (req: any, res) => {
+  try {
+    res.json(await refreshWorkspaceImage({ ip: req.ip, userId: req.user?.id }));
+  } catch (err: any) {
+    const code: WorkspaceImageErrorCode = err instanceof WorkspaceImageError ? err.code : 'workspace_build_failed';
+    sendWorkspaceImageError(res, code);
+  }
 });
 
 // Global rate limit
@@ -2774,7 +2860,7 @@ app.get('/api/opencode-studio/version', requireAdmin, async (_req, res) => {
 // own route; this surface drives the same machinery plus code-server.
 
 const updateCheckLimiter = rateLimit('update-check', RATE_WINDOW, rateCeil('WSD_RATE_UPDATE_CHECK_MAX', 6, 60));
-const updateApplyLimiter = rateLimit('update-apply', RATE_WINDOW, rateCeil('WSD_RATE_UPDATE_APPLY_MAX', 2, 20));
+const updateApplyLimiter = rateLimit('update-apply', RATE_WINDOW, RESOLVED_UPDATE_APPLY_MAX);
 
 app.get('/api/updates', requireAdmin, async (_req: any, res) => {
   try {

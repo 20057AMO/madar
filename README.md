@@ -103,12 +103,14 @@ docker compose up -d --build
 frontend/             — Preact + TypeScript + Vite (يُخدم في /)
 backend/              — Express 5 + Node 22 + WebSocket (ws)
 Dockerfile            — Multi-stage: frontend build → backend build → runtime
-Dockerfile.workspace  — Ubuntu 24.04 لصورة حاويات المشاريع
+Dockerfile.workspace  — Ubuntu 26.04 LTS + Node 24 LTS لصورة حاويات المشاريع
 docker-compose.yml    — كامل الحزمة
 docs/                 — التوثيق
 workspaces/           — ملفات المشاريع (تُنشأ عند التشغيل)
 opencode/             — وكلاء opencode + مهارات + أوامر مدمجة
 ```
+
+> صورة `wsd/workspace` تُبنى من `Dockerfile.workspace` على Ubuntu 26.04 LTS وNode 24 LTS، وتحمل وسوم `io.madar.workspace.toolchain.*` وملف `/etc/madar/workspace-toolchain.json` الذي يسجّل الإصدار المُعلَن والفعلي ووقت البناء. فحص البناء يرفض أي صورة لا تطابق Ubuntu 26.04 أو Node 24 LTS أو تحتوي Docker CLI. أعد بناءها يدويًا بـ `docker compose build workspace --no-cache`؛ أمر `docker compose build app` لا يعيد بناءها، ولا يوجد تحديث تلقائي لها. حاويات المشاريع القائمة لا تتغير حتى إعادة إنشائها صراحةً. إصدار Docker الظاهر يُقرأ من daemon المضيف فقط، لا من حاويات المشاريع.
 
 ---
 

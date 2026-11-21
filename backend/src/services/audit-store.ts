@@ -104,7 +104,9 @@ export type AuditEvent =
   | 'git-push'
   | 'git-branch-create'
   | 'git-branch-switch'
-  | 'mount-audit';
+  | 'mount-audit'
+  | 'workspace-image-refresh'
+  | 'workspace-image-refresh-failed';
 
 export interface AuditEntry {
   ts: string;

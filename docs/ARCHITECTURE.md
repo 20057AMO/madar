@@ -6,7 +6,7 @@
 
 ## 1. System Overview
 
-Madar is a single Docker Compose stack: one `app` container serves the whole product (Preact dashboard, Express API, WebSocket services, Docker orchestration), and a separate base image (`wsd/workspace`, Ubuntu 24.04) is used to generate one container per project.
+Madar is a single Docker Compose stack: one `app` container serves the whole product (Preact dashboard, Express API, WebSocket services, Docker orchestration), and a separate base image (`wsd/workspace:latest`, Ubuntu 26.04 LTS + Node 24 LTS) is used to generate one container per project. The `app` container itself stays on Node 22.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -40,7 +40,7 @@ Madar is a single Docker Compose stack: one `app` container serves the whole pro
 │  │  │            Docker socket (/var/run/docker.sock)        │  │  │
 │  │  │  ┌─────────────────────────┐  ┌──────────────────────┐  │  │
 │  │  │  │ wsd-<slug> containers   │  │ wsd/workspace image  │  │  │
-│  │  │  │ (project containers)    │  │ (Ubuntu 24.04 base)  │  │  │
+│  │  │  │ (project containers)    │  │ (Ubuntu 26.04 LTS)   │  │  │
 │  │  │  └─────────────────────────┘  └──────────────────────┘  │  │
 │  │  └────────────────────────────────────────────────────────┘  │  │
 │  │                                                              │  │
@@ -209,7 +209,11 @@ backs the volume's file up (`settings.json.madar-backup-<stamp>`, never deleted)
 not match.
 
 ### 4.2 Workspace image (`Dockerfile.workspace`)
-- Ubuntu 24.04 base; published as `wsd/workspace`
+- Ubuntu 26.04 LTS + Node 24 LTS base, published as `wsd/workspace:latest`; the `app` container itself stays on Node 22
+- The image carries OCI labels (`org.opencontainers.image.*`) plus `io.madar.workspace.toolchain.*` labels: `schema`, `image`, `build-id`, `built-at`, `marker`, `marker-schema`, `ubuntu-version-id`, `node-major`, `node-channel`. At build it writes the marker `/etc/madar/workspace-toolchain.json` (schema `1`) recording declared and detected Ubuntu / Node / npm versions, `buildId`, `builtAt`, per-check results (`ubuntu`, `nodeMajor`, `nodeLts`, `npm`, `dockerCliAbsent`) and `dockerCli:false`. The build fails if the installed toolchain does not match the declared target or if a Docker CLI is present in the image
+- No Docker CLI is installed in the workspace image, so project containers cannot report Docker versions. Docker version reporting is host-daemon-only: the app reads `Version` and `ApiVersion` from `docker version` on the host daemon (`safeDockerDaemonVersion` allowlist), exposing no other fields and no raw command output
+- Staleness is derived from the marker's `builtAt` against `DEFAULT_WORKSPACE_STALE_DAYS = 30` (a build is stale at `>= 30` days). `services/workspace-image-core.ts` holds these rules as import-free pure functions
+- Refresh builds `docker build --pull --no-cache --file <Dockerfile> --tag wsd/workspace:latest` with pinned build args as an argv array (no shell). It rebuilds the image only: running containers keep their current toolchain until each is explicitly **recreated** — there is no auto-upgrade. Failures map to fixed labels (`docker_unavailable`, `workspace_build_unavailable`, `timeout`, `workspace_build_failed`, `build_failed`, `workspace_image_error`), never raw Docker logs or host paths
 - Project containers run `sleep infinity` by default — services are started manually from the terminal/IDE
 - Workspace dir is bind-mounted at `/workspace` (same files the dashboard sees)
 

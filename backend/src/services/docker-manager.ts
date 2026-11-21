@@ -40,6 +40,13 @@ import { ensureServeRunning, probeServe } from './project-serve';
 import { publicProject, publicProjects } from './project-public';
 import { resolveContainedPath } from './workspace-paths-core';
 import { commandEnvironment, gitArgs, isAllowedGitRemote } from './project-git';
+import {
+  WORKSPACE_MARKER_PATH,
+  parseWorkspaceMarker,
+  safeDockerDaemonVersion,
+  type DockerDaemonVersion,
+  type WorkspaceToolchainMarker,
+} from './workspace-image-core';
 
 // Re-exported so the rest of the app can import these helpers from the
 // docker-manager barrel as before.
@@ -61,6 +68,152 @@ const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 
 // Base image used for project workspaces (Ubuntu + dev tooling)
 const BASE_IMAGE = process.env.WSD_WORKSPACE_IMAGE || 'wsd/workspace:latest';
+
+export function workspaceImageDigest(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^sha\d+:[a-f0-9]+$/i.test(trimmed)) return null;
+  return trimmed.toLowerCase();
+}
+
+export function workspaceImageDigestsMatch(listed: unknown, current: unknown): boolean {
+  const listedDigest = workspaceImageDigest(listed);
+  const currentDigest = workspaceImageDigest(current);
+  return Boolean(listedDigest && currentDigest && listedDigest === currentDigest);
+}
+
+interface WorkspaceImageInspection {
+  imageId: string | null;
+  labels: Record<string, string>;
+}
+
+const WORKSPACE_IMAGE_CACHE_MS = 30_000;
+let workspaceImageCache: { value: WorkspaceImageInspection; at: number } | null = null;
+let workspaceImageInflight: Promise<WorkspaceImageInspection> | null = null;
+let workspaceImageCacheGeneration = 0;
+
+function appendBounded(target: string, chunk: Buffer, limit: number): string {
+  const remaining = limit - target.length;
+  if (remaining <= 0) return target;
+  return target + chunk.toString('utf8', 0, Math.min(chunk.length, remaining));
+}
+
+async function inspectWorkspaceImageUncached(): Promise<WorkspaceImageInspection> {
+  try {
+    const info = await docker.getImage(BASE_IMAGE).inspect() as {
+      Id?: unknown;
+      Config?: { Labels?: Record<string, unknown> };
+      Labels?: Record<string, unknown>;
+    };
+    const id = workspaceImageDigest(info?.Id);
+    const raw = (info?.Config?.Labels ?? info?.Labels ?? {}) as Record<string, unknown>;
+    const labels: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === 'string') labels[key] = value;
+    }
+    return { imageId: id, labels };
+  } catch {
+    return { imageId: null, labels: {} };
+  }
+}
+
+export async function inspectWorkspaceImage(): Promise<WorkspaceImageInspection> {
+  const cached = workspaceImageCache;
+  if (cached && Date.now() - cached.at < WORKSPACE_IMAGE_CACHE_MS) return cached.value;
+  if (workspaceImageInflight) return workspaceImageInflight;
+  const generation = workspaceImageCacheGeneration;
+  const pending = (async () => {
+    const value = await inspectWorkspaceImageUncached();
+    if (generation === workspaceImageCacheGeneration) {
+      workspaceImageCache = { value, at: Date.now() };
+    }
+    return value;
+  })().finally(() => {
+    if (generation === workspaceImageCacheGeneration) {
+      workspaceImageInflight = null;
+    }
+  });
+  workspaceImageInflight = pending;
+  return pending;
+}
+
+export function invalidateWorkspaceImageCache(): void {
+  workspaceImageCacheGeneration += 1;
+  workspaceImageCache = null;
+  workspaceImageInflight = null;
+}
+
+export async function getDockerDaemonVersion(): Promise<DockerDaemonVersion | null> {
+  try {
+    return safeDockerDaemonVersion(await docker.version());
+  } catch {
+    return null;
+  }
+}
+
+function runBoundedDocker(argv: string[], timeoutMs: number, maxBytes = 64 * 1024): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn('docker', argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let stdout = '';
+    let settled = false;
+    const timer = setTimeout(() => done(null), timeoutMs);
+    function done(value: string | null): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (value === null) {
+        try { child.kill('SIGKILL'); } catch {}
+      }
+      resolve(value);
+    }
+    child.stdout?.on('data', (chunk: Buffer) => { stdout = appendBounded(stdout, chunk, maxBytes); });
+    child.stderr?.on('data', () => {});
+    child.on('error', () => done(null));
+    child.on('close', (code) => done(code === 0 ? stdout : null));
+  });
+}
+
+export async function readWorkspaceMarker(): Promise<WorkspaceToolchainMarker | null> {
+  let raw: string | null = null;
+  try {
+    const containers = await docker.listContainers({ all: false });
+    const probe = containers.find((c) => (c.Labels || {})['wsd.managed'] === 'true');
+    if (probe) raw = await runBoundedDocker(['exec', probe.Id, 'cat', WORKSPACE_MARKER_PATH], 5_000);
+  } catch {
+    raw = null;
+  }
+  if (!raw) {
+    raw = await runBoundedDocker([
+      'run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+      '--security-opt', 'no-new-privileges', '--entrypoint', '/bin/cat',
+      BASE_IMAGE, WORKSPACE_MARKER_PATH,
+    ], 15_000);
+  }
+  return raw ? parseWorkspaceMarker(raw) : null;
+}
+
+export async function listWorkspaceImageProjects(currentImageId: string | null): Promise<Array<{
+  slug: string;
+  containerId: string | null;
+  imageId: string | null;
+  imageCurrent: boolean;
+  running: boolean;
+}>> {
+  const projects = await listProjects();
+  return projects.map((project) => ({
+    slug: project.slug,
+    containerId: project.containerId ?? null,
+    imageId: project.imageId ?? null,
+    imageCurrent: Boolean(currentImageId && project.imageId === currentImageId),
+    running: project.status === 'running',
+  }));
+}
 
 export interface ProjectSpec {
   limits?: { cpu?: string | null; memory?: string | null };
@@ -96,6 +249,8 @@ export interface ProjectInfo {
   hostPorts?: Record<string, string>;
   createdAt?: string;
   image?: string;
+  imageId?: string | null;
+  imageCurrent?: boolean;
   ports?: number[];
   env?: Record<string, string>;
   /** Full feed on project detail (viewer+); tail-only {action,at} on the
@@ -515,6 +670,7 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
 
   await registerOpencodeProject(slug);
 
+  const workspaceImage = await inspectWorkspaceImage();
   const info: ProjectInfo = {
     id: container.id,
     name: clean.name,
@@ -525,6 +681,8 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
     hostPorts,
     createdAt: new Date().toISOString(),
     image,
+    imageId: image === BASE_IMAGE ? workspaceImage.imageId : null,
+    imageCurrent: image === BASE_IMAGE && Boolean(workspaceImage.imageId),
     ports: clean.ports,
     env: clean.env,
     limits: effectiveLimits,
@@ -610,7 +768,10 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
  * List all WSD-managed projects (containers with wsd.managed=true).
  */
 export async function listProjects(): Promise<ProjectInfo[]> {
-  const containers = await docker.listContainers({ all: true });
+  const [containers, workspaceImage] = await Promise.all([
+    docker.listContainers({ all: true }),
+    inspectWorkspaceImage(),
+  ]);
   const projects: ProjectInfo[] = [];
 
   for (const c of containers) {
@@ -622,6 +783,7 @@ export async function listProjects(): Promise<ProjectInfo[]> {
     for (const p of c.Ports || []) {
       if (p.PublicPort) ports[String(p.PrivatePort)] = String(p.PublicPort);
     }
+    const listedImageId = workspaceImageDigest(c.ImageID);
 
     const project: ProjectInfo = {
       id: c.Id,
@@ -631,6 +793,8 @@ export async function listProjects(): Promise<ProjectInfo[]> {
       containerId: c.Id,
       hostPorts: ports,
       createdAt: labels['wsd.createdAt'],
+      imageId: listedImageId,
+      imageCurrent: workspaceImageDigestsMatch(c.ImageID, workspaceImage.imageId),
     };
 
     const meta = loadMeta(slug);
@@ -667,7 +831,10 @@ export async function getProject(slug: string): Promise<ProjectInfo | null> {
   try {
     const projectSlug = validateProjectSlug(slug);
     const container = docker.getContainer(`wsd-${projectSlug}`);
-    const data = await container.inspect();
+    const [data, workspaceImage] = await Promise.all([
+      container.inspect(),
+      inspectWorkspaceImage(),
+    ]);
 
     const labels = data.Config?.Labels || {};
     if (labels['wsd.managed'] !== 'true') return null;
@@ -679,6 +846,7 @@ export async function getProject(slug: string): Promise<ProjectInfo | null> {
         ports[priv.replace('/tcp', '')] = bindings[0].HostPort;
       }
     }
+    const inspectedImageId = workspaceImageDigest(data.Image);
 
     const project: ProjectInfo = {
       id: data.Id?.slice(0, 12) || '',
@@ -688,6 +856,8 @@ export async function getProject(slug: string): Promise<ProjectInfo | null> {
       containerId: data.Id || '',
       hostPorts: ports,
       createdAt: labels['wsd.createdAt'],
+      imageId: inspectedImageId,
+      imageCurrent: workspaceImageDigestsMatch(data.Image, workspaceImage.imageId),
     };
 
     const meta = loadMeta(projectSlug);

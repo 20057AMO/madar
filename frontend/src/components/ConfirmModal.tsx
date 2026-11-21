@@ -87,7 +87,7 @@ export function ConfirmModal({
   if (!open) return null;
 
   return (
-    <div class="modal-overlay" ref={overlayRef} onMouseDown={(e: any) => { if (e.target === e.currentTarget && !loading) onCancel(); }}>
+    <div class="modal-overlay" ref={overlayRef} onMouseDown={(e: MouseEvent) => { if (e.target === e.currentTarget && !loading) onCancel(); }}>
       <form
         class="modal-card reauth-card"
         role="dialog"
@@ -106,10 +106,10 @@ export function ConfirmModal({
         {message && <p class="settings-hint" id="confirm-msg" style="text-align:center">{message}</p>}
         {error && <div role="alert" class="notice error">{error}</div>}
         <div style="display:flex; gap:8px; margin-top:14px; justify-content:center;">
-          <button class="btn-ghost sm" type="button" ref={cancelRef} onClick={onCancel} disabled={loading}>
+          <button class="btn-ghost sm" type="button" ref={cancelRef} aria-disabled={loading} onClick={() => { if (!loading) onCancel(); }}>
             {dismissLabel}
           </button>
-          <button class={`${danger ? 'btn-danger' : 'btn-primary'} sm`} type="submit" disabled={loading}>
+          <button class={`${danger ? 'btn-danger' : 'btn-primary'} sm`} type="submit" aria-disabled={loading}>
             {loading ? (
               <span style="display:inline-flex;align-items:center;gap:6px;">
                 <Loader2 width={14} height={14} class="icon spin" /> {t('common.loading')}

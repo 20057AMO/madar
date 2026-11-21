@@ -78,6 +78,8 @@ nano .env   # أو أي محرر
 | `WSD_EMBED_PROXY_PORT` | اختياري | منفذ وكيل الأسطح المدمجة المصادَق (افتراضي `4097`). هو **الطريق الوحيد** إلى VS Code وOpenCode، ويتطلّب جلسة Madar برتبة محرّر فأعلى |
 | `OLLAMA_LOCAL_HOST` | اختياري | عنوان Ollama المحلي (افتراضي `http://host.docker.internal:11434`) |
 | `WSD_OPENCODE_PORT` | اختياري | منفذ opencode **داخل** الحاوية (افتراضي `4096`) — مربوط على loopback وغير منشور؛ لا تفتحه يدويًا |
+| `UBUNTU_VERSION` / `NODE_MAJOR` / `NODE_CHANNEL` | اختياري | معاملات بناء صورة مساحة العمل `wsd/workspace`: إصدار Ubuntu، رقم Node الرئيسي، وقناة Node (افتراضي `26.04` / `24` / `lts` → Ubuntu 26.04 LTS + Node 24 LTS). تُستهلك عند بناء الصورة فقط، لا في حاوية التطبيق (التي تعمل على Node 22). تغييرها لا يحدّث المشاريع القائمة؛ أعد بناء الصورة ثم أعد إنشاء كل مشروع صراحةً |
+| `MADAR_BUILD_ID` / `MADAR_BUILD_AT` | اختياري | يُختمان في وسوم `io.madar.workspace.toolchain.*` وفي marker الصورة `/etc/madar/workspace-toolchain.json` (افتراضي `unknown` / `unknown`). إعادة البناء تضبطهما تلقائيًا، ومن تاريخ `builtAt` يُحسب عمر الصورة لتحديد التقادم (30 يومًا) |
 
 مفاتيح باقي المزوّدين (Anthropic / Gemini / Azure / نقاط متوافقة مع OpenAI) تُضاف **من واجهة التطبيق** لاحقًا — لا تُكتب في ملفات.
 
@@ -87,7 +89,9 @@ nano .env   # أو أي محرر
 docker compose up -d --build
 ```
 
-سيبني خدمة `app` (اللوحة + المحرر + opencode web) وصورة `wsd/workspace` لحاويات المشاريع.
+سيبني خدمة `app` (اللوحة + المحرر + opencode web) وصورة `wsd/workspace` لحاويات المشاريع. صورة المساحة مبنية على Ubuntu 26.04 LTS + Node 24 LTS.
+
+> **إعادة بناء صورة المساحة وحدها:** شغّل `docker compose build workspace --no-cache` لإعادة بناء `wsd/workspace` من الصفر (مفيد بعد تغيير معاملات الإصدار أو لتحديث الأدوات). لاحظ أن `docker compose build app` يعيد بناء حاوية التطبيق فقط ولا يلمس صورة المساحة. بعد إعادة البناء، أعد إنشاء كل مشروع تريد استخدام الأدوات الجديدة فيه صراحةً (**Recreate**) — لا يوجد تحديث تلقائي للحاويات القائمة.
 
 ### 4) أنشئ حسابك
 
@@ -252,6 +256,7 @@ WSD_EMBEDDED_PUBLISH_HOST=127.0.0.1
 | الإعدادات لا تطبَّق داخل المحرر | مجلد `code-server-data` (المركّب على `/root/.local/share/code-server`) **يحجب** ملف إعدادات المستخدم المخبوز في الصورة — فـ VS Code يقرأ `settings.json` من `<user-data-dir>/User/` وليس من `~/.config/code-server` (هذا المجلد خاص بـ `config.yaml` فقط)، لذا يعيد `entrypoint.sh` مزامنة كل إقلاع: ينسخ نسخة `settings.json.madar-backup-<stamp>` ثم يستبدل الملف بشكل ذرّي ويشغّل `verify`. لاحظ السطر `Madar: managed IDE config already at stamp … — nothing to sync` في `docker compose logs app` — إن لم يظهر، فالمزامنة جرت. وللتعديل اليدوي مرة واحدة، انسخ الملف إلى الـ volume (`docker cp settings.json wsd-pro:/root/.local/share/code-server/User/settings.json`) مع العلم أن الإقلاع التالي سيعيد مزامنة المفاتيح المُدارة |
 | لوحة TODOs فارغة أو خطأ `Failed to find vscode-ripgrep` | إضافة `gruntfuggly.todo-tree` تقرأ مفتاح `todo-tree.ripgrep.ripgrep` وتبحث عن `rg` محليًا؛ المفتاح يجب أن يشير إلى `/usr/lib/code-server/lib/vscode/node_modules/@vscode/ripgrep-universal/bin/linux-x64/rg` (المسار المضمَّن فعليًا). أي **اسم مفتاح خاطئ** صامت تمامًا — تُحفظ القيمة لكن الإضافة لا تقرأها. تحقّق من الأسماء في `package.json` الخاص بالإضافة داخل الحاوية: `/root/.local/share/code-server/extensions/gruntfuggly.todo-tree-*/package.json` ← `contributes.configuration.properties`، وتحقّق أيضًا من **نوع القيمة** (`todo-tree.filtering.includeGlobs` مصفوفة، لا نص) |
 | لوحة TODOs فارغة مع رسالة `rg: regex parse error: … look-around … not supported` | التعبير النمطي المنسَّق ينتهي بنظرة أمامية `(?=[(:\s]|$)`، ومحرك ripgrep الافتراضي يرفضها — و Todo Tree **يستخدم rg فقط** في مسح مساحة العمل (لا بديل JS)، فالإضافة تجد **صفرًا** عناصر. الحل: أضف `--pcre2` إلى `todo-tree.ripgrep.ripgrepArgs` (قيمتنا `--max-columns=1000 --no-config --pcre2`). تحقّق أن rg المضمَّن يدعمه: `docker exec wsd-pro /usr/lib/code-server/lib/vscode/node_modules/@vscode/ripgrep-universal/bin/linux-x64/rg --version` يجب أن يعرض `features:+pcre2` |
+| صورة مساحة العمل قديمة أو أدواتها لا تطابق المطلوب | الصورة مبنية على Ubuntu 26.04 LTS + Node 24 LTS، وتُعدّ قديمة عند بلوغ 30 يومًا من `builtAt` في marker الصورة. أعد بناءها بـ `docker compose build workspace --no-cache` ثم أعد إنشاء كل مشروع صراحةً لتطبيق الأدوات الجديدة؛ لا يوجد تحديث تلقائي للحاويات القائمة. للتحقق، راجع الوسوم `io.madar.workspace.toolchain.*` أو الـ marker `/etc/madar/workspace-toolchain.json` داخل حاوية مشروع |
 | مستكشف المصادر يعلّق على "Scanning folder for Git repositories…" | هذه العَرَض لـ `vscode.git-base` مفقود: تعتمد إضافة Git عليه عبر `extensionDependencies`، وحذفه يوقف مستكشف المصادر. أصلحه بتشغيل `/usr/local/share/madar/ide-hardening.sh apply && verify` داخل حاوية `app` — السكربت يستعيده من النسخة المحفوظة في `/opt/madar/ide-builtin` ويعيد بناء الإغلاق (closure) آليًا |
 | Copilot يظهر من جديد أو يتضخم حجم صورة المحرر | `dpkg -i` (تحديث المكوّنات أو إعادة التطبيق عند الإقلاع) يستعيد `/usr/lib/code-server` الأصلي. أُغلقت هذه الثغرة: كل مسارات `dpkg` تشغّل `ide-hardening.sh apply && verify`، والإقلاع يشغّل `verify` أيضًا. تحقّق بـ `docker exec wsd-pro /usr/local/share/madar/ide-hardening.sh verify` — يجب أن ينتهي بـ `exit 0`، وأن يكون `@github` أصغر من 2 ميغابايت |
 | opencode لا يعمل | افتح `/#/opencode` من اللوحة (عبر الوكيل المصادَق على `4097`) وافحص `docker compose logs app`؛ أضف `OPENCODE_API_KEY` إن لم يكن مضبوطًا |

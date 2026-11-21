@@ -77,6 +77,8 @@ services:
       - wsd-data:/app/data
       - code-server-config:/root/.config/code-server
       - code-server-data:/root/.local/share/code-server
+      # Read-only source for the admin-gated workspace image refresh route.
+      - ./Dockerfile.workspace:/opt/madar/build/Dockerfile.workspace:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -97,6 +99,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.workspace
+      args:
+        UBUNTU_VERSION: "${UBUNTU_VERSION:-26.04}"
+        NODE_MAJOR: "${NODE_MAJOR:-24}"
+        NODE_CHANNEL: "${NODE_CHANNEL:-lts}"
+        MADAR_BUILD_ID: "${MADAR_BUILD_ID:-unknown}"
+        MADAR_BUILD_AT: "${MADAR_BUILD_AT:-unknown}"
     image: wsd/workspace:latest
     container_name: wsd-workspace
     restart: unless-stopped

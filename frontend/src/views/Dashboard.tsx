@@ -14,6 +14,7 @@ import {
   ExternalLink,
 } from 'lucide-preact';
 import { CrashBadge } from '../components/CrashBadge';
+import { ImageCurrentChip } from '../components/ImageCurrentChip';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { VSCodeIcon, OpencodeIcon } from '../components/brand-icons';
 import { useI18n } from '../i18n';
@@ -448,6 +449,7 @@ export function Dashboard() {
                 {p.serve?.enabled && p.serve.port && (
                   <span class="meta-chip serve" title={t('misc.staticSiteChip')}><Globe width={11} height={11} class="icon" /> {t('misc.siteChip')} :{p.serve.port}</span>
                 )}
+                <ImageCurrentChip imageCurrent={p.imageCurrent} />
                 {(!p.hostPorts || Object.keys(p.hostPorts).length === 0) && (!p.ports || p.ports.length === 0) && !p.limits?.cpu && !p.limits?.memory && !p.serve?.enabled && <span class="meta-chip">{p.slug}</span>}
               </div>
               <div class="card-footer">
