@@ -45,6 +45,7 @@ export function Terminals({ params }: { params: { slug?: string } }) {
     if (slug) setSelected(slug);
   }, [slug]);
 
+  const selectedProject = projects.find((p) => p.slug === selected) || null;
   const q = query.trim().toLowerCase();
   const visible = useMemo(
     () =>
@@ -121,8 +122,8 @@ export function Terminals({ params }: { params: { slug?: string } }) {
 
         {/* Terminal area */}
         <div style="flex:1;min-width:0;display:flex;flex-direction:column">
-          {selected && projects.some((p) => p.slug === selected) ? (
-            <ProjectTerminal key={selected} slug={selected} />
+          {selectedProject ? (
+            <ProjectTerminal key={selectedProject.slug} slug={selectedProject.slug} project={selectedProject} />
           ) : (
             <div class="empty-state" style="margin:auto;text-align:center">
               <p style="color:var(--text-3);font-size:0.82rem">

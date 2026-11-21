@@ -868,6 +868,14 @@ export const ar: Dict = {
       exited: 'انتهت الجلسة',
       closed: 'غير متصل',
       error: 'خطأ',
+      readOnly: 'قراءة فقط',
+    },
+    access: {
+      aria: 'الوصول إلى الطرفية مقيد',
+      projectTitle: 'صلاحية editor مطلوبة',
+      projectBody: 'تحتاج إلى صلاحية editor لهذا المشروع لفتح طرفيته. اطلب الوصول من مسؤول المشروع.',
+      controlTitle: 'صلاحية admin مطلوبة',
+      controlBody: 'يتطلب فتح طرفية التحكم صلاحية admin لهذا المشروع. أداة docker CLI غير متاحة للمشاهدين أو المحررين.',
     },
     action: {
       startShell: 'بدء جلسة جديدة',

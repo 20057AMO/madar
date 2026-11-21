@@ -877,6 +877,14 @@ export const en = {
       exited: 'exited',
       closed: 'disconnected',
       error: 'error',
+      readOnly: 'read-only',
+    },
+    access: {
+      aria: 'Terminal access restricted',
+      projectTitle: 'Editor access required',
+      projectBody: 'You need editor access to this project to open its terminal. Ask a project admin if you need access.',
+      controlTitle: 'Admin access required',
+      controlBody: 'Admin access to this project is required for a control shell. The docker CLI is not available to viewers or editors.',
     },
     action: {
       startShell: 'Start new shell',

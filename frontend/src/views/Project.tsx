@@ -806,7 +806,7 @@ export function Project({ params }: { params: { slug: string } }) {
           />
         )}
         {tab === 'logs' && <LogsPanel slug={slug} running={project?.status === 'running'} />}
-        {tab === 'terminal' && <ProjectTerminal slug={slug} />}
+        {tab === 'terminal' && <ProjectTerminal slug={slug} project={project} />}
         {tab === 'notes' && <NotesPanel slug={slug} readOnly={readOnly} />}
         {tab === 'scripts' && <ScriptsPanel slug={slug} />}
         {tab === 'team' && <TeamPanel slug={slug} project={project} onlineUsers={onlineUsers} />}

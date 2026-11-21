@@ -892,6 +892,22 @@ input.detail-title {
 }
 .term-host:focus { outline: none; }
 .term-host:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+.term-status-dot.read-only { background: #d29922; box-shadow: 0 0 6px rgba(210,153,34,0.35); }
+.term-access-panel {
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 56ch;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text-2);
+  cursor: default;
+}
+.term-access-panel strong { color: var(--text); font-size: 0.9rem; }
+.term-access-panel p { margin: 0; font-size: 0.78rem; line-height: 1.55; }
+.term-reconnect-btn[aria-disabled="true"],
+.term-quick-btn[aria-disabled="true"],
+.term-mode-btn[aria-disabled="true"] { opacity: 0.35; cursor: not-allowed; }
 
 @keyframes term-pulse {
   0%, 100% { opacity: 1; }

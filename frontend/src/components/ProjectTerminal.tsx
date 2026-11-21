@@ -3,10 +3,10 @@ import { Keyboard, Package, Settings2 } from 'lucide-preact';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { wsUrl } from '../api';
+import { wsUrl, type Project } from '../api';
+import { useAuth } from '../auth';
 import { useI18n } from '../i18n';
-
-type TermMode = 'project' | 'control';
+import { canUseTerminalMode, type TerminalMode as TermMode } from '../lib/terminal-access';
 type TermStatus = 'connecting' | 'ready' | 'closed' | 'error' | 'exited';
 
 const THEME = {
@@ -78,8 +78,9 @@ function saveHistory(slug: string, mode: TermMode, hist: string[]): void {
 
 let tabSeq = 0;
 
-export function ProjectTerminal({ slug }: { slug: string }) {
+export function ProjectTerminal({ slug, project }: { slug: string; project: Project | null }) {
   const { t } = useI18n();
+  const { user } = useAuth();
   const TERMINAL_STOP_NOTICE: Record<number, string> = {
     [TERMINAL_CLOSE.accessDenied]: t('terminal.notice.accessDenied'),
     [TERMINAL_CLOSE.sessionEnded]: t('terminal.notice.shellExited'),
@@ -146,10 +147,18 @@ export function ProjectTerminal({ slug }: { slug: string }) {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const currentMode = activeTab?.mode || 'project';
+  const projectModeAllowed = canUseTerminalMode(user, project, 'project');
+  const controlModeAllowed = canUseTerminalMode(user, project, 'control');
+  const modeAllowed = currentMode === 'control' ? controlModeAllowed : projectModeAllowed;
+  const denied = !modeAllowed;
+  const allowedModes: TermMode[] = [
+    ...(projectModeAllowed ? ['project' as const] : []),
+    ...(controlModeAllowed ? ['control' as const] : []),
+  ];
 
   // Backend allows only 1 session per slug:mode. Determine which modes are taken.
   const takenModes = new Set(tabs.map((t) => t.mode));
-  const canAddTab = takenModes.size < 2; // project + control = max 2
+  const canAddTab = allowedModes.some((mode) => !takenModes.has(mode)); // max one session per allowed mode
 
   const changeFontSize = useCallback((delta: number) => {
     setFontSize((prev) => {
@@ -171,14 +180,14 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   }, []);
 
   const addTab = useCallback(() => {
-    if (!canAddTab) return;
     const usedModes = new Set(tabs.map((tab) => tab.mode));
-    const newMode: TermMode = usedModes.has('project') ? 'control' : 'project';
+    const newMode = allowedModes.find((mode) => !usedModes.has(mode));
+    if (!newMode) return;
     const id = `t-${Date.now()}-${++tabSeq}`;
     const newTab: Tab = { id, label: newMode === 'project' ? t('terminal.tabs.project') : t('terminal.tabs.control'), mode: newMode };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
-  }, [canAddTab, tabs, t]);
+  }, [allowedModes, tabs, t]);
 
   const closeTab = useCallback((id: string) => {
     setTabs((prev) => {
@@ -195,10 +204,9 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   }, [activeTabId, t]);
 
   const switchTabMode = useCallback((id: string, newMode: TermMode) => {
-    // Check if another tab already uses this mode
     setTabs((prev) => {
       const otherUsesMode = prev.some((t) => t.id !== id && t.mode === newMode);
-      if (otherUsesMode) return prev; // can't switch — mode already taken
+      if (otherUsesMode) return prev;
       return prev.map((t) => (t.id === id ? { ...t, mode: newMode } : t));
     });
   }, []);
@@ -248,13 +256,14 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   }, [cancelNotice]);
 
   const manualReconnect = useCallback(() => {
+    if (!modeAllowed) return;
     cancelReconnect();
     cancelNotice();
     reconnectAttemptRef.current = 0;
     lastErrorRef.current = '';
     setCloseNotice('');
     setReconnectNonce((n) => n + 1);
-  }, [cancelReconnect, cancelNotice]);
+  }, [modeAllowed, cancelReconnect, cancelNotice]);
 
   // Cancel reconnect on tab switch
   useEffect(() => {
@@ -262,8 +271,27 @@ export function ProjectTerminal({ slug }: { slug: string }) {
   }, [currentMode, slug, cancelReconnect]);
 
   useEffect(() => {
+    if (modeAllowed) return;
+    cancelReconnect();
+    cancelNotice();
+    const ws = wsRef.current;
+    if (ws) {
+      ws.onopen = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.close();
+      if (wsRef.current === ws) wsRef.current = null;
+    }
+    const term = termRef.current;
+    if (term) term.options.disableStdin = true;
+    setCloseNotice('');
+    setWorkPath('');
+  }, [modeAllowed, cancelReconnect, cancelNotice]);
+
+  useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
+    if (!host || !modeAllowed) return;
 
     const term = new XTerm({
       cursorBlink: true,
@@ -383,9 +411,10 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [slug, currentMode, changeFontSize]);
+  }, [slug, currentMode, modeAllowed, changeFontSize]);
 
   useEffect(() => {
+    if (!modeAllowed) return;
     lastErrorRef.current = '';
     setStatus('connecting');
 
@@ -493,10 +522,10 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       const term = termRef.current;
       if (term) term.options.disableStdin = true;
     };
-  }, [slug, currentMode, reconnectNonce, scheduleReconnect, announceNotice, cancelNotice]);
+  }, [slug, currentMode, modeAllowed, reconnectNonce, scheduleReconnect, announceNotice, cancelNotice]);
 
   const sendCommand = useCallback((cmd: string) => {
-    if (!sendStdin(cmd + '\r')) return;
+    if (!modeAllowed || !sendStdin(cmd + '\r')) return;
     const trimmed = cmd.trim();
     if (trimmed) {
       setHistory((prev) => {
@@ -507,22 +536,26 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       });
       setHistoryIdx(-1);
     }
-  }, [slug, currentMode]);
+  }, [slug, currentMode, modeAllowed]);
 
   const quickCmds =
     currentMode === 'project'
       ? ['git status', 'git log --oneline -10', 'npm run build', 'ls -la', 'cat package.json']
       : ['docker ps', `docker logs wsd-${slug} --tail 30`, 'git status', 'df -h', 'free -m'];
 
-  const statusLabel = status === 'ready'
-    ? t('terminal.status.connected')
-    : status === 'connecting'
-      ? t('terminal.status.connecting')
-      : status === 'exited'
-        ? t('terminal.status.exited')
-        : status === 'closed'
-          ? t('terminal.status.closed')
-          : t('terminal.status.error');
+  const statusLabel = denied
+    ? t('terminal.status.readOnly')
+    : status === 'ready'
+      ? t('terminal.status.connected')
+      : status === 'connecting'
+        ? t('terminal.status.connecting')
+        : status === 'exited'
+          ? t('terminal.status.exited')
+          : status === 'closed'
+            ? t('terminal.status.closed')
+            : t('terminal.status.error');
+  const accessTitleKey = currentMode === 'control' ? 'terminal.access.controlTitle' : 'terminal.access.projectTitle';
+  const accessBodyKey = currentMode === 'control' ? 'terminal.access.controlBody' : 'terminal.access.projectBody';
 
   const onTabListKeyDown = (e: KeyboardEvent) => {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -580,11 +613,12 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       {/* ── Header ── */}
       <div class="term-header">
         <div class="term-header-left">
-          <span class={`term-status-dot ${status}`} title={statusLabel} aria-hidden="true" />
+          <span class={`term-status-dot ${denied ? 'read-only' : status}`} title={statusLabel} aria-hidden="true" />
           <div
             class="term-header-live"
             role="status"
             aria-live="polite"
+            aria-hidden={denied ? true : undefined}
             aria-atomic="true"
             style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}
           >
@@ -595,6 +629,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
             <button
               class="term-reconnect-btn"
               onClick={manualReconnect}
+              aria-disabled={denied}
               title={status === 'exited' ? t('terminal.action.startShell') : t('terminal.action.reconnect')}
               aria-label={status === 'exited' ? t('terminal.action.startShell') : t('terminal.action.reconnect')}
             >
@@ -634,7 +669,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
           <div class="term-mode-switch">
             <button
               class={`term-mode-btn ${currentMode === 'project' ? 'active' : ''}`}
-              onClick={() => activeTab && switchTabMode(activeTab.id, 'project')}
+              onClick={() => { activeTab && switchTabMode(activeTab.id, 'project'); }}
               disabled={currentMode !== 'project' && tabs.some((tab) => tab.id !== activeTabId && tab.mode === 'project')}
               title={t('terminal.action.modeProject')}
             >
@@ -642,7 +677,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
             </button>
             <button
               class={`term-mode-btn ${currentMode === 'control' ? 'active' : ''}`}
-              onClick={() => activeTab && switchTabMode(activeTab.id, 'control')}
+              onClick={() => { activeTab && switchTabMode(activeTab.id, 'control'); }}
               disabled={currentMode !== 'control' && tabs.some((tab) => tab.id !== activeTabId && tab.mode === 'control')}
               title={t('terminal.action.modeControl')}
             >
@@ -655,7 +690,7 @@ export function ProjectTerminal({ slug }: { slug: string }) {
       {/* ── Quick commands ── */}
       <div class="term-quick-row">
         {quickCmds.map((c, i) => (
-          <button class="term-quick-btn" key={i} onClick={() => sendCommand(c)}>
+          <button class="term-quick-btn" key={i} aria-disabled={denied} onClick={() => sendCommand(c)}>
             {c}
           </button>
         ))}
@@ -668,8 +703,21 @@ export function ProjectTerminal({ slug }: { slug: string }) {
         role="tabpanel"
         aria-labelledby={`${panelId}-tab-${activeTab.id}`}
         ref={hostRef}
-        onClick={() => termRef.current?.focus()}
-      />
+        onClick={() => { if (!denied) termRef.current?.focus(); }}
+      >
+        {denied && (
+          <div
+            class="term-access-panel"
+            role="status"
+            aria-live="polite"
+            aria-label={t('terminal.access.aria')}
+            data-term-access-denied={currentMode}
+          >
+            <strong>{t(accessTitleKey)}</strong>
+            <p>{t(accessBodyKey)}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
