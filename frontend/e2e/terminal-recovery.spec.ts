@@ -63,7 +63,7 @@ async function openTerminal(page: Page, lang: 'en' | 'ar' = 'en'): Promise<void>
   await page.addInitScript(() => {
     const w = window as any;
     const NativeWS = window.WebSocket;
-    const state = { sockets: [] as string[], current: null as any, autoReady: true };
+    const state: { sockets: string[]; current: any; autoReady: boolean; fireRoomLimit?: () => void; fireClose?: (code: number, reason: string) => void } = { sockets: [] as string[], current: null as any, autoReady: true };
     w.__termRecovery = state;
 
     class FakeTerminalSocket {
@@ -73,7 +73,7 @@ async function openTerminal(page: Page, lang: 'en' | 'ar' = 'en'): Promise<void>
       static CLOSED = NativeWS.CLOSED;
       url: string;
       binaryType = 'arraybuffer';
-      readyState = NativeWS.OPEN;
+      readyState: number = NativeWS.OPEN;
       bufferedAmount = 0;
       extensions = '';
       protocol = '';

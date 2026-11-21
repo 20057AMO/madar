@@ -65,7 +65,7 @@ async function openTerminal(page: Page): Promise<void> {
       static CLOSED = NativeWS.CLOSED;
       url: string;
       binaryType = 'arraybuffer';
-      readyState = NativeWS.OPEN;
+      readyState: number = NativeWS.OPEN;
       bufferedAmount = 0;
       extensions = '';
       protocol = '';

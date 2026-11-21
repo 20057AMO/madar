@@ -90,7 +90,7 @@ async function openArabicTerminal(page: Page): Promise<void> {
   await page.addInitScript(() => localStorage.setItem('wsd.lang', 'ar'));
   await page.addInitScript(() => {
     const NativeWS = window.WebSocket;
-    const state = { current: null as any };
+    const state: { current: any; fireRoomLimit?: () => void } = { current: null as any };
     (window as any).__termBidi = state;
 
     class FakeTerminalSocket {
@@ -100,7 +100,7 @@ async function openArabicTerminal(page: Page): Promise<void> {
       static CLOSED = NativeWS.CLOSED;
       url: string;
       binaryType = 'arraybuffer';
-      readyState = NativeWS.OPEN;
+      readyState: number = NativeWS.OPEN;
       bufferedAmount = 0;
       extensions = '';
       protocol = '';
