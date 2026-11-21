@@ -905,6 +905,8 @@ export const en = {
       containerStopped: 'Project container is not running — start the project, then reconnect.',
       capacity: 'This terminal is already open elsewhere, or the server is at capacity.',
       connectionLost: 'Connection lost ({code}). Reconnect to continue.',
+      roomLimit: 'Too many terminal connections. Close another terminal tab, then reconnect.',
+      socketError: 'Terminal connection error.',
       terminalError: 'Terminal error',
     },
     hub: {

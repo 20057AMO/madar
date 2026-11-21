@@ -780,6 +780,7 @@ input.detail-title {
 .term-status-dot.connecting { background: #d29922; animation: term-pulse 1.2s ease-in-out infinite; }
 .term-status-dot.closed { background: var(--text-3); }
 .term-status-dot.error { background: var(--red); box-shadow: 0 0 6px rgba(248,81,73,0.4); }
+.term-status-dot.exited { box-sizing: border-box; background: transparent; border: 2px solid var(--text-2); box-shadow: none; }
 .term-header-label { color: var(--text-3); white-space: nowrap; }
 .term-close-notice {
   min-width: 0;

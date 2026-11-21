@@ -50,6 +50,7 @@ const TERMINAL_CLOSE = {
   capacity: 4503,
   internal: 4500,
   accessDenied: 1008,
+  roomLimit: 1013,
 } as const;
 
 interface Tab {
@@ -417,6 +418,8 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     if (!modeAllowed) return;
     lastErrorRef.current = '';
     setStatus('connecting');
+    setCloseNotice('');
+    setWorkPath('');
 
     let disposed = false;
     const url = wsUrl(`/ws/projects/${encodeURIComponent(slug)}/terminal?mode=${currentMode}`);
@@ -451,6 +454,13 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
         term?.write(`\r\n\x1b[1;33m${notice}\x1b[0m\r\n`);
         return;
       }
+      if (ev.code === TERMINAL_CLOSE.roomLimit) {
+        cancelReconnect();
+        setStatus('error');
+        announceNotice(t('terminal.notice.roomLimit'));
+        term?.write('\r\n\x1b[1;33m' + t('terminal.notice.roomLimit') + '\x1b[0m\r\n');
+        return;
+      }
       if (stop) {
         const notice = lastErrorRef.current || ev.reason || stop;
         setStatus(lastErrorRef.current ? 'error' : 'closed');
@@ -472,7 +482,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     };
     ws.onerror = () => {
       if (disposed) return;
-      setStatus('error');
+      if (!lastErrorRef.current) lastErrorRef.current = t('terminal.notice.socketError');
       const term = termRef.current;
       if (term) term.options.disableStdin = true;
     };
@@ -484,6 +494,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
           const msg = JSON.parse(ev.data);
           if (msg.type === 'ready') {
             reconnectAttemptRef.current = 0;
+            lastErrorRef.current = '';
             cancelNotice();
             setStatus('ready');
             setCloseNotice('');
