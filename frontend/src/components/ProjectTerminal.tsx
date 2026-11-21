@@ -98,6 +98,41 @@ function saveHistory(slug: string, mode: TermMode, hist: string[]): void {
 
 let tabSeq = 0;
 
+interface TabsState { tabs: Tab[]; activeId: string; }
+interface TabsDecision extends TabsState { focusId: string | null; }
+type TabsAction =
+  | { type: 'add'; tab: Tab }
+  | { type: 'close'; id: string; firstLabel: string }
+  | { type: 'switch-mode'; id: string; mode: TermMode }
+  | { type: 'select'; id: string };
+
+function tabsReducer(prev: TabsState, action: TabsAction): TabsDecision {
+  switch (action.type) {
+    case 'add':
+      return { tabs: [...prev.tabs, action.tab], activeId: action.tab.id, focusId: null };
+    case 'close': {
+      const remaining = prev.tabs.filter((tab) => tab.id !== action.id);
+      if (remaining.length === 0) {
+        const id = `t-${Date.now()}-${++tabSeq}`;
+        return { tabs: [{ id, label: action.firstLabel, mode: 'project' }], activeId: id, focusId: id };
+      }
+      const activeId = action.id === prev.activeId ? remaining[remaining.length - 1].id : prev.activeId;
+      return { tabs: remaining, activeId, focusId: activeId };
+    }
+    case 'switch-mode':
+      if (prev.tabs.some((tab) => tab.id !== action.id && tab.mode === action.mode)) {
+        return { ...prev, focusId: null };
+      }
+      return {
+        ...prev,
+        tabs: prev.tabs.map((tab) => (tab.id === action.id ? { ...tab, mode: action.mode } : tab)),
+        focusId: null,
+      };
+    case 'select':
+      return { tabs: prev.tabs, activeId: action.id, focusId: null };
+  }
+}
+
 export function ProjectTerminal({ slug, project }: { slug: string; project: Project | null }) {
   const { t } = useI18n();
   const { user } = useAuth();
@@ -128,10 +163,13 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     try { return clampFontSize(localStorage.getItem('wsd.term.fontSize')); }
     catch { return DEFAULT_FONT_SIZE; }
   });
-  const [tabs, setTabs] = useState<Tab[]>(() => [
-    { id: `t-${Date.now()}-${++tabSeq}`, label: t('terminal.tabs.first'), mode: 'project' },
-  ]);
-  const [activeTabId, setActiveTabId] = useState<string>(tabs[0]?.id || '');
+  const [tabState, setTabState] = useState<TabsState>(() => {
+    const first: Tab = { id: `t-${Date.now()}-${++tabSeq}`, label: t('terminal.tabs.first'), mode: 'project' };
+    return { tabs: [first], activeId: first.id };
+  });
+  const tabs = tabState.tabs;
+  const activeTabId = tabState.activeId;
+  const tabsStateRef = useRef<TabsState>(tabState);
   const [history, setHistory] = useState<string[]>(() => loadHistory(slug, 'project'));
   const [historyIdx, setHistoryIdx] = useState(-1);
   const historyRef = useRef<string[]>(history);
@@ -142,6 +180,14 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
   const a11yToggleRef = useRef<HTMLButtonElement | null>(null);
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const pendingFocusRef = useRef<string | null>(null);
+  const dispatchTabs = useCallback((action: TabsAction) => {
+    const prev = tabsStateRef.current;
+    const next = tabsReducer(prev, action);
+    if (next.tabs === prev.tabs && next.activeId === prev.activeId) return;
+    tabsStateRef.current = { tabs: next.tabs, activeId: next.activeId };
+    if (next.focusId) pendingFocusRef.current = next.focusId;
+    setTabState(tabsStateRef.current);
+  }, []);
   const panelId = useId();
 
   useEffect(() => { historyRef.current = history; }, [history]);
@@ -216,31 +262,16 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     if (!newMode) return;
     const id = `t-${Date.now()}-${++tabSeq}`;
     const newTab: Tab = { id, label: newMode === 'project' ? t('terminal.tabs.project') : t('terminal.tabs.control'), mode: newMode };
-    setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(id);
-  }, [allowedModes, tabs, t]);
+    dispatchTabs({ type: 'add', tab: newTab });
+  }, [allowedModes, tabs, t, dispatchTabs]);
 
   const closeTab = useCallback((id: string) => {
-    const remaining = tabs.filter((tab) => tab.id !== id);
-    let nextActiveId = activeTabId;
-    if (remaining.length === 0) {
-      nextActiveId = `t-${Date.now()}-${++tabSeq}`;
-      remaining.push({ id: nextActiveId, label: t('terminal.tabs.first'), mode: 'project' });
-    } else if (id === activeTabId) {
-      nextActiveId = remaining[remaining.length - 1].id;
-    }
-    pendingFocusRef.current = nextActiveId;
-    setTabs(remaining);
-    setActiveTabId(nextActiveId);
-  }, [activeTabId, tabs, t]);
+    dispatchTabs({ type: 'close', id, firstLabel: t('terminal.tabs.first') });
+  }, [dispatchTabs, t]);
 
   const switchTabMode = useCallback((id: string, newMode: TermMode) => {
-    setTabs((prev) => {
-      const otherUsesMode = prev.some((t) => t.id !== id && t.mode === newMode);
-      if (otherUsesMode) return prev;
-      return prev.map((t) => (t.id === id ? { ...t, mode: newMode } : t));
-    });
-  }, []);
+    dispatchTabs({ type: 'switch-mode', id, mode: newMode });
+  }, [dispatchTabs]);
 
   useEffect(() => {
     setHistory(loadHistory(slug, currentMode));
@@ -601,7 +632,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
   const onTabListKeyDown = (e: KeyboardEvent) => {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
     if (!keys.includes(e.key)) return;
-    const list = tabs.map((t) => t.id);
+    const list = tabsStateRef.current.tabs.map((tab) => tab.id);
     if (list.length === 0) return;
     let idx = list.indexOf(activeTabId);
     if (e.key === 'ArrowRight') idx = (idx + 1) % list.length;
@@ -610,7 +641,7 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
     else if (e.key === 'End') idx = list.length - 1;
     e.preventDefault();
     const nextId = list[idx];
-    setActiveTabId(nextId);
+    dispatchTabs({ type: 'select', id: nextId });
     const bar = e.currentTarget as HTMLElement;
     bar.querySelector<HTMLElement>(`[data-term-tab="${nextId}"]`)?.focus();
   };
@@ -630,11 +661,11 @@ export function ProjectTerminal({ slug, project }: { slug: string; project: Proj
               aria-controls={panelId}
               tabIndex={tab.id === activeTabId ? 0 : -1}
               class={`term-tab ${tab.id === activeTabId ? 'active' : ''}`}
-              onClick={() => setActiveTabId(tab.id)}
+              onClick={() => dispatchTabs({ type: 'select', id: tab.id })}
               onKeyDown={(e: KeyboardEvent) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  setActiveTabId(tab.id);
+                  dispatchTabs({ type: 'select', id: tab.id });
                 }
               }}
             >

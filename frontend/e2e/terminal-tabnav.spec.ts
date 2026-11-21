@@ -216,3 +216,26 @@ test('focus restoration leaves the roving tabindex intact and arrow navigation w
   expect(afterArrow.tabIndexes[afterArrow.ids.indexOf(previousId)]).toBe(0);
   expect(afterArrow.tabIndexes.filter((index) => index === 0)).toHaveLength(1);
 });
+
+test('two close-tab clicks in one batch leave only the survivor and keep focus', async ({ page }) => {
+  await openTerminal(page);
+  const before = await addThreeTabs(page);
+  const [keepId, firstCloseId, secondCloseId] = before.ids;
+
+  await page.locator(`[data-term-tab="${keepId}"]`).click();
+  await expect.poll(() => page.evaluate((id) =>
+    document.querySelector(`[data-term-tab="${id}"]`)?.getAttribute('aria-selected'), keepId)).toBe('true');
+
+  await page.evaluate(({ first, second }) => {
+    document.querySelector<HTMLElement>(`[data-term-tab-close="${first}"]`)?.click();
+    document.querySelector<HTMLElement>(`[data-term-tab-close="${second}"]`)?.click();
+  }, { first: firstCloseId, second: secondCloseId });
+
+  await expect.poll(() => page.locator('[data-term-tab]').count()).toBe(1);
+  const after = await readTabState(page);
+  expect(after.ids).toEqual([keepId]);
+  expect(after.active).toBe(keepId);
+  expect(after.focusTab).toBe(keepId);
+  expect(after.focusClose).toBeNull();
+  expect(await page.locator('[data-term-tab-close]').count()).toBe(0);
+});
