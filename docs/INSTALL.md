@@ -1,22 +1,62 @@
 # دليل التثبيت — Madar v2 (Beta)
 
-تطبيق `docker compose` بسيط، بدون دومين وبدون SSL. كل المطلوب: محرك Docker مع إضافة Compose.
+تطبيق `docker compose` بسيط، يعمل محليًا بلا دومين أو SSL إلزامي. كل المطلوب: محرك Docker مع إضافة Compose. وفي أي نشر خارج جهازك، أنهِ TLS أمام `3000` و`4097` معًا ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment)).
 
 ## المتطلبات
 
 - Docker Engine 24+ أو Docker Desktop (بمحرك WSL2 على ويندوز) مع `compose` plugin
-- منافذ حرة: `3000` للوحة التحكم، `4097` للوكيل المصادَق الخاص بـVS Code وOpenCode. لم تعد `8100`/`4096` منشورة. كلاهما يُنشر على `0.0.0.0` — في أي نشر خارج جهازك، أنهِ TLS أمامهما معًا ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment))
+- أدوات سطر الأوامر: `git` و`docker` و`curl` و`awk` و`grep` و`cut` و`tr`
+- systemd حقيقي كعملية رقم 1 لتثبيت وحدة الإقلاع؛ على WSL2 فعّل systemd أو مرّر `--no-systemd` لتشغيل Madar الآن دون وحدة إقلاع
+- منافذ حرة: `3000` للوحة التحكم، و`4097` افتراضيًا للوكيل المصادَق الخاص بـVS Code وOpenCode (أو قيمة `WSD_EMBED_PROXY_PORT` من `.env`). لم تعد `8100`/`4096` منشورة. كلاهما يُنشر على `0.0.0.0` — في أي نشر خارج جهازك، أنهِ TLS أمامهما معًا ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment))
 - مفتاح Ollama Cloud مجاني من https://ollama.com/settings/keys — *اختياري*، يمكن أيضًا استخدام Ollama محلي أو أي مزوّد آخر من واجهة التطبيق
 - مفتاح OpenCode Zen مجاني من https://opencode.ai/auth (دخول GitHub، **بدون بطاقة ائتمان**) — *اختياري*، لنماذج Zen المجانية
 
 > لا يحتاج جهازك Node.js أو أي أدوات تطوير — كل شيء يُبنى داخل Docker.
 
-## خطوات التثبيت
+## التثبيت بالسكربت — Recommended
+
+```bash
+git clone https://github.com/20057AMO/madar.git madar && cd madar
+bash scripts/install.sh
+```
+
+السكربت هو الطريق الموصى به على Linux وWSL2 مع Docker Engine 24+ و`compose` v2. يتحقق من `git` و`docker` و`docker compose` و`curl` و`awk` و`grep` و`cut` و`tr`، ومن حرية المنفذين `3000` وقيمة `WSD_EMBED_PROXY_PORT` الفعّالية من `.env` (الافتراضي `4097`) باستخدام `ss` أو `lsof`؛ وينبهك بوضوح إن لم يتوفرا. إذا كانت حاويات Madar تعمل بالفعل يتخطى فحص المنافذ ويخبرك بذلك صراحة. لا يحتاج جهازك Node.js: كل البناء يحدث داخل Docker.
+
+الخيارات:
+
+| الخيار | الوصف |
+| --- | --- |
+| `--dir PATH` | مسار التثبيت؛ الافتراضي `$MADAR_DIR` أو مجلد المستودع الذي يسكنه السكربت (والد `scripts/`)، مع الرجوع إلى `$PWD` فقط إن كان مستودع Madار |
+| `--branch NAME` | الفرع عند استنساخ مستودع `20057AMO/madar`؛ الافتراضي `main` |
+| `--no-systemd` | تخطي تثبيت وحدة systemd (تشغيل Madar الآن دون إقلاع تلقائي) |
+| `--help` | عرض المساعدة |
+
+سلوك السكربت:
+
+- إن كان المجلد موجودًا، يتحقق أنه نسخة Git من `20057AMO/madar` بمقارنة أصل المستودع بعد تطبيعه (`.git`، الشرطة المائلة الأخيرة، `git@github.com:`، `https://github.com/`، `http://github.com/`) ويرفض أي تعديلات محلية **قبل أي أمر Compose**، ثم ينفّذ `git pull --ff-only`. أعد تشغيل نفس الأمر لتحديث آمن: سحب `--ff-only` ثم إعادة بناء وفحص صحة وتحديث وحدة systemd. لا يُطبع رابط الأصل الخام عند الرفض.
+- يثبّت وحدة الإقلاع فقط إن كان systemd هو العملية رقم 1 فعليًا (`/run/systemd/system`)؛ وإلا يحذّر بالعربية ويتخطى تركيب الوحدة دون إكمال تثبيت ناقص. على WSL2 فعّل systemd أو مرّر `--no-systemd`.
+- يُسمح بتثبيت Madar واحد فقط على كل مضيف: قبل أي Compose يرفض السكربت وحدة `madar.service` موجودة بـ `WorkingDirectory` مفقود أو مختلف عن مسار التثبيت الحالي.
+- ينشئ `.env` من `.env.example` مرة واحدة فقط بصلاحيات مقيّدة (`umask 077`) إن لم يكن موجودًا، ويشترط أن يكون ملفًا عاديًا لا مجلدًا. لا يعيد كتابته، لا يطبع محتواه، ولا يضبط `JWT_SECRET`.
+- ينفّذ `docker compose up -d --build`، ثم ينتظر استجابة `{"status":"ok"}` من `http://localhost:3000/api/health` حتى 120 ثانية، مع ضبط مهلة `curl` على الوقت المتبقي من الحد الأقصى قبل كل محاولة. عند الفشل يطبع أمر `docker compose logs --tail=100 app`.
+- يثبّت `packaging/systemd/madar.service` بعد استبدال `@MADAR_DIR@` حرفيًا بمسار التثبيت المطلق. بصلاحيات root يثبّت الوحدة بالصلاحية `0644` ويفعّلها مباشرة؛ وإلا يطبع أمر `sudo install … && sudo systemctl daemon-reload && sudo systemctl enable --now madar.service` جاهزًا للتنفيذ. الوحدة لا تحتوي `Restart=`, وتعمل بصلاحيات root مع `NoNewPrivileges=true`؛ لذا يجب أن تكون نسخة Madar مملوكة لـ root ومحمية من تعديل المستخدمين العاديين، بلا ملفات env أو أسرار داخلها. إعادة تشغيل الوحدة تعيد `docker compose up -d` فقط؛ تحديث الكود يتم بإعادة تشغيل سكربت التثبيت.
+
+لإلغاء التثبيت:
+
+```bash
+bash scripts/uninstall.sh              # يوقف الحاويات ويحتفظ بالبيانات
+bash scripts/uninstall.sh --remove-data # docker compose down -v بعد تأكيد تفاعلي — تدميري
+```
+
+ينفّذ uninstall `docker compose down` (أو `down -v` بعد التأكيد) ثم يحاول إيقاف الوحدة وتعطيلها وإزالتها بأفضل جهد. مع `--remove-data` يطلب كتابة `yes` صراحة في أعلى السكربت قبل أي فحص systemd أو Compose أو حذف؛ وإن لم تتم الموافقة أو كانت غير تفاعلية، يلغي فورًا؛ لم يُحذف أي شيء، ولا تلمس الوحدة. عند النجاح يحذف `docker compose down -v` volumes `wsd-data` و`code-server-*` نهائيًا. لا يحذف السكربت مجلد `workspaces/` ولا نسخة المشروع أبدًا، ويطبع مسار مساحة العمل عند الانتهاء. الوحدة تُحذف فقط إن كان `WorkingDirectory` الخاص بها مساويًا لمسار التثبيت المطلوب؛ وإن كانت تشير إلى تثبيت آخر يرفض السكربت الإلغاء حمايةً للتثبيت الآخر.
+
+> خارج جهازك المحلي: المنفذان `3000` و`4097` يُنشران على `0.0.0.0`، ويجب إنهاء TLS أمامهما **معًا** قبل مشاركة العنوان ([التفاصيل](#الأمان-في-النشر--security-in-production-deployment)). السكربت لا يفعّل `WSD_TRUST_PROXY` ولا يفتح المنافذ الخام `8100`/`4096`.
+
+## التثبيت اليدوي — Manual
 
 ### 1) انسخ المشروع
 
 ```bash
-git clone <repo-url> madar
+git clone https://github.com/20057AMO/madar.git madar
 cd madar
 ```
 
@@ -58,6 +98,22 @@ docker compose up -d --build
 في أول زيارة ستظهر شاشة **إنشاء الحساب** (اسم مستخدم + كلمة مرور). هذا الحساب الوحيد في النظام — وكلمة المرور نفسها هي التي تحمي إدارة المزوّدين والعمليات الحساسة (مع تأكيد هويته عند كل عملية حساسة).
 
 بعدها أضف مزوّدًا واحدًا على الأقل من صفحة **Providers**، ثم أنشئ أول مشروع من صفحة **Projects**.
+
+## التشغيل التلقائي عند الإقلاع — systemd
+
+القالب `packaging/systemd/madar.service` يستخدم `Type=oneshot` مع `RemainAfterExit=yes`، ويعمل داخل `WorkingDirectory=@MADAR_DIR@` بعد استبدال المتغيّر بمسار التثبيت المطلق عبر `scripts/install.sh`. الوحدة تشغّل `docker compose up -d` و`docker compose down` فقط؛ لا تحتاج Node.js على المضيف ولا تلمس ملفات التطبيق.
+
+بصلاحيات root يثبّت السكربت الوحدة في `/etc/systemd/system/madar.service` بالصلاحية `0644`، ثم ينفّذ `daemon-reload` و`enable --now`، مع حذف الملف المؤقت عبر `trap` عند الخروج. إذا شغّلت السكربت كمستخدم عادي، انسخ أمر `sudo` الذي يطبعُه؛ سيشير إلى ملف في `XDG_RUNTIME_DIR` (أو `TMPDIR`/`/tmp`) يحتوي المسار فقط، بلا أي سر، ويظل حتى تنفّذ الأمر. الوحدة تعمل بصلاحيات root وتستخدم `NoNewPrivileges=true`؛ اجعل نسخة Madار مملوكة لـ root ومحمية من المستخدمين العاديين ولا تضف ملفات env أو أسرارًا. وحدة واحدة تكفي لتشغيل تثبيت Madar على نفس المضيف: يرفض السكربت أي وحدة بـ `WorkingDirectory` مختلف أو مفقود. لتخصيص مسار مختلف استخدم `--dir PATH` بعد إلغاء التثبيت السابق.
+
+أوامر مفيدة:
+
+```bash
+sudo systemctl status madar.service
+sudo systemctl restart madar.service   # يعيد docker compose up -d فقط، لا يسحب كودًا جديدًا
+sudo journalctl -u madar.service -n 100
+```
+
+عند نقل التثبيت، ألغِ التثبيت السابق بـ `bash scripts/uninstall.sh --dir OLD_PATH` ثم شغّل `bash scripts/install.sh --dir NEW_PATH`.
 
 ## الأمان في النشر — Security in production deployment
 

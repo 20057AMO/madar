@@ -59,7 +59,7 @@ cd backend && node --test --test-concurrency=1 tests/project-canvas.test.ts
 ### متطلبات دقيقة
 
 - Docker Desktop (WSL2 backend على Windows) مع `docker compose` v2.
-- منفذ 3000 حرًا ومرتبطًا بالحاوية (إعداد compose الافتراضي) ومنفذ 8100 للـ IDE المدمج.
+- منفذ 3000 حرًا ومرتبطًا بالحاوية (إعداد compose الافتراضي) ومنفذ 4097 لوكيل VS Code/OpenCode المصادَق؛ لا توجد منافذ خام 8100/4096، والأسطح المدمجة تُوصَل عبر الوكيل فقط.
 - ملف `.env` في جذر المستودع يحوي `JWT_SECRET` و `WSD_WORKSPACES_HOST_DIR` — نفس متطلبات تشغيل الخادم.
 - الوصول من الحاوية إلى `host.docker.internal` (يوفره `extra_hosts` في compose). فشل شبكي عابر هنا يظهر مرة كل فترة — أعد المحاولة مرة واحدة قبل البحث عن مشكلة حقيقية.
 

@@ -25,9 +25,9 @@
 
 كل مشروع يحصل على حاوية Docker مستقلة مع محرر VS Code مدمج، وطرفية، ودردشة AI تفهم بنية المشروع بالكامل، لوحة تخطيط بصرية، إدارة فريق، وتخزين آمن — كل ذلك من لوحة تحكم ويب واحدة.
 
-**لا يحتاج Domain ولا SSL ولا خدمات سحابية** — يُشغّل محليًا أو على خادم خاص.
+**لا يحتاج دومين أو SSL للاستخدام المحلي فقط**؛ خارج الجهاز TLS إلزامي أمام 3000 و4097 معًا (راجع docs/INSTALL.md)
 
-> **Madar** is a self-hosted, all-in-one workspace platform for development teams. Every project gets its own isolated Docker container, browser IDE, terminal, AI chat with full codebase context, visual planning canvas, team collaboration, and secure storage — all driven from a single web dashboard. No domain, SSL, or cloud dependency required.
+> **Madar** is a self-hosted, all-in-one workspace platform for development teams. Every project gets its own isolated Docker container, browser IDE, terminal, AI chat with full codebase context, visual planning canvas, team collaboration, and secure storage — all driven from a single web dashboard. No domain, SSL, or cloud dependency for local use only; outside the host, TLS is mandatory in front of both `3000` and `4097` (see [docs/INSTALL.md](docs/INSTALL.md)).
 
 ---
 
@@ -39,11 +39,31 @@
 | منافذ حرة | `3000` (اللوحة + الوكلاء المصادَقون، كل الواجهات)، `4097` (وكيل VS Code/OpenCode المصادَق). لم تعد `8100`/`4096` منشورة إطلاقًا. كلاهما على `0.0.0.0` — أنهِ TLS أمامهما في أي نشر خارج جهازك ([docs/INSTALL.md](docs/INSTALL.md)) |
 | مساحة قرص | ~4 GB على الأقل للصور والمشاريع |
 
+أدوات سطر الأوامر: git وcurl وawk وgrep وcut وtr، وsystemd حقيقي كـ PID 1 إلا مع --no-systemd (WSL2 يحتاج تفعيل systemd) — [docs/INSTALL.md](docs/INSTALL.md).
+
 > لا يحتاج جهازك Node.js أو أي أدوات تطوير — كل شيء يُبنى داخل Docker.
 
 ---
 
 ## التثبيت والتشغيل — Installation
+
+### الطريقة الموصى بها — سكربت التثبيت
+
+```bash
+git clone https://github.com/20057AMO/madar.git madar && cd madar && bash scripts/install.sh
+```
+
+يتحقق السكربت من المتطلبات والمنافذ `3000` و`4097`، وينسخ `.env.example` إلى `.env` مرة واحدة فقط دون لمس `JWT_SECRET`، ثم يبني الحاويات وينتظر فحص الصحة. لا يحتاج جهازك Node.js — كل شيء يُبنى داخل Docker. أعد تشغيل نفس الأمر لاحقًا لتحديث آمن: سحب `--ff-only` ثم إعادة بناء وفحص صحة وتحديث وحدة systemd، ورفض واضح لأي نسخة تحتوي تغييرات محلية.
+
+السكربت يثبّت وحدة الإقلاع فقط عندما يكون systemd هو العملية رقم 1 فعليًا؛ على WSL2 فعّل systemd أو استخدم `--no-systemd`، وسيُشغَّل Madar الآن دون وحدة إقلاع. يُسمح بتثبيت Madar واحد فقط على كل مضيف: الوحدة مرتبطة بمسار تثبيت واحد عبر `WorkingDirectory`، ويرفض السكربت أي وحدة تشير إلى مسار آخر.
+
+بصلاحيات root يثبّت السكربت الوحدة ويفعّلها؛ وإلا يطبع أمر `sudo` جاهزًا لتفعيل التشغيل التلقائي عند الإقلاع. الوحدة تعمل بصلاحيات root وتستخدم `NoNewPrivileges=true`، لذا يجب أن تكون نسخة Madar مملوكة لـ root ومحمية من تعديل المستخدمين العاديين؛ لا تضف إليها ملفات env أو أسرارًا. استخدم `--no-systemd` لتخطي تثبيت الوحدة، و`--dir PATH` و`--branch NAME` لتخصيص مسار التثبيت والفرع. إعادة تشغيل الوحدة تعيد `docker compose up -d` فقط؛ systemd لا يسحب كودًا جديدًا؛ تحديث الكود يتم بإعادة تشغيل سكربت التثبيت، لا بإعادة تشغيل systemd.
+
+لإلغاء التثبيت: `bash scripts/uninstall.sh` (يوقف الحاويات مع الاحتفاظ بالبيانات). إضافة `--remove-data` تنفّذ `docker compose down -v` بعد تأكيد تفاعلي لحذف volumes الإعدادات والجلسات — وهذا **تدميري**. مجلد `workspaces/` ونسخة المشروع لا يُحذفان أبدًا.
+
+> خارج جهازك المحلي: المنفذان `3000` و`4097` يُنشران على `0.0.0.0`، ويجب إنهاء TLS أمامهما **معًا** ([التفاصيل](docs/INSTALL.md)).
+
+### التثبيت اليدوي — Manual
 
 ```bash
 # 1. انسخ المشروع
