@@ -155,7 +155,7 @@ describe('resolveJwtSecret (what the app does at boot)', () => {
     // verifier kept the old literal (or vice versa) would fail exactly here.
     assert.deepStrictEqual(
       store.verifyToken(forge(resolvedSecret, { jti: 'suite' })),
-      { id: ADMIN.id, username: ADMIN.username, role: 'admin', jti: 'suite' },
+      { id: ADMIN.id, username: ADMIN.username, role: 'admin', permissions: { projectWrite: false, projectTeam: false }, jti: 'suite' },
     );
     const unlock = jwt.sign({ scope: 'providers', pv: 0, sid: 's' }, resolvedSecret, { expiresIn: '30m' });
     assert.strictEqual((jwt.verify(unlock, jwtSecretValue()) as jwt.JwtPayload).scope, 'providers');
