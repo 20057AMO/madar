@@ -27,6 +27,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import bcrypt from 'bcryptjs';
 import { register } from 'node:module';
 
 register(new URL('./ts-ext-resolve.mjs', import.meta.url).href);
@@ -37,6 +38,20 @@ process.env.WSD_DATA_DIR = dataDir;
 process.env.WSD_PROJECTS_DIR = workspacesDir;
 fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
 fs.mkdirSync(workspacesDir, { recursive: true });
+
+const OUTSIDER = { id: 'u-outsider', username: 'outsider', role: 'viewer' as const };
+
+const passwordHash = bcrypt.hashSync('ws-scope-suite-pw', 10);
+fs.writeFileSync(
+  path.join(dataDir, 'users.json'),
+  JSON.stringify({
+    users: [
+      { ...OUTSIDER, passwordHash, createdAt: '2026-01-01T00:00:00.000Z', tokenVersion: 0 },
+      { id: 'u-member', username: 'member', role: 'viewer', passwordHash, createdAt: '2026-01-01T00:00:00.000Z', tokenVersion: 0 },
+      { id: 'u-dotted-owner', username: 'dotted-owner', role: 'admin', passwordHash, createdAt: '2026-01-01T00:00:00.000Z', tokenVersion: 0 },
+    ],
+  }, null, 2),
+);
 
 const store = await import('../src/services/projects-meta.ts');
 const agentStore = await import('../src/services/agent-store.ts');
@@ -70,8 +85,6 @@ function fakeSocket() {
 
 /** Let the handler's async body run — it yields before it answers. */
 const settle = () => new Promise((r) => setTimeout(r, 40));
-
-const OUTSIDER = { id: 'u-outsider', username: 'outsider', role: 'viewer' as const };
 
 describe('ws-chat — a per-message project scope needs its own gate', () => {
   // Another team's project, with real content: if the scope were honoured without
@@ -127,8 +140,12 @@ describe('ws-chat — a per-message project scope needs its own gate', () => {
     ws.deliver({ type: 'prompt', text: 'hi', project: 'mine' });
     await settle();
     assert.ok(
-      !ws.frames.some((f) => f.type === 'error' && f.message === 'Project access denied'),
-      `a member must not be refused: ${JSON.stringify(ws.frames)}`,
+      ws.frames.some((f) => f.type === 'started'),
+      `a member must be admitted: ${JSON.stringify(ws.frames)}`,
+    );
+    assert.ok(
+      ws.frames.some((f) => f.type === 'event' && f.event?.type === 'user_message' && f.event?.content === 'hi'),
+      `the admitted prompt must be recorded: ${JSON.stringify(ws.frames)}`,
     );
   });
 });
