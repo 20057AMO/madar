@@ -25,9 +25,9 @@
 
 كل مشروع يحصل على حاوية Docker مستقلة مع محرر VS Code مدمج، وطرفية، ودردشة AI تفهم بنية المشروع بالكامل، لوحة تخطيط بصرية، إدارة فريق، وتخزين آمن — كل ذلك من لوحة تحكم ويب واحدة.
 
-**لا يحتاج دومين أو SSL للاستخدام المحلي فقط**؛ خارج الجهاز TLS إلزامي أمام 3000 و4097 معًا (راجع docs/INSTALL.md)
+**لا يحتاج دومين أو SSL للاستخدام المحلي فقط**؛ خارج الجهاز تُنشر **نسخة تطبيق واحدة** أمامها nginx مع TLS على `80`/`443`/`4097`، وتُربط `3000`/`4097` على `127.0.0.1` (راجع [docs/INSTALL.md](docs/INSTALL.md#الأمان-في-النشر--security-in-production-deployment)).
 
-> **Madar** is a self-hosted, all-in-one workspace platform for development teams. Every project gets its own isolated Docker container, browser IDE, terminal, AI chat with full codebase context, visual planning canvas, team collaboration, and secure storage — all driven from a single web dashboard. No domain, SSL, or cloud dependency for local use only; outside the host, TLS is mandatory in front of both `3000` and `4097` (see [docs/INSTALL.md](docs/INSTALL.md)).
+> **Madar** is a self-hosted, all-in-one workspace platform for development teams. Every project gets its own isolated Docker container, browser IDE, terminal, AI chat with full codebase context, visual planning canvas, team collaboration, and secure storage — all driven from a single web dashboard. No domain, SSL, or cloud dependency for local use only; outside the host, run a **single app instance** behind nginx/TLS on `80`/`443`/`4097`, with `3000`/`4097` bound to `127.0.0.1` (see [docs/INSTALL.md](docs/INSTALL.md#الأمان-في-النشر--security-in-production-deployment)).
 
 ---
 
@@ -36,7 +36,7 @@
 | المتغير | القيمة |
 |---------|--------|
 | Docker Engine 24+ أو Docker Desktop | مع إضافة `compose` v2. على Windows استخدم WSL2 backend |
-| منافذ حرة | `3000` (اللوحة + الوكلاء المصادَقون، كل الواجهات)، `4097` (وكيل VS Code/OpenCode المصادَق). لم تعد `8100`/`4096` منشورة إطلاقًا. كلاهما على `0.0.0.0` — أنهِ TLS أمامهما في أي نشر خارج جهازك ([docs/INSTALL.md](docs/INSTALL.md)) |
+| منافذ حرة | محليًا: `3000` (اللوحة + الوكلاء المصادَقون) و`4097` (وكيل VS Code/OpenCode المصادَق). خارج الجهاز: `80`/`443`/`4097` على nginx مع TLS، وتُربط `3000`/`4097` على `127.0.0.1` بواسطة ملف compose للإنتاج. لم تعد `8100`/`4096` منشورة إطلاقًا ([docs/INSTALL.md](docs/INSTALL.md)) |
 | مساحة قرص | ~4 GB على الأقل للصور والمشاريع |
 
 أدوات سطر الأوامر: git وcurl وawk وgrep وcut وtr، وsystemd حقيقي كـ PID 1 إلا مع --no-systemd (WSL2 يحتاج تفعيل systemd) — [docs/INSTALL.md](docs/INSTALL.md).
@@ -61,7 +61,7 @@ git clone https://github.com/20057AMO/madar.git madar && cd madar && bash script
 
 لإلغاء التثبيت: `bash scripts/uninstall.sh` (يوقف الحاويات مع الاحتفاظ بالبيانات). إضافة `--remove-data` تنفّذ `docker compose down -v` بعد تأكيد تفاعلي لحذف volumes الإعدادات والجلسات — وهذا **تدميري**. مجلد `workspaces/` ونسخة المشروع لا يُحذفان أبدًا.
 
-> خارج جهازك المحلي: المنفذان `3000` و`4097` يُنشران على `0.0.0.0`، ويجب إنهاء TLS أمامهما **معًا** ([التفاصيل](docs/INSTALL.md)).
+> خارج جهازك المحلي: شغّل نسخة تطبيق واحدة خلف nginx/TLS. يوفّر nginx المنافذ `80`/`443`/`4097`، بينما يقَيّد `docker-compose.prod-tls.yml` وصول الحاوية إلى `127.0.0.1:3000` و`127.0.0.1:4097`. لا تكشف `3000`/`4097` مباشرة، ولا تدمج `WSD_TRUST_PROXY=1` مع compose الأساسي ([التفاصيل](docs/INSTALL.md#الأمان-في-النشر--security-in-production-deployment)).
 
 ### التثبيت اليدوي — Manual
 
@@ -87,7 +87,7 @@ docker compose up -d --build
 |---------|--------|-------|
 | `JWT_SECRET` | اختياري | سر توقيع رموز JWT. **بلاه**: إن تركته فارغًا يولّد التطبيق سرًا عشوائيًا ويحفظه في `data/jwt.secret` داخل volume البيانات (0600) — الجلسات غير قابلة للتزوير وتصمد أمام إعادة التشغيل. ضعه فقط للتحكم/التدوير. قيمة فارغة أو معروفة/قصيرة تُرفض ولا تُصلَح |
 | `WSD_WORKSPACES_HOST_DIR` | اختياري | يُشتقّ تلقائيًا من `mountinfo`؛ اضبطه لمشاركة UNC أو WSL |
-| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | واجهة نشر **الوكيل المصادَق** لـVS Code وOpenCode — الافتراضي `0.0.0.0` (يصل للفريق على الشبكة بعد التحقق من الجلسة). لا تُنشر المنافذ الخام `8100`/`4096` إطلاقًا؛ الخدمتان مربوطتان على `127.0.0.1` داخل الحاوية |
+| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | واجهة نشر **الوكيل المصادَق** لـVS Code وOpenCode. الافتراضي في compose الأساسي `0.0.0.0` للاستخدام المحلي/الموثوق فقط؛ في الإنتاج يعيّن `docker-compose.prod-tls.yml` القيمة `127.0.0.1`. لا تُنشر المنافذ الخام `8100`/`4096` إطلاقًا؛ الخدمتان مربوطتان على `127.0.0.1` داخل الحاوية |
 | `WSD_EMBED_PROXY_PORT` | اختياري | منفذ وكيل الأسطح المدمجة المصادَق — الافتراضي `4097` |
 | `OLLAMA_API_KEY` | اختياري | مفتاح Ollama Cloud |
 | `OPENCODE_API_KEY` | اختياري | مفتاح OpenCode Zen |
@@ -145,7 +145,7 @@ code-server مدمج في واجهة الويب، وOpenCode Web UI، كلاهم
 - سجل أمني (audit log)
 - تشفير مفاتيح API عند الحفظ (AES-256-GCM)
 - نسخ احتياطي للإعدادات مع تصدير/استيراد
-- **TLS أمام `3000` و `4097` معًا** عند النشر خارج جهازك: المنفذان على `0.0.0.0`، وبدون TLS يقرأ أي متناصّ على الشبكة رمز الجلسة وكوكي `madar_embed` معًا. مثال Caddy/nginx جاهز في [docs/INSTALL.md](docs/INSTALL.md#الأمان-في-النشر--security-in-production-deployment)
+- **نسخة تطبيق واحدة فقط**؛ لا replicas ولا HA. عند النشر خارج جهازك ضع nginx/TLS أمام التطبيق على `80`/`443`/`4097`، واربط `3000`/`4097` على `127.0.0.1`. بدون TLS يقرأ أي متناصّ على الشبكة رمز الجلسة وكوكي `madar_embed` معًا. تفاصيل النشر وتهيئة nginx في [docs/INSTALL.md](docs/INSTALL.md#الأمان-في-النشر--security-in-production-deployment)
 
 ### 📊 مراقبة وتنبيهات — Monitoring & Alerts
 تنبيهات تلقائية لتعطل الحاويات (OOM، خروج غير طبيعي)، مؤشرات CPU/RAM، مقاييس التخزين.
@@ -258,7 +258,7 @@ docker compose build app && docker compose up -d app
 cd backend && node --test --test-concurrency=1 "tests/**/*.test.ts"
 ```
 
-الاختبارات تعمل بشكل تسلسلي — التشغيل المتزامن قد يُثيّر rate limiter.
+الاختبارات تعمل بشكل تسلسلي — التشغيل المتزامن قد يُثيّر rate limiter. الحزمة الكاملة تحتاج بيئة `WSD_TESTING=1`؛ حاوية التطوير الافتراضية تستخدم `WSD_TESTING=0` وقد تُنتج `429` في اختبارات إنشاء المشاريع. داخلها شغّل اختبارات `*-core.test.ts` فقط.
 
 ### أوامر مفيدة
 ```bash

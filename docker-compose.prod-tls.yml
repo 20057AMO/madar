@@ -1,0 +1,25 @@
+services:
+  app:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:4097:4097"
+    environment:
+      WSD_TRUST_PROXY: "1"
+      WSD_EMBED_PROXY_PORT: "4097"
+      WSD_EMBEDDED_PUBLISH_HOST: "127.0.0.1"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(async r=>{const j=await r.json();if(!r.ok||j.status!=='ok')process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

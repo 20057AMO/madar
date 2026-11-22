@@ -8,6 +8,8 @@
 
 Madar is a single Docker Compose stack: one `app` container serves the whole product (Preact dashboard, Express API, WebSocket services, Docker orchestration), and a separate base image (`wsd/workspace:latest`, Ubuntu 26.04 LTS + Node 24 LTS) is used to generate one container per project. The `app` container itself stays on Node 22.
 
+**Deployment cardinality: one app instance.** Do not run replicas or HA. State is local to the single `app` container: JSON stores with in-process locks, read-write `/var/run/docker.sock`, bind-mounted workspaces, and WebSocket/terminal/chat state. Production runs one instance behind nginx/TLS (§8).
+
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │                        host (Docker daemon)                        │
@@ -350,6 +352,8 @@ python backend/tests/e2e/reviews_ui.py
 |------|-------|
 | Dashboard / API | `3000` (env `PORT`) |
 | Embedded-surface proxy (the ONLY route to the IDE / opencode) | `4097` (`WSD_EMBED_PROXY_PORT`), editor+ `madar_embed` cookie |
+| Production public listeners | nginx on the host: `80` (ACME challenge → HTTPS redirect), `443` (dashboard/API), `4097` (embedded proxy TLS) |
+| Production app bind | `127.0.0.1:3000` and `127.0.0.1:4097` via `docker-compose.prod-tls.yml` |
 | Web IDE (code-server) | `127.0.0.1:8080` in-container (`WSD_IDE_INTERNAL_PORT`) — not published; `8100` stays reserved |
 | opencode web | `127.0.0.1:4096` in-container (`WSD_OPENCODE_PORT`) — not published |
 | App container | `wsd-pro` |
@@ -362,4 +366,25 @@ python backend/tests/e2e/reviews_ui.py
 
 The 2026-08 renaming **kept** the `wsd.*` localStorage keys, `WSD_*` env vars, and docker resource names deliberately, for data/infra compatibility.
 
-**Published surfaces and TLS.** Exactly **two** ports leave the host: `3000` (the authenticated dashboard + API) and `4097` (the authenticated embedded-surface proxy — the only route to code-server and opencode, since the raw `8100`/`4096` publishes are gone and both upstreams bind to `127.0.0.1` in-container). Both are published on `0.0.0.0`, so **a production deployment terminates TLS in front of both** — proxying `3000` alone would leave a code-execution surface on cleartext. The two must be distinguished by **port, not path prefix**: the `madar_embed` credential is host-scoped (cookies ignore ports), and opencode serves absolute `/assets/…` URLs so it owns the origin root. On cleartext, one on-path attacker reads the dashboard JWT from `localStorage` and the `madar_embed` cookie alike — the cookie's missing `Secure` is the absent control TLS would have provided, not a separate defect (it is issued `Secure` only on a TLS link, or when `WSD_TRUST_PROXY=1` and a trusted hop sent `X-Forwarded-Proto: https`). Worked Caddy/nginx examples: [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment).
+### Production trust boundary (single instance)
+
+Production runs **one** app instance. nginx is the only public listener; the app container listens on loopback only. Apply `docker-compose.prod-tls.yml` on top of `docker-compose.yml` — do not hand-edit `docker-compose.yml`.
+
+```text
+public                 nginx (host)                     app container (loopback only)
+:80    ── ACME challenge, then redirect to HTTPS
+:443   ──►  127.0.0.1:3000   (dashboard + API)
+:4097  ──►  127.0.0.1:4097   (authenticated embedded-surface proxy)
+                                    ├─► 127.0.0.1:8080  code-server --auth none
+                                    └─► 127.0.0.1:4096  opencode web
+```
+
+- `:3000` carries the authenticated dashboard/API and the JWT sent from `localStorage`.
+- `:4097` is the **only** route to code-server and opencode. The raw `8100`/`4096` publishes are gone; both upstreams bind to `127.0.0.1` inside the app container and have no address on any Docker network.
+- `WSD_TRUST_PROXY=1` belongs **only** in the production override. The base compose publishes `3000`/`4097` on `0.0.0.0`, so enabling it there would let any LAN client spoof `X-Forwarded-For` past rate limiters.
+- Serve the two surfaces by **port, not path prefix**: `madar_embed` is host-scoped (cookies ignore ports), and opencode serves absolute `/assets/…` URLs so it owns the origin root.
+- TLS is required. On cleartext, one on-path attacker reads both the dashboard JWT and the `madar_embed` cookie. The cookie is issued `Secure` only on a trusted TLS link (`WSD_TRUST_PROXY=1` plus `X-Forwarded-Proto: https`), because an unconditional `Secure` flag would be silently dropped by browsers on the documented plain-HTTP LAN install.
+- nginx access logs must use `$uri`, never `$request_uri`: WebSocket connections carry the JWT in `?token=`, and `$request_uri` would write it to disk. Set `client_max_body_size 256m`: the app caps snapshot import at 200 MB and `256m` leaves room for multipart data and upload headers; see [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment) for the full nginx contract and deployment sequence.
+- `bash scripts/check-prod-binding.sh` must exit 0 after startup; `--check-running` also inspects the running `wsd-pro` container.
+
+Full deployment steps and devops-owned file names are in [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment).

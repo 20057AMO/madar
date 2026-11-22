@@ -3,14 +3,19 @@ Description=Madar (Docker Compose)
 Documentation=https://github.com/20057AMO/madar
 Requires=docker.service
 After=docker.service network-online.target
+@PROD_TLS@After=nginx.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=@MADAR_DIR@
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
+WorkingDirectory="@MADAR_DIR@"
+@PROD_TLS@ExecStartPre=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml config --quiet
+@PROD_TLS@ExecStartPre=/usr/bin/bash "@MADAR_DIR@/scripts/check-prod-binding.sh" --dir "@MADAR_DIR@"
+@DEV_ONLY@ExecStart=/usr/bin/docker compose up -d
+@PROD_TLS@ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --remove-orphans
+@DEV_ONLY@ExecStop=/usr/bin/docker compose down
+@PROD_TLS@ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml down --remove-orphans
 TimeoutStopSec=120
 NoNewPrivileges=true
 

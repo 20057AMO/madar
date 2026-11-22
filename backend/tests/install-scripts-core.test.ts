@@ -13,10 +13,20 @@ const UNINSTALL = path.join(ROOT, 'scripts', 'uninstall.sh');
 const UNIT_TEMPLATE = path.join(ROOT, 'packaging', 'systemd', 'madar.service');
 const README = path.join(ROOT, 'README.md');
 const INSTALL_DOC = path.join(ROOT, 'docs', 'INSTALL.md');
+const PROD_OVERLAY = path.join(ROOT, 'docker-compose.prod-tls.yml');
+const NGINX_CONF = path.join(ROOT, 'deploy', 'nginx', 'madar.conf');
+const PROD_BINDING = path.join(ROOT, 'scripts', 'check-prod-binding.sh');
+const RENEW_SERVICE = path.join(ROOT, 'packaging', 'systemd', 'certbot-renew.service');
+const RENEW_TIMER = path.join(ROOT, 'packaging', 'systemd', 'certbot-renew.timer');
 
 const INSTALL_SRC = fs.readFileSync(INSTALL, 'utf8');
 const UNINSTALL_SRC = fs.readFileSync(UNINSTALL, 'utf8');
 const UNIT_SRC = fs.readFileSync(UNIT_TEMPLATE, 'utf8');
+const PROD_OVERLAY_SRC = fs.readFileSync(PROD_OVERLAY, 'utf8');
+const NGINX_CONF_SRC = fs.readFileSync(NGINX_CONF, 'utf8');
+const PROD_BINDING_SRC = fs.readFileSync(PROD_BINDING, 'utf8');
+const RENEW_SERVICE_SRC = fs.readFileSync(RENEW_SERVICE, 'utf8');
+const RENEW_TIMER_SRC = fs.readFileSync(RENEW_TIMER, 'utf8');
 
 function toBashPath(p: string): string {
   const normalized = p.replace(/\\/g, '/');
@@ -67,13 +77,40 @@ function makeRepo(tmp: string): string {
   fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
   fs.mkdirSync(path.join(repo, 'packaging', 'systemd'), { recursive: true });
   fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(repo, 'deploy', 'nginx'), { recursive: true });
+  fs.mkdirSync(path.join(repo, 'deploy', 'certbot'), { recursive: true });
   fs.mkdirSync(path.join(repo, 'workspaces'), { recursive: true });
   fs.copyFileSync(UNIT_TEMPLATE, path.join(repo, 'packaging', 'systemd', 'madar.service'));
+  fs.copyFileSync(RENEW_SERVICE, path.join(repo, 'packaging', 'systemd', 'certbot-renew.service'));
+  fs.copyFileSync(RENEW_TIMER, path.join(repo, 'packaging', 'systemd', 'certbot-renew.timer'));
   fs.writeFileSync(path.join(repo, 'scripts', 'install.sh'), '#!/usr/bin/env bash\n');
+  fs.writeFileSync(path.join(repo, 'scripts', 'check-prod-binding.sh'), '#!/usr/bin/env bash\n: > .prod-binding-checked\n');
+  fs.writeFileSync(path.join(repo, 'deploy', 'nginx', 'madar.conf'), [
+    'server {',
+    '    listen 80;',
+    '    server_name madar.example.com;',
+    '    root /var/www/certbot;',
+    '    listen 4097 ssl;',
+    '    location / { proxy_pass http://127.0.0.1:3000; }',
+    '}',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(repo, 'deploy', 'certbot', 'obtain.sh'), '#!/usr/bin/env bash\n: > "$MADAR_WEBROOT/obtain-ran"\n');
+  fs.writeFileSync(path.join(repo, 'deploy', 'certbot', 'renew.sh'), '#!/usr/bin/env bash\nexit 0\n');
   fs.writeFileSync(path.join(repo, '.env.example'), '# test fixture only\nJWT_SECRET=\nMADAR_TEST_SENTINEL=keep-me\n');
   fs.writeFileSync(path.join(repo, 'docker-compose.yml'), 'services: {}\n');
+  fs.writeFileSync(path.join(repo, 'docker-compose.prod-tls.yml'), 'services: {}\n');
   fs.writeFileSync(path.join(repo, 'workspaces', 'canary.txt'), 'canary\n');
   return repo;
+}
+
+function prodEnv(tmp: string): Record<string, string> {
+  return {
+    MADAR_WEBROOT: toBashPath(path.join(tmp, 'webroot')),
+    MADAR_NGINX_CONF: toBashPath(path.join(tmp, 'nginx', 'madar.conf')),
+    MADAR_CERTBOT_SERVICE_UNIT: toBashPath(path.join(tmp, 'certbot-renew.service')),
+    MADAR_CERTBOT_TIMER_UNIT: toBashPath(path.join(tmp, 'certbot-renew.timer')),
+  };
 }
 
 type StubOpts = {
@@ -81,6 +118,7 @@ type StubOpts = {
   stackRunning?: boolean;
   origin?: string;
   busyPort?: string;
+  root?: boolean;
   env?: Record<string, string>;
 };
 
@@ -88,6 +126,7 @@ function stubPrelude(tmp: string, log: string, opts: StubOpts): string {
   const envLines = Object.entries(opts.env ?? {})
     .map(([key, value]) => `export ${key}=${bashQuote(value)}`)
     .join('\n');
+  const uid = opts.root ? '0' : '1000';
   return [
     `XDG_RUNTIME_DIR=${bashQuote(toBashPath(tmp))}`,
     `TMPDIR=${bashQuote(toBashPath(tmp))}`,
@@ -115,7 +154,12 @@ function stubPrelude(tmp: string, log: string, opts: StubOpts): string {
     '}',
     "curl() { stublog \"curl $*\"; printf '%s\\n' '{\"status\":\"ok\"}'; }",
     'systemctl() { stublog "systemctl $*"; }',
-    "id() { stublog \"id $*\"; printf '%s\\n' '1000'; }",
+    `id() { stublog "id $*"; printf '%s\\n' '${uid}'; }`,
+    'ip() { stublog "ip $*"; return 0; }',
+    'nginx() { stublog "nginx $*"; return 0; }',
+    'certbot() { stublog "certbot $*"; return 0; }',
+    'bash() { stublog "bash $*"; command bash "$@"; }',
+    'install() { stublog "install $*"; command install "$@"; }',
     'ss() {',
     '  stublog "ss $*"',
     '  if [[ -n "$STUB_BUSY_PORT" ]]; then',
@@ -153,6 +197,12 @@ function sha256(file: string): string {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
+const COMPOSE_UP = /^docker compose\b.*\bup -d --build(?:\s|$)/;
+
+function hasComposeUp(lines: string[]): boolean {
+  return lines.some((line) => COMPOSE_UP.test(line));
+}
+
 function mentionsTlsBoth(text: string): boolean {
   return text.split(/\r?\n/).some((line) =>
     /\bTLS\b/i.test(line) && /\b3000\b/.test(line) && /\b4097\b/.test(line) && /معًا|both/i.test(line));
@@ -177,7 +227,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
     }
     const install = runBash(INSTALL, ['--help']);
     assert.strictEqual(install.status, 0, install.stderr);
-    for (const flag of ['--dir', '--branch', '--no-systemd', '--help']) {
+    for (const flag of ['--dir', '--branch', '--no-systemd', '--prod-tls', '--domain', '--email', '--lan-ip', '--help']) {
       assert.ok(install.stdout.includes(flag), `install --help is missing ${flag}`);
     }
     const uninstall = runBash(UNINSTALL, ['--help']);
@@ -227,7 +277,8 @@ describe('Madar install/uninstall scripts (offline)', () => {
       assert.strictEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
 
       const calls = logLines(log);
-      assert.ok(calls.some((line) => line.startsWith('docker compose up')), 'compose up was never called');
+      assert.ok(calls.includes('docker compose -f docker-compose.yml up -d --build'), 'dev compose up was never called');
+      assert.ok(calls.some((line) => COMPOSE_UP.test(line)), 'compose up was never called');
       assert.ok(calls.some((line) => line.startsWith('curl -fsS')), 'health probe was never called');
       assert.ok(calls.some((line) => line.startsWith('systemctl')) === false, 'non-root branch must not call systemctl directly');
 
@@ -235,8 +286,8 @@ describe('Madar install/uninstall scripts (offline)', () => {
       const unit = fs.readFileSync(unitFile, 'utf8');
       const working = /^WorkingDirectory=(.+)$/m.exec(unit);
       assert.ok(working, 'the rendered unit has no WorkingDirectory');
-      assert.ok(path.isAbsolute(working[1]), `WorkingDirectory is not absolute: ${working[1]}`);
-      assert.strictEqual(working[1], toBashPath(repo));
+      assert.strictEqual(working[1], `"${toBashPath(repo)}"`);
+      assert.match(working[1].replace(/^"|"$/g, ''), /^\//, `WorkingDirectory is not an absolute POSIX path: ${working[1]}`);
       assert.ok(!unit.includes('@MADAR_DIR@'), 'the template placeholder survived rendering');
       assert.doesNotMatch(unit, /JWT_SECRET|WSD_TRUST_PROXY|8100|4096|secret|password/i);
       assert.match(unit, /^ExecStart=\/usr\/bin\/docker compose up -d$/m);
@@ -270,7 +321,10 @@ describe('Madar install/uninstall scripts (offline)', () => {
       assert.match(fs.readFileSync(envFile, 'utf8'), /MADAR_TEST_SENTINEL=keep-me/);
 
       assert.doesNotMatch(INSTALL_SRC, /(?:^|[^\w.])JWT_SECRET\s*=/);
-      assert.doesNotMatch(INSTALL_SRC, /WSD_TRUST_PROXY\s*=/);
+      assert.match(INSTALL_SRC, /env_trust_proxy\(\)[\s\S]*?grep -m1 -E '\^\[\[:space:\]\]\*WSD_TRUST_PROXY='/);
+      assert.match(INSTALL_SRC, /trust_value="\$\(env_trust_proxy "\$PWD\/\.env"\)"/);
+      assert.match(INSTALL_SRC, /لا تضبط WSD_TRUST_PROXY في \.env/);
+      assert.doesNotMatch(INSTALL_SRC, /^[[:space:]]*(?:export[[:space:]]+)?WSD_TRUST_PROXY[[:space:]]*=/m);
     });
   });
 
@@ -290,7 +344,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
 
       const calls = logLines(log);
       assert.ok(calls.some((line) => line.includes('status --porcelain')), 'the dirty-check stub was not reached');
-      assert.ok(!calls.some((line) => line.startsWith('docker compose up')), calls.join('\n'));
+      assert.ok(!calls.some((line) => COMPOSE_UP.test(line)), calls.join('\n'));
       assert.ok(!calls.some((line) => line.startsWith('curl')), calls.join('\n'));
       assert.ok(!fs.existsSync(path.join(repo, '.env')), 'a refused update still created .env');
     });
@@ -327,7 +381,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
       });
       assert.strictEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
       assert.match(result.stderr, /لم يتم اكتشاف systemd كعملية رقم 1/);
-      assert.ok(logLines(log).some((line) => line.startsWith('docker compose up')), 'Madar itself was not installed');
+      assert.ok(hasComposeUp(logLines(log)), 'Madar itself was not installed');
       assert.ok(!fs.existsSync(path.join(tmp, 'madar.service.stubbed.service')), 'a boot unit was installed without systemd');
     });
   });
@@ -376,7 +430,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
       assert.strictEqual(result.status, 1, result.stdout);
       assert.match(result.stderr, /النسخة الرسمية 20057AMO\/madar/);
       assert.ok(!result.stderr.includes('evil.example'), 'raw remote URL leaked into the refusal');
-      assert.ok(!logLines(log).some((line) => line.startsWith('docker compose up')), 'compose ran before the origin check');
+      assert.ok(!hasComposeUp(logLines(log)), 'compose ran before the origin check');
     });
   });
 
@@ -417,7 +471,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
       const result = runStubbed(INSTALL, ['--dir', toBashPath(repo)], tmp, log);
       assert.strictEqual(result.status, 1, result.stdout);
       assert.match(result.stderr, /وحدة واحدة فقط على كل مضيف|مسار تثبيت آخر/);
-      assert.ok(!logLines(log).some((line) => line.startsWith('docker compose up')), 'compose ran despite the collision');
+      assert.ok(!hasComposeUp(logLines(log)), 'compose ran despite the collision');
     });
   });
 
@@ -455,7 +509,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
       const result = runStubbed(INSTALL, ['--dir', toBashPath(repo)], tmp, log);
       assert.strictEqual(result.status, 1, result.stdout);
       assert.match(result.stderr, /ليس ملفًا عاديًا/);
-      assert.ok(!logLines(log).some((line) => line.startsWith('docker compose up')), 'compose ran with a .env directory');
+      assert.ok(!hasComposeUp(logLines(log)), 'compose ran with a .env directory');
     });
   });
 
@@ -481,7 +535,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
       assert.match(result.stderr, /ليس ملفًا عاديًا/);
       assert.ok(fs.lstatSync(envPath).isSymbolicLink(), 'the guard replaced the symlink');
       assert.ok(!fs.existsSync(target), 'the guard wrote through the dangling symlink');
-      assert.ok(!logLines(log).some((line) => line.startsWith('docker compose up')), 'compose ran with a dangling .env symlink');
+      assert.ok(!hasComposeUp(logLines(log)), 'compose ran with a dangling .env symlink');
       assert.ok(!fs.existsSync(path.join(tmp, 'madar.service.stubbed.service')), 'the boot unit was rendered despite the guard');
     });
   });
@@ -502,7 +556,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
       });
       assert.strictEqual(result.status, 1, result.stdout);
       assert.match(result.stderr, /المنفذ 4321 مستخدم بالفعل/);
-      assert.ok(!logLines(log).some((line) => line.startsWith('docker compose up')), 'compose ran on a busy effective port');
+      assert.ok(!hasComposeUp(logLines(log)), 'compose ran on a busy effective port');
     });
   });
 
@@ -533,11 +587,172 @@ describe('Madar install/uninstall scripts (offline)', () => {
     assert.match(INSTALL_SRC, /\(\( SECONDS < deadline \)\) \|\| return 1/);
   });
 
-  test('temp unit is created with mktemp, cleaned via trap and installed with 0644', () => {
+  test('temp unit and prod files are registered for cleanup and installed with 0644', () => {
+    assert.match(INSTALL_SRC, /TEMP_FILES=\(\)/);
+    assert.match(INSTALL_SRC, /cleanup\(\)\s*\{[\s\S]*?for file in "\$\{TEMP_FILES\[@\]\}"/);
+    assert.match(INSTALL_SRC, /trap cleanup EXIT/);
     assert.match(INSTALL_SRC, /mktemp "\$\{XDG_RUNTIME_DIR:-\$\{TMPDIR:-\/tmp\}\}\/madar\.service\.XXXXXX"/);
-    assert.match(INSTALL_SRC, /trap 'rm -f "\$unit_tmp"' EXIT/);
+    assert.match(INSTALL_SRC, /TEMP_FILES\+=\("\$unit_tmp"\)/);
     assert.match(INSTALL_SRC, /install -m 0644 "\$unit_tmp" "\$SYSTEMD_UNIT"/);
+    assert.match(INSTALL_SRC, /TEMP_FILES\+=\("\$bootstrap_conf" "\$final_conf"\)/);
+    assert.match(INSTALL_SRC, /TEMP_FILES\+=\("\$renew_service_tmp" "\$renew_timer_tmp"\)/);
+    assert.match(INSTALL_SRC, /install -m 0644 "\$renew_service_tmp" "\$CERTBOT_SERVICE_UNIT"/);
+    assert.match(INSTALL_SRC, /install -m 0644 "\$renew_timer_tmp" "\$CERTBOT_TIMER_UNIT"/);
     assert.match(INSTALL_SRC, /trap - EXIT/);
+    assert.doesNotMatch(INSTALL_SRC, /trap 'rm -f "\$unit_tmp"' EXIT/);
+  });
+
+  test('prod overlay pins the app to loopback and trusts exactly one proxy hop', () => {
+    assert.match(PROD_OVERLAY_SRC, /ports:\s*!override/);
+    for (const bind of ['"127.0.0.1:3000:3000"', '"127.0.0.1:4097:4097"']) {
+      assert.ok(PROD_OVERLAY_SRC.includes(bind), `prod overlay lost the loopback bind ${bind}`);
+    }
+    assert.doesNotMatch(PROD_OVERLAY_SRC, /"0\.0\.0\.0:/);
+    assert.match(PROD_OVERLAY_SRC, /WSD_TRUST_PROXY:\s*"1"/);
+    assert.match(PROD_OVERLAY_SRC, /WSD_EMBED_PROXY_PORT:\s*"4097"/);
+    assert.match(PROD_OVERLAY_SRC, /WSD_EMBEDDED_PUBLISH_HOST:\s*"127\.0\.0\.1"/);
+    assert.match(PROD_OVERLAY_SRC, /restart:\s*unless-stopped/);
+    assert.match(PROD_OVERLAY_SRC, /max-size:\s*"10m"/);
+    assert.match(PROD_OVERLAY_SRC, /healthcheck:/);
+  });
+
+  test('nginx template logs sanitized URIs and proxies both TLS surfaces', () => {
+    assert.match(NGINX_CONF_SRC, /log_format\s+madar_safe\s+'[^']*"\$uri"[^']*'/);
+    assert.doesNotMatch(NGINX_CONF_SRC, /\$request_uri/);
+    assert.match(NGINX_CONF_SRC, /client_max_body_size 256m;/);
+    assert.match(NGINX_CONF_SRC, /location \/\.well-known\/acme-challenge\//);
+    assert.match(NGINX_CONF_SRC, /proxy_pass http:\/\/127\.0\.0\.1:3000;/);
+    assert.match(NGINX_CONF_SRC, /proxy_pass http:\/\/127\.0\.0\.1:4097;/);
+    assert.match(NGINX_CONF_SRC, /proxy_set_header X-Forwarded-Proto https;/);
+    assert.match(NGINX_CONF_SRC, /proxy_set_header Upgrade \$http_upgrade;/);
+  });
+
+  test('prod binding guard rejects every drift from loopback-only binds and WSD_TRUST_PROXY=1', () => {
+    for (const guard of [
+      'BAD_HOST', 'INCOMPLETE_BINDING', 'TARGET_MISMATCH', 'UNEXPECTED_PORT',
+      'BINDING_COUNT', 'PORT_SET', 'WSD_TRUST_PROXY', 'RUNTIME_BINDING_COUNT', 'RUNTIME_PORT_SET',
+    ]) {
+      assert.ok(PROD_BINDING_SRC.includes(guard), `binding guard lost the ${guard} check`);
+    }
+    assert.match(PROD_BINDING_SRC, /ok: app ports 3000 and 4097 are bound to 127\.0\.0\.1 and WSD_TRUST_PROXY=1/);
+    assert.match(PROD_BINDING_SRC, /exit 1/);
+  });
+
+  test('certbot renewal unit runs through /bin/sh and the timer is persistent', () => {
+    assert.match(RENEW_SERVICE_SRC, /^ExecStart=\/bin\/sh "@MADAR_DIR@\/deploy\/certbot\/renew\.sh"$/m);
+    assert.doesNotMatch(RENEW_SERVICE_SRC, /ExecStart=.*\.\/deploy\/certbot\/renew\.sh/);
+    assert.match(RENEW_SERVICE_SRC, /NoNewPrivileges=true/);
+    assert.match(RENEW_TIMER_SRC, /^OnCalendar=/m);
+    assert.match(RENEW_TIMER_SRC, /^Persistent=true$/m);
+    assert.match(RENEW_TIMER_SRC, /^Unit=certbot-renew\.service$/m);
+  });
+
+  test('systemd template keeps dev and prod commands mutually exclusive and renders each branch', () => {
+    assert.match(UNIT_SRC, /@DEV_ONLY@ExecStart=\/usr\/bin\/docker compose up -d$/m);
+    assert.match(UNIT_SRC, /@PROD_TLS@ExecStart=\/usr\/bin\/docker compose -f docker-compose\.yml -f docker-compose\.prod-tls\.yml up -d --remove-orphans$/m);
+    assert.match(UNIT_SRC, /@PROD_TLS@ExecStartPre=.*check-prod-binding\.sh/m);
+    assert.match(INSTALL_SRC, /\[\[ "\$line" == @DEV_ONLY@\* \]\] && continue/);
+    assert.match(INSTALL_SRC, /\[\[ "\$line" == @PROD_TLS@\* \]\] && line="\$\{line#@PROD_TLS@\}"/);
+    assert.match(INSTALL_SRC, /\[\[ "\$line" == @PROD_TLS@\* \]\] && continue/);
+    assert.match(INSTALL_SRC, /\[\[ "\$line" == @DEV_ONLY@\* \]\] && line="\$\{line#@DEV_ONLY@\}"/);
+    assert.match(INSTALL_SRC, /systemctl enable --now certbot-renew\.timer/);
+  });
+
+  test('--prod-tls installs the TLS stack end to end without touching the dev surface', (t) => {
+    if (!bashAvailable()) {
+      t.skip('bash is not available on this host');
+      return;
+    }
+    withTemp((tmp) => {
+      const repo = makeRepo(tmp);
+      const log = path.join(tmp, 'stub.log');
+      fs.writeFileSync(log, '');
+      const result = runStubbed(
+        INSTALL,
+        ['--dir', toBashPath(repo), '--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '203.0.113.10'],
+        tmp,
+        log,
+        { root: true, env: prodEnv(tmp) },
+      );
+      assert.strictEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+
+      const calls = logLines(log);
+      const prodUp = 'docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --build --remove-orphans';
+      const devUp = 'docker compose -f docker-compose.yml up -d --build';
+      const configCheck = 'docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml config --quiet';
+      assert.ok(calls.includes(prodUp), `prod compose up was never called:\n${calls.join('\n')}`);
+      assert.strictEqual(calls.filter((line) => COMPOSE_UP.test(line)).length, 1, 'more than one compose up ran');
+      assert.ok(!calls.includes(devUp), 'the dev compose up ran in prod mode');
+      assert.ok(calls.indexOf(configCheck) >= 0 && calls.indexOf(configCheck) < calls.indexOf(prodUp), 'prod compose config did not precede up');
+      assert.ok(calls.includes('bash deploy/certbot/obtain.sh'), 'certificate acquisition never ran');
+      assert.strictEqual(calls.filter((line) => line === 'nginx -t').length, 2, 'both nginx config checks must run');
+      assert.ok(calls.includes('systemctl enable --now certbot-renew.timer'), 'renewal timer was not enabled');
+      assert.ok(
+        calls.includes(`bash scripts/check-prod-binding.sh --dir ${toBashPath(repo)} --check-running`),
+        'the running binding guard was not invoked',
+      );
+      assert.ok(fs.existsSync(path.join(tmp, 'webroot', 'obtain-ran')), 'obtain.sh did not run');
+      assert.ok(fs.existsSync(path.join(repo, '.prod-binding-checked')), 'the binding guard did not run');
+
+      const unit = fs.readFileSync(path.join(tmp, 'systemd-unit', 'madar.service'), 'utf8');
+      assert.match(unit, /^ExecStart=\/usr\/bin\/docker compose -f docker-compose\.yml -f docker-compose\.prod-tls\.yml up -d --remove-orphans$/m);
+      assert.doesNotMatch(unit, /^ExecStart=\/usr\/bin\/docker compose up -d$/m);
+      assert.match(unit, /^ExecStartPre=.*check-prod-binding\.sh/m);
+      assert.doesNotMatch(unit, /@MADAR_/);
+
+      const renew = fs.readFileSync(path.join(tmp, 'certbot-renew.service'), 'utf8');
+      assert.match(renew, /^Environment=MADAR_DOMAIN=madar\.example\.test$/m);
+      assert.match(renew, /^Environment=MADAR_EMAIL=admin@madar\.example\.test$/m);
+      assert.ok(renew.includes(`Environment=MADAR_WEBROOT=${toBashPath(path.join(tmp, 'webroot'))}`));
+      assert.ok(renew.includes(`Environment=MADAR_NGINX_CONF=${toBashPath(path.join(tmp, 'nginx', 'madar.conf'))}`));
+      assert.doesNotMatch(renew, /@MADAR_/);
+      const timer = fs.readFileSync(path.join(tmp, 'certbot-renew.timer'), 'utf8');
+      assert.match(timer, /^Persistent=true$/m);
+
+      const finalConf = fs.readFileSync(path.join(tmp, 'nginx', 'madar.conf'), 'utf8');
+      assert.match(finalConf, /server_name madar\.example\.test;/);
+      assert.ok(finalConf.includes('listen 203.0.113.10:4097 ssl;'));
+      assert.ok(finalConf.includes(`root ${toBashPath(path.join(tmp, 'webroot'))};`));
+      assert.doesNotMatch(finalConf, /madar\.example\.com/);
+
+      assert.match(result.stdout, /اللوحة: https:\/\/madar\.example\.test/);
+      assert.match(result.stdout, /https:\/\/madar\.example\.test:4097/);
+      assert.ok(result.stdout.includes('203.0.113.10:4097'), 'the public TLS port was not reported');
+    });
+  });
+
+  test('unsafe prod-TLS inputs are refused before compose or certificate side effects', (t) => {
+    if (!bashAvailable()) {
+      t.skip('bash is not available on this host');
+      return;
+    }
+    const valid = ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '203.0.113.10'];
+    const cases = [
+      { label: 'missing domain', args: ['--prod-tls', '--email', 'admin@madar.example.test', '--lan-ip', '203.0.113.10'], error: /قيمة --domain غير صالحة/ },
+      { label: 'placeholder domain', args: ['--prod-tls', '--domain', 'madar.example.com', '--email', 'admin@madar.example.test', '--lan-ip', '203.0.113.10'], error: /قيمة --domain غير صالحة/ },
+      { label: 'placeholder email', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.com', '--lan-ip', '203.0.113.10'], error: /قيمة --email غير صالحة/ },
+      { label: 'loopback LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '127.0.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'trusted proxy in .env', args: valid, envFile: 'WSD_TRUST_PROXY=1\n', error: /لا تضبط WSD_TRUST_PROXY في \.env/ },
+      { label: 'non-root', args: valid, root: false, error: /يحتاج صلاحيات root/ },
+      { label: '--no-systemd', args: [...valid, '--no-systemd'], error: /الوضع --prod-tls يحتاج systemd/ },
+    ];
+    for (const c of cases) {
+      withTemp((tmp) => {
+        const repo = makeRepo(tmp);
+        if (c.envFile) fs.writeFileSync(path.join(repo, '.env'), c.envFile);
+        const log = path.join(tmp, 'stub.log');
+        fs.writeFileSync(log, '');
+        const result = runStubbed(INSTALL, ['--dir', toBashPath(repo), ...c.args], tmp, log, {
+          root: c.root ?? true,
+          env: prodEnv(tmp),
+        });
+        assert.strictEqual(result.status, 1, `${c.label}: ${result.stdout}`);
+        assert.match(result.stderr, c.error, c.label);
+        assert.ok(!hasComposeUp(logLines(log)), `${c.label}: compose up ran before the refusal`);
+        assert.ok(!fs.existsSync(path.join(tmp, 'webroot', 'obtain-ran')), `${c.label}: a certificate was obtained`);
+        assert.ok(!fs.existsSync(path.join(repo, '.prod-binding-checked')), `${c.label}: the binding guard ran`);
+      });
+    }
   });
 
   test('default uninstall keeps volumes, compose file and workspaces untouched', (t) => {
@@ -628,7 +843,23 @@ describe('Madar install/uninstall scripts (offline)', () => {
     assert.match(doc, /uninstall\.sh --remove-data/);
     assert.match(doc, /\b3000\b/);
     assert.match(doc, /\b4097\b/);
-    assert.ok(mentionsTlsBoth(doc), 'docs/INSTALL.md must require TLS in front of 3000 and 4097 together');
+    for (const fact of [
+      /127\.0\.0\.1:3000/,
+      /127\.0\.0\.1:4097/,
+      /نسخة تطبيق واحدة فقط/,
+      /docker-compose\.prod-tls\.yml/,
+      /--prod-tls/,
+      /--domain/,
+      /--email/,
+      /--lan-ip/,
+      /WSD_TRUST_PROXY=1/,
+      /client_max_body_size 256m/,
+      /\$uri/,
+      /check-prod-binding\.sh/,
+      /certbot-renew\.timer/,
+    ]) {
+      assert.match(doc, fact, `docs/INSTALL.md is missing prod-TLS fact: ${fact}`);
+    }
     assert.match(doc, /## التثبيت اليدوي — Manual/);
     assert.match(doc, /docker compose up -d --build/);
     assert.match(doc, /`awk` و`grep` و`cut` و`tr`/);

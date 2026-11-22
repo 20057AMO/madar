@@ -131,4 +131,49 @@ else
   info "systemctl غير متاح؛ تم تخطي خطوة systemd."
 fi
 
+certbot_service_unit="${MADAR_CERTBOT_SERVICE_UNIT:-/etc/systemd/system/certbot-renew.service}"
+certbot_timer_unit="${MADAR_CERTBOT_TIMER_UNIT:-/etc/systemd/system/certbot-renew.timer}"
+certbot_timer_name="${certbot_timer_unit##*/}"
+nginx_conf="${MADAR_NGINX_CONF:-/etc/nginx/conf.d/madar.conf}"
+
+certbot_units_ours=0
+if [[ -f "$certbot_service_unit" && -f "$certbot_timer_unit" ]] && grep -Fq "$TARGET_DIR/deploy/certbot/renew.sh" "$certbot_service_unit" 2>/dev/null && grep -Eq '^Unit=certbot-renew\.service[[:space:]]*$' "$certbot_timer_unit" 2>/dev/null; then
+  certbot_units_ours=1
+fi
+
+if (( certbot_units_ours )); then
+  if command -v systemctl >/dev/null 2>&1 && [[ "$(id -u)" -eq 0 ]]; then
+    systemctl disable --now "$certbot_timer_name" >/dev/null 2>&1 || warn "تعذّر إيقاف أو تعطيل $certbot_timer_name."
+    rm -f "$certbot_service_unit" "$certbot_timer_unit" || warn "تعذّر حذف وحدات certbot."
+    systemctl daemon-reload || warn "تعذّر تنفيذ systemctl daemon-reload."
+    info "تمت إزالة وحدتي systemd الخاصتين بتجديد الشهادة."
+  else
+    info "لإزالة وحدتي certbot، نفّذ:"
+    printf 'sudo systemctl disable --now %q; sudo rm -f %q %q; sudo systemctl daemon-reload\n' "$certbot_timer_name" "$certbot_service_unit" "$certbot_timer_unit"
+  fi
+elif [[ -f "$certbot_service_unit" || -f "$certbot_timer_unit" ]]; then
+  info "لم يتم حذف وحدات certbot لأن ملكيتها لهذا التثبيت غير مؤكدة؛ راجعها يدويًا:"
+  printf 'sudo systemctl disable --now %q; sudo rm -f %q %q; sudo systemctl daemon-reload\n' "$certbot_timer_name" "$certbot_service_unit" "$certbot_timer_unit"
+fi
+
+if [[ -f "$nginx_conf" ]]; then
+  if grep -Fq 'log_format madar_safe' "$nginx_conf" 2>/dev/null && grep -Fq 'proxy_pass http://127.0.0.1:3000;' "$nginx_conf" 2>/dev/null; then
+    if [[ "$(id -u)" -eq 0 ]]; then
+      rm -f "$nginx_conf" || warn "تعذّر حذف $nginx_conf."
+      if command -v nginx >/dev/null 2>&1; then
+        nginx -t >/dev/null 2>&1 && nginx -s reload >/dev/null 2>&1 || warn "تعذّر إعادة تحميل nginx؛ تحقق من إعداداته يدويًا."
+      else
+        warn "nginx غير متاح؛ أعد تحميله يدويًا بعد إزالة الإعداد."
+      fi
+      info "تمت إزالة إعداد nginx الخاص بـ Madar (إن كان موجودًا)."
+    else
+      info "لإزالة إعداد nginx، نفّذ:"
+      printf 'sudo rm -f %q && sudo nginx -t && sudo nginx -s reload\n' "$nginx_conf"
+    fi
+  else
+    info "لم يتم حذف $nginx_conf لأنه لا يطابق إعداد Madar؛ راجعه يدويًا:"
+    printf 'sudo rm -f %q && sudo nginx -t && sudo nginx -s reload\n' "$nginx_conf"
+  fi
+fi
+
 info "نسخة Madar في $DIR لم تُحذف. احذفها يدويًا إذا أردت."

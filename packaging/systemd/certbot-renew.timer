@@ -1,0 +1,10 @@
+[Unit]
+Description=Twice-daily Madar TLS certificate renewal
+
+[Timer]
+OnCalendar=*-*-* 00,12:17:00
+Persistent=true
+Unit=certbot-renew.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Renew Madar TLS certificate
+Documentation=https://github.com/20057AMO/madar
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=MADAR_DOMAIN=@MADAR_DOMAIN@
+Environment=MADAR_EMAIL=@MADAR_EMAIL@
+Environment=MADAR_WEBROOT=@MADAR_WEBROOT@
+Environment=MADAR_NGINX_CONF=@MADAR_NGINX_CONF@
+ExecStart=/bin/sh "@MADAR_DIR@/deploy/certbot/renew.sh"
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

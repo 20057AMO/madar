@@ -160,7 +160,7 @@ rm -f "$CODE_SERVER_PID_FILE"
     env -u PORT code-server --auth none --disable-telemetry --disable-update-check \
       --disable-workspace-trust \
       --bind-addr "${IDE_BIND}:8080" /workspaces \
-      > /tmp/code-server.log 2>&1 &
+      2>&1 &
     CODE_SERVER_CHILD=$!
     printf '%s' "$CODE_SERVER_CHILD" > "$CODE_SERVER_PID_FILE"
     RC=0
@@ -205,7 +205,7 @@ rm -f "$OPENCODE_PID_FILE"
       XDG_DATA_HOME="$DATA_DIR/opencode" \
       npm_config_cache=/root/.npm \
       opencode web --hostname "${OPENCODE_BIND}" --port "${WSD_OPENCODE_PORT:-4096}" \
-      > /tmp/opencode-web.log 2>&1 &
+      2>&1 &
     OPENCODE_CHILD=$!
     printf '%s' "$OPENCODE_CHILD" > "$OPENCODE_PID_FILE"
     # NOTE: inherited `set -e` makes a bare `wait` FATAL when the child dies

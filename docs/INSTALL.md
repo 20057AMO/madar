@@ -1,13 +1,13 @@
 # دليل التثبيت — Madar v2 (Beta)
 
-تطبيق `docker compose` بسيط، يعمل محليًا بلا دومين أو SSL إلزامي. كل المطلوب: محرك Docker مع إضافة Compose. وفي أي نشر خارج جهازك، أنهِ TLS أمام `3000` و`4097` معًا ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment)).
+تطبيق `docker compose` بسيط، يعمل محليًا بلا دومين أو SSL إلزامي. كل المطلوب: محرك Docker مع إضافة Compose. أما النشر خارج جهازك فيستخدم **نسخة تطبيق واحدة فقط** أمامها nginx مع TLS، عبر ملفات النشر المُعدّة في `deploy/` و`docker-compose.prod-tls.yml` — لا تُعدّل `docker-compose.yml` يدويًا ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment)).
 
 ## المتطلبات
 
 - Docker Engine 24+ أو Docker Desktop (بمحرك WSL2 على ويندوز) مع `compose` plugin
 - أدوات سطر الأوامر: `git` و`docker` و`curl` و`awk` و`grep` و`cut` و`tr`
 - systemd حقيقي كعملية رقم 1 لتثبيت وحدة الإقلاع؛ على WSL2 فعّل systemd أو مرّر `--no-systemd` لتشغيل Madar الآن دون وحدة إقلاع
-- منافذ حرة: `3000` للوحة التحكم، و`4097` افتراضيًا للوكيل المصادَق الخاص بـVS Code وOpenCode (أو قيمة `WSD_EMBED_PROXY_PORT` من `.env`). لم تعد `8100`/`4096` منشورة. كلاهما يُنشر على `0.0.0.0` — في أي نشر خارج جهازك، أنهِ TLS أمامهما معًا ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment))
+- منافذ حرة: `3000` للوحة التحكم، و`4097` افتراضيًا للوكيل المصادَق الخاص بـVS Code وOpenCode (أو قيمة `WSD_EMBED_PROXY_PORT` من `.env`). لم تعد `8100`/`4096` منشورة. في التثبيت المحلي ينشر `docker-compose.yml` المنفذين على `0.0.0.0`؛ أما في الإنتاج فيربط `docker-compose.prod-tls.yml` المنفذين على `127.0.0.1`، ويكون nginx وحده المستمع العام على `80`/`443`/`4097` ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment))
 - مفتاح Ollama Cloud مجاني من https://ollama.com/settings/keys — *اختياري*، يمكن أيضًا استخدام Ollama محلي أو أي مزوّد آخر من واجهة التطبيق
 - مفتاح OpenCode Zen مجاني من https://opencode.ai/auth (دخول GitHub، **بدون بطاقة ائتمان**) — *اختياري*، لنماذج Zen المجانية
 
@@ -49,7 +49,7 @@ bash scripts/uninstall.sh --remove-data # docker compose down -v بعد تأكي
 
 ينفّذ uninstall `docker compose down` (أو `down -v` بعد التأكيد) ثم يحاول إيقاف الوحدة وتعطيلها وإزالتها بأفضل جهد. مع `--remove-data` يطلب كتابة `yes` صراحة في أعلى السكربت قبل أي فحص systemd أو Compose أو حذف؛ وإن لم تتم الموافقة أو كانت غير تفاعلية، يلغي فورًا؛ لم يُحذف أي شيء، ولا تلمس الوحدة. عند النجاح يحذف `docker compose down -v` volumes `wsd-data` و`code-server-*` نهائيًا. لا يحذف السكربت مجلد `workspaces/` ولا نسخة المشروع أبدًا، ويطبع مسار مساحة العمل عند الانتهاء. الوحدة تُحذف فقط إن كان `WorkingDirectory` الخاص بها مساويًا لمسار التثبيت المطلوب؛ وإن كانت تشير إلى تثبيت آخر يرفض السكربت الإلغاء حمايةً للتثبيت الآخر.
 
-> خارج جهازك المحلي: المنفذان `3000` و`4097` يُنشران على `0.0.0.0`، ويجب إنهاء TLS أمامهما **معًا** قبل مشاركة العنوان ([التفاصيل](#الأمان-في-النشر--security-in-production-deployment)). السكربت لا يفعّل `WSD_TRUST_PROXY` ولا يفتح المنافذ الخام `8100`/`4096`.
+> سكربت التثبيت أعلاه يثبّت التركيب الأساسي المحلي/الداخلي: `docker-compose.yml` ينشر `3000` و`4097` على `0.0.0.0`، والسكربت لا يفعّل `WSD_TRUST_PROXY` ولا يفتح المنافذ الخام `8100`/`4096`. لا تستخدم هذا التركيب كخطة إنتاج. للنشر خارج جهازك اتبع [الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment): نسخة تطبيق واحدة، `docker-compose.prod-tls.yml` يربط المنفذين على `127.0.0.1`، وnginx هو المستمع العام مع TLS.
 
 ## التثبيت اليدوي — Manual
 
@@ -74,7 +74,7 @@ nano .env   # أو أي محرر
 | `OLLAMA_API_KEY` | اختياري | مفتاح Ollama Cloud فقط. بدونها يعمل Ollama المحلي أو أي مزوّد آخر |
 | `OPENCODE_API_KEY` | اختياري | لتمكين صفحة OpenCode/Zen |
 | `WSD_CHAT_MODEL` | اختياري | النموذج الافتراضي للدردشة (افتراضي `qwen3:30b`) |
-| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | الواجهة التي يُنشر عليها **وكيل الأسطح المدمجة** (افتراضي `0.0.0.0`). الصفحتان لم تعودا تُنشران خامّتين: `code-server` و`opencode` مربوطان على `127.0.0.1` داخل حاوية التطبيق (بلا عنوان على أي شبكة Docker، فلا تصلهما أي حاوية مشروع)، والوصول عبر الوكيل المصادَق على `WSD_EMBED_PROXY_PORT`. تضييقه إلى `127.0.0.1` يجعل المحرّر وOpenCode محليَّي الجهاز فقط |
+| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | واجهة نشر **وكيل الأسطح المدمجة** في التركيب الأساسي (افتراضي `0.0.0.0`) — أي للاستخدام المحلي/الداخلي فقط. الصفحتان لم تعودا تُنشران خامّتين: `code-server` و`opencode` مربوطان على `127.0.0.1` داخل حاوية التطبيق (بلا عنوان على أي شبكة Docker، فلا تصلهما أي حاوية مشروع)، والوصول عبر الوكيل المصادَق على `WSD_EMBED_PROXY_PORT`. في الإنتاج لا تضبط هذا المتغير يدويًا: `docker-compose.prod-tls.yml` يربط المنفذين `3000` و`4097` على `127.0.0.1`، وnginx وحده المستمع العام ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment)) |
 | `WSD_EMBED_PROXY_PORT` | اختياري | منفذ وكيل الأسطح المدمجة المصادَق (افتراضي `4097`). هو **الطريق الوحيد** إلى VS Code وOpenCode، ويتطلّب جلسة Madar برتبة محرّر فأعلى |
 | `OLLAMA_LOCAL_HOST` | اختياري | عنوان Ollama المحلي (افتراضي `http://host.docker.internal:11434`) |
 | `WSD_OPENCODE_PORT` | اختياري | منفذ opencode **داخل** الحاوية (افتراضي `4096`) — مربوط على loopback وغير منشور؛ لا تفتحه يدويًا |
@@ -121,112 +121,83 @@ sudo journalctl -u madar.service -n 100
 
 ## الأمان في النشر — Security in production deployment
 
-المنفذان `3000` و`4097` يُنشران على `0.0.0.0` (انظر `docker-compose.yml`)، أي أنهما في متناول كل جهاز على الشبكة. **في أي نشر يتجاوز جهاز المطوّر، أنهِ TLS أمام المنفذين معًا** — terminate TLS in front of **both** `:3000` (اللوحة + API) و `:4097` (الوكيل المصادَق لـ VS Code و OpenCode).
+Madar **نسخة تطبيق واحدة فقط** في الإنتاج — بلا replicas ولا HA ولا جلسات لاصقة (sticky sessions). السبب: مخزنات JSON بأقفال داخل العملية، ومقبس `/var/run/docker.sock` بصلاحية كتابة، وربط مجلدات `workspaces`، وحالة WebSocket/الطرفية/الشات المرتبطة بحاوية `app`. تشغيل أكثر من نسخة يفقد هذه الضمانات.
 
-### لماذا المنفذان معًا وليس واحدًا
+### حدود الثقة — Trust boundary
 
-- **`3000`** هو السطح المصادَق: اللوحة والـ API، ورمز الجلسة (JWT) يعيش في `localStorage` ويُرسل مع كل طلب.
+```text
+public                 nginx (host)                     app container (loopback only)
+:80    ── ACME challenge، ثم redirect إلى HTTPS
+:443   ──►  127.0.0.1:3000   (اللوحة + API)
+:4097  ──►  127.0.0.1:4097   (الوكيل المصادَق للأسطح المدمجة)
+                                   ├─► 127.0.0.1:8080  code-server --auth none
+                                   └─► 127.0.0.1:4096  opencode web
+```
+
+- **`3000`** هو السطح المصادَق: اللوحة والـ API، ورمز الجلسة (JWT) في `localStorage` يُرسل مع كل طلب.
 - **`4097`** هو **الطريق الوحيد** إلى سطحَي تنفيذ الكود: `code-server --auth none` و `opencode web` بلا كلمة مرور، يعملان كـ root داخل حاوية تحمل `/var/run/docker.sock`.
-- ترويس `3000` وحده يترك سطح تنفيذ كود كامل على قناة صريحة. ولا يوجد منفذ ثالث لترويسه: `8100` و `4096` **لم يعودا منشورَين إطلاقًا** (مربوطان على `127.0.0.1` داخل حاوية التطبيق، وبلا عنوان على أي شبكة Docker).
+- `8100`/`4096` **لم يعودا منشورَين إطلاقًا** (مربوطان على `127.0.0.1` داخل حاوية التطبيق، بلا عنوان على أي شبكة Docker). لا تفتحهما يدويًا.
 
-### نموذج التهديد الصادق — Honest threat model
+### لماذا هذا التركيب — Audit evidence
 
-بدون TLS، من يستطيع اعتراض مسار الشبكة (ARP spoof، نقطة وصول لاسلكية خبيثة، جهاز على نفس الشبكة المحلية) يقرأ ما يمرّ نصًّا صريحًا: **رمز الجلسة** من `localStorage` عبر `:3000`، **وكوكي `madar_embed`** عبر `:4097`، وكل بايت من الملفات وواجهات الـ API. لذلك **غياب `Secure` على الكوكي ليس ثغرة منفصلة يمكن إصلاحها** — هو غياب الضابط الوحيد الذي كان TLS يوفّره. لا تغيير برمجي يجعل قيمة تُقرأ على السلك غير قابلة للقراءة.
+- **HIGH**: `docker-compose.yml` الأساسي ينشر `3000` و`4097` على `0.0.0.0`. مع `WSD_TRUST_PROXY=1` على تركيب غير محمي يستطيع أي عميل على الشبكة تزوير `X-Forwarded-For` لتجاوز محدّدات المصادقة/الفتح/2FA. لذلك `WSD_TRUST_PROXY=1` **فقط** في `docker-compose.prod-tls.yml`، وبعد أن يصبح nginx المستمع العام الوحيد. لا تضبطه في `.env` للتركيب الأساسي.
+- **MEDIUM**: كوكي `madar_embed` يحصل على `Secure` فقط عندما يرى TLS على سطح `:4097`. القاعدة في `embedCookieSecure()` (`backend/src/services/embed-core.ts`): يُضاف `Secure` عندما تكون الوصلة TLS، أو عندما يكون `WSD_TRUST_PROXY=1` **و**وصلوكيل الموثوق بـ `X-Forwarded-Proto: https`. لا يُجعل غير مشروط لأن المتصفح **يُسقط بصمت** كوكي `Secure` وصل عبر `http://`، فيفشل VS Code و opencode لكل مستخدم بلا رسالة خطأ. والعكس: `X-Forwarded-Proto` لا يُقرأ بدون `WSD_TRUST_PROXY=1`، فلا يستطيع عميل تحصين الكوكي أو تعطيله بترويسة مزوّرة.
+- **LOW/INFO**: JWT يسافر في سلسلة استعلام مقابس WebSocket (`?token=`). لذلك سجلات وصول nginx يجب أن تستخدم `$uri` **وليس** `$request_uri`، وإلا كُتب الرمز في ملف السجل.
 
-### لماذا الكوكي ليس `Secure` دائمًا
+`HttpOnly` + `SameSite=Strict` + بوابة `editor+` + عمر 12 ساعة + إعادة قراءة الدور الحيّ عند كل طلب (فحذف الحساب أو تخفيضه يُسقط الكوكي فورًا) تُحدّ من الضرر لو سُرِّبت قيمة، لكنها **لا تحمي قناة صريحة**: من يقرأ الحزمة يقرأ الكوكي ويستخدمه فورًا. التحكم هو TLS.
 
-القاعدة في `embedCookieSecure()` (`backend/src/services/embed-core.ts`): يُضاف `Secure` فقط عندما تكون **الوصلة نفسها** TLS، أو عندما يكون المشغّل قد فعّل `WSD_TRUST_PROXY=1` **و**أبلغ الوكيل الموثوق بـ `X-Forwarded-Proto: https`. والسبب عدم جعله غير مشروط: التثبيت الموصوف هنا HTTP صريح، والمتصفح **يُسقط بصمت** كوكي `Secure` يصل عبر `http://` — فيفشل VS Code و opencode لكل مستخدم على الشبكة بلا أي رسالة خطأ. والعكس صحيح أيضًا: `X-Forwarded-Proto` لا يُقرأ إطلاقًا بدون `WSD_TRUST_PROXY=1`، فعميل على الشبكة لا يستطيع تحصين الكوكي (أو تعطيله) بترويسة مزوّرة منفردًا.
+### خطوات النشر الإنتاجي
 
-> `WSD_TRUST_PROXY=1` يضبط أيضًا `trust proxy` للطلب الواحد، فيرى محدّدات المعدّل (rate limiting) عناوين العملاء الحقيقية بدل عنوان الوكيل. اضبطه **فقط** عندما يكون هناك قفزة واحدة موثوقة فعلًا أمام التطبيق — راجع صياغته في `.env.example`.
+تُعدّ ملفات النشر في `deploy/` و`docker-compose.prod-tls.yml` و`scripts/` من قِبل فريق DevOps؛ لا تُعدّل `docker-compose.yml` يدويًا. استبدل `madar.example.com` و`admin@madar.example.com` بنطاقك وبريدك قبل التنفيذ.
 
-### مثال تطبيقي — Caddy
-
-```caddyfile
-# /etc/caddy/Caddyfile
-# TLS أمام المنفذين معًا. Caddy يمرّر ترويسات WebSocket الترقية تلقائيًا،
-# فلا حاجة لإعداد Upgrade/Connection يدويًا.
-
-# 1) اللوحة + API  ->  منفذ الحاوية 3000
-madar.example.com {
-	reverse_proxy 127.0.0.1:3000
-}
-
-# 2) وكيل الأسطح المدمجة  ->  منفذ الحاوية 4097
-#    نفس اسم المضيف على **منفذ TLS ثانٍ**، وليس بادئة مسار: كوكي madar_embed
-#    مقيَّد بالمضيف (الكوكي لا يميّز المنافذ) فتجده في 4097، و opencode يقدّم
-#    مسارات مطلقة (/assets/...) فلا يحتمل العمل تحت بادئة مسار.
-madar.example.com:8443 {
-	reverse_proxy 127.0.0.1:4097
-}
-```
-
-### مثال تطبيقي — nginx
-
-```nginx
-# /etc/nginx/conf.d/madar.conf
-map $http_upgrade $madar_connection_upgrade {
-    default upgrade;
-    ''      close;
-}
-
-# 1) اللوحة + API
-server {
-    listen 443 ssl;
-    server_name madar.example.com;
-    ssl_certificate     /etc/letsencrypt/live/madar.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/madar.example.com/privkey.pem;
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;   # <- https: يجعل كوكي madar_embed يُصدر بـ Secure
-        proxy_set_header Upgrade           $http_upgrade;
-        proxy_set_header Connection        $madar_connection_upgrade;
-    }
-}
-
-# 2) وكيل الأسطح المدمجة — نفس المضيف، منفذ TLS ثانٍ
-server {
-    listen 8443 ssl;
-    server_name madar.example.com;
-    ssl_certificate     /etc/letsencrypt/live/madar.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/madar.example.com/privkey.pem;
-    location / {
-        proxy_pass http://127.0.0.1:4097;
-        proxy_http_version 1.1;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        # code-server و opencode كلاهما يستخدم WebSocket؛ بلا ترويسة Upgrade
-        # تنتهي الجلسة عند أول إطار.
-        proxy_set_header Upgrade           $http_upgrade;
-        proxy_set_header Connection        $madar_connection_upgrade;
-        proxy_read_timeout 3600s;          # مقابس IDE و opencode طويلة العمر
-    }
-}
-```
-
-ثم في `.env` على المضيف:
+- `MADAR_DOMAIN` و`MADAR_EMAIL` كلاهما مطلوبان؛ مرّرهما إلى `scripts/install.sh --prod-tls` عبر `--domain` و`--email` (أو عبر المتغيّرين في البيئة)، فالسكربت يرفض القيم النموذجية.
+- حدّد واجهة `:4097` العامة بـ `--lan-ip <PUBLIC_IPv4>` أو `MADAR_LAN_IP=<PUBLIC_IPv4>`. إن حُذف، يكتشفها السكربت تلقائيًا من جهاز المسار الافتراضي باستخدام `ip -4 -o route show default` ثم `ip -4 -o addr show dev <dev> scope global`؛ ويرفض التثبيت إن تعذّر الكشف أو كانت القيمة ليست IPv4 عامًا صالحًا.
+- لا تثبّت `deploy/nginx/madar.conf` الخام كما هو: سطر `listen 4097 ssl;` يربط على كل العناوين ويتصادم مع ربط التطبيق على `127.0.0.1:4097` في التركيب الإنتاجي. المثبّت `--prod-tls` يستبدله بـ `listen <PUBLIC_IPv4>:4097 ssl;` قبل تثبيت الإعداد النهائي.
+- `.git/config:3` يحوي `filemode = false` (شائع على ويندوز)، فلا تعتمد على بت التنفيذ في سكربتات `deploy/certbot/`. استدعِ `obtain.sh` بـ `bash` كما يفعل المثبّت، وتعتمد وحدة التجديد على `ExecStart=/bin/sh "@MADAR_DIR@/deploy/certbot/renew.sh"`؛ لا تنفّذ `./deploy/certbot/renew.sh` مباشرة.
 
 ```bash
-# قفزة موثوقة واحدة فعلًا أمام التطبيق: عنوان العميل الحقيقي للمعدّدات
-# + تمرير X-Forwarded-Proto: https، فيُصدر madar_embed بـ Secure.
-WSD_TRUST_PROXY=1
-# الوكيل المصادَق من المضيف المحلي وحده — لا أحد على الشبكة يتصل به مباشرة.
-WSD_EMBEDDED_PUBLISH_HOST=127.0.0.1
+# 1) ثبّت nginx و certbot، وأنشئ مجلد تحدي ACME
+sudo apt-get update && sudo apt-get install -y nginx certbot
+sudo mkdir -p /var/www/certbot
+
+# 2) شغّل المثبّت الإنتاجي: يطلب الشهادة، ويولّد إعداد nginx النهائي، ويشغّل التركيب، ويثبّت وحدتي systemd
+# استبدل النطاق والبريد قبل التنفيذ؛ أضف --lan-ip <PUBLIC_IPv4> إن لم يُكتشف عنوان :4097 تلقائيًا
+sudo bash scripts/install.sh --prod-tls --domain madar.example.com --email admin@madar.example.com
+
+# 3) تحقّق من إعداد nginx النهائي الذي ثبّته المثبّت
+sudo nginx -t                       # يجب أن ينتهي بـ syntax is ok / test is successful
+
+# 4) تحقق من وحدة تجديد الشهادة
+sudo systemctl status certbot-renew.timer --no-pager
+
+# 5) المثبّت شغّل نسخة التطبيق الواحدة بالتراكب الإنتاجي (أعد الأمر عند الحاجة)
+docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --remove-orphans
+
+# 6) تحقق من الربط الفعّال — يجب أن ينتهي بـ exit 0 ورسالة ok
+bash scripts/check-prod-binding.sh
+bash scripts/check-prod-binding.sh --check-running   # يفحص أيضًا الحاوية الشغّالة wsd-pro
+
+# 7) جدار النار: اسمح بالمضيف بـ 80 و443 و4097 فقط، ولا تسمح بـ 3000 مباشرة
 ```
 
-**ملاحظتان نزيهتان:**
+`docker-compose.prod-tls.yml` يربط `3000` و`4097` على `127.0.0.1`، ويضبط `WSD_TRUST_PROXY=1` و`WSD_EMBED_PROXY_PORT=4097` و`WSD_EMBEDDED_PUBLISH_HOST=127.0.0.1`، ويضيف `restart: unless-stopped` وحدًّا لحجم سجل الحاوية وفحص صحة. حارسة الربط `scripts/check-prod-binding.sh` تقرأ التركيب الفعّال (`docker compose config`) وتتحقق أن المنفذين مرتبطان على `127.0.0.1` وأن `WSD_TRUST_PROXY=1`؛ أي انحراف يُخرجها بـ exit 1 مع سطر يوضّح السبب.
 
-- ترويس `X-Forwarded-Proto` يجب أن يمرّ كما هو. الوكيل يقرأ قيمته **فقط** مع `WSD_TRUST_PROXY=1`؛ بدونه يُصدر الكوكي بلا `Secure` على HTTPS، فتبقى قيمة قابلة للقراءة على مسار الشبكة.
-- `WSD_EMBEDDED_PUBLISH_HOST=127.0.0.1` يسحب `4097` إلى المضيف المحلي. لكن نشر `3000` مثبَّت في `docker-compose.yml` على `0.0.0.0` وليس له متغير بيئة: لإزالته من الشبكة كليًا اربطه على `127.0.0.1:3000:3000` في `docker-compose.yml` وأعد التشغيل. حتى ذلك الحين، `:3000` يبقى موجودًا بنص صريح.
+### عقد إعداد nginx المطلوب
 
-### ما ليس بديلًا عن TLS
+إعداد `deploy/nginx/madar.conf` (الذي تُثبّته في الخطوة 2) يجب أن يحقق ما يلي:
 
-`HttpOnly` + `SameSite=Strict` + بوابة `editor+` + عمر 12 ساعة + إعادة قراءة الدور الحيّ عند كل طلب (فحذف الحساب أو تخفيضه يُسقط الكوكي فورًا) — كلها **تُحدّ من الضرر** لو سُرِّبت قيمة، لكنها **لا تحمي قناة صريحة**: من يقرأ الحزمة يقرأ الكوكي نفسه، ويستخدمه فورًا قبل أن يلحقه أي شرط. التحكم الحقيقي هو TLS. أما المنافذ الخام `8100`/`4096` فلا حاجة إلى أي ترويس لأنها لم تعد منشورة.
+- `:80` يقدّم تحدي ACME تحت `/.well-known/acme-challenge/` ثم يعيد التوجيه إلى HTTPS؛ لا يمرّر حركة التطبيق على HTTP صريح.
+- `:443` يوكّل إلى `127.0.0.1:3000`؛ `:4097` على نفس المضيف يوكّل إلى `127.0.0.1:4097`. كوكي `madar_embed` مقيَّد بالمضيف (لا يميّز المنافذ)، و opencode يقدّم مسارات مطلقة (`/assets/...`) لذلك يُستخدم **منفذ TLS ثانٍ** وليس بادئة مسار.
+- ترويسات WebSocket (`Upgrade`/`Connection`) و`proxy_http_version 1.1` و`proxy_read_timeout` طويلة لمقابس IDE وopencode والطرفية والشات؛ بلا ترقية تنتهي الجلسة عند أول إطار.
+- `proxy_set_header X-Forwarded-Proto $scheme` حتى يرى `embedCookieSecure()` HTTPS ويُصدر الكوكي بـ `Secure`.
+- `client_max_body_size 256m` — حد استيراد لقطة المشروع نفسه 200 ميغابايت (`backend/src/index.ts`)، و`256m` يترك هامشًا لبيانات multipart وترويسات الرفع؛ وأي قيمة أقل من حجم اللقطة تُرجع 413. مرفقات شات الفريق محدّدة بـ 10 ميغابايت (`chat-team-core.ts`)، ومرفقات شات المشروع بـ 4 ميغابايت و5 ملفات (`ws-chat.ts`).
+- سجل الوصول بصيغة تستخدم `$uri` (وليس `$request_uri`) في حقل المسار، وإلا كُتب الرمز في السجل؛ والترويسة `X-Forwarded-For: $remote_addr` تمرّر عنوان العميل من القفزة الموثوقة فقط.
+
+### ملاحظات اختبار نزيهة
+
+- السكربت الأساسي `scripts/install.sh` يثبّت التركيب المحلي فقط؛ التحويل إلى الإنتاج يتم بالخطوات أعلاه على نسخة واحدة.
+- اختبارات `*-core.test.ts` (الوحدات الصرفة) تعمل داخل حاوية `WSD_TESTING=0` الحالية. المجموعة الكاملة المتسلسلة (`node --test --test-concurrency=1 "tests/**/*.test.ts"`) تحتاج حاوية suite منفصلة بـ `WSD_TESTING=1`؛ لا تدّعِ أنها نجحت في حاوية الإنتاج.
+- في هذه البيئة تعذّر تشغيل `scripts/check-prod-binding.sh` بنجاح لأن `bash` هنا من WSL بلا تكامل Docker (`The command 'docker' could not be found in this WSL 2 distro`). تحققت من منطق السكريت ثابتًا: عند نجاح `docker compose config` وتحقق الربط يطبع `ok: ...` ويخرج بـ 0؛ لم ينفّذ فعليًا هنا.
 
 ## طريقة الاستخدام
 
@@ -261,6 +232,13 @@ WSD_EMBEDDED_PUBLISH_HOST=127.0.0.1
 | Copilot يظهر من جديد أو يتضخم حجم صورة المحرر | `dpkg -i` (تحديث المكوّنات أو إعادة التطبيق عند الإقلاع) يستعيد `/usr/lib/code-server` الأصلي. أُغلقت هذه الثغرة: كل مسارات `dpkg` تشغّل `ide-hardening.sh apply && verify`، والإقلاع يشغّل `verify` أيضًا. تحقّق بـ `docker exec wsd-pro /usr/local/share/madar/ide-hardening.sh verify` — يجب أن ينتهي بـ `exit 0`، وأن يكون `@github` أصغر من 2 ميغابايت |
 | opencode لا يعمل | افتح `/#/opencode` من اللوحة (عبر الوكيل المصادَق على `4097`) وافحص `docker compose logs app`؛ أضف `OPENCODE_API_KEY` إن لم يكن مضبوطًا |
 | الدردشة تخطئ | افتح **Providers** واضغط فحص الاتصال للمزوّد — الرسالة تميز بين خطأ مفتاح وحصة ومنفذ |
+| إنتاج: اللوحة تُفتح على `http://host:3000` مباشرة | تركيب الإنتاج لم يُطبَّق. شغّل `docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --remove-orphans` ثم `bash scripts/check-prod-binding.sh` (يجب exit 0)، وافتح اللوحة عبر `https://madar.example.com` فقط |
+| إنتاج: iframe لـ VS Code/opencode ميت والكوكي بلا `Secure` | nginx لم يمرّر `X-Forwarded-Proto: https` أو `WSD_TRUST_PROXY` لم يُضبط في التراكب الإنتاجي. تحقق أن `sudo nginx -t` سليم، وأن `docker-compose.prod-tls.yml` مطبَّق، وأعد فتح الصفحة؛ الكوكي القديم بلا `Secure` لا يُحصَّن بأثر رجعي — سجّل دخولًا جديدًا |
+| إنتاج: 429 عشوائية على تسجيل الدخول/الفتح/2FA | `WSD_TRUST_PROXY=1` مفعّل أمام وكيل غير موثوق، فيرى المحدّد عنوان الوكيل بدل العميل. تأكد أن nginx هو المستمع العام الوحيد وأن `:3000`/`:4097` مرتبطان على `127.0.0.1` (`check-prod-binding.sh`) |
+| استيراد لقطة project يرجع 413 | رفع nginx (`client_max_body_size`) أقل من 256m. اضبطه إلى `256m` كما في `deploy/nginx/madar.conf`؛ حد استيراد التطبيق نفسه 200 ميغابايت، و`256m` يترك هامشًا لبيانات multipart وترويسات الرفع |
+| JWT يظهر في سجل nginx | الإعداد يستخدم `$request_uri` وهو يُسجّل سلسلة الاستعلام الكاملة بما فيها `?token=`. استبدله بـ `$uri` في صيغة `log_format` وأعد `sudo nginx -t && sudo systemctl reload nginx`، ثم طهّر السجل القديم |
+| تجديد الشهادة يفشل أو انتهت الشهادة | تحقق من `sudo systemctl status certbot-renew.timer` وسجلات systemd المتعلقة بـ certbot (`sudo journalctl -u 'certbot*' -n 100`)، وأن `/var/www/certbot` قابل للكتابة وأن المنفذ `80` مفتوح لتحدي ACME. أعد `MADAR_DOMAIN=madar.example.com MADAR_EMAIL=admin@madar.example.com bash deploy/certbot/obtain.sh` عند الحاجة (استبدل القيمتين النموذجيتين)، وتذكّر أن وحدة التجديد تستدعي `renew.sh` عبر `/bin/sh` لا تنفيذًا مباشرًا |
+| iframe ميت بعد تحديث الشهادة | أعد تحميل الصفحة؛ إن استمر، تحقق أن nginx أعاد قراءة الشهادة (`sudo systemctl reload nginx`) وأن `WSD_TRUST_PROXY=1` لا يزال ساريًا في الحاوية |
 | نُسيت كلمة المرور | احذف volume البيانات لإعادة ضبط كل شيء: `docker compose down -v` (**يمسح** الحساب والمزوّدين والجلسات — ملفات المشاريع تبقى) |
 
 ## إيقاف
