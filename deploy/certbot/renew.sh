@@ -67,5 +67,5 @@ script_path=$(resolve_script_path "$0") || die "cannot resolve script path"
 case "$script_path" in *\'*) die "script path contains a single quote" ;; esac
 mkdir -p "$webroot"
 
-certbot renew --webroot -w "$webroot" --non-interactive --quiet --deploy-hook "'$script_path' --reload-nginx"
+certbot renew --webroot -w "$webroot" --non-interactive --quiet --deploy-hook "/bin/sh '$script_path' --reload-nginx"
 printf 'ok: certificate renewal check finished\n'

@@ -90,7 +90,7 @@ sudo systemctl reload nginx
 | iframe ميت أو كوكي بلا `Secure` | `X-Forwarded-Proto: https` في nginx + `WSD_TRUST_PROXY=1` في التراكب؛ سجّل دخولًا جديدًا |
 | 429 عشوائية على تسجيل الدخول/الفتح/2FA | وكيل غير موثوق أمام `WSD_TRUST_PROXY=1`؛ راجع حارسة الربط |
 | 413 عند استيراد لقطة مشروع | `client_max_body_size 256m` في إعداد nginx |
-| JWT يظهر في سجل nginx | استخدم `$uri` لا `$request_uri` في `log_format` |
+| JWT يظهر في سجل nginx | استخدم `$uri` لا `$request_uri` في `log_format`؛ لكن `$uri` يحمي **سجل الوصول فقط** — راجع أيضًا `error.log` الافتراضي عند أخطاء upstream واضبط `error_log ... crit;` مع تقييد الوصول للسجلات، والتفاصيل في [INSTALL.md](INSTALL.md#استكشاف-الأخطاء) |
 | تجديد الشهادة فاشل | حالة المؤقت + `journalctl` + `:80` + مجلد ACME |
 
 ## روابط

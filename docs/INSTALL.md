@@ -28,7 +28,11 @@ bash scripts/install.sh
 | --- | --- |
 | `--dir PATH` | مسار التثبيت؛ الافتراضي `$MADAR_DIR` أو مجلد المستودع الذي يسكنه السكربت (والد `scripts/`)، مع الرجوع إلى `$PWD` فقط إن كان مستودع Madار |
 | `--branch NAME` | الفرع عند استنساخ مستودع `20057AMO/madar`؛ الافتراضي `main` |
-| `--no-systemd` | تخطي تثبيت وحدة systemd (تشغيل Madar الآن دون إقلاع تلقائي) |
+| `--prod-tls` | تثبيت نشر الإنتاج خلف nginx مع TLS وربط التطبيق على `127.0.0.1` |
+| `--domain NAME` | نطاق الشهادة، مطلوب مع `--prod-tls` (أو `MADAR_DOMAIN`) |
+| `--email ADDR` | بريد Let's Encrypt، مطلوب مع `--prod-tls` (أو `MADAR_EMAIL`) |
+| `--lan-ip IP` | عنوان الواجهة العامة لـ `:4097` (أو `MADAR_LAN_IP`؛ يُكتشف تلقائيًا) |
+| `--no-systemd` | تخطي تثبيت وحدة systemd (تشغيل Madar الآن دون إقلاع تلقائي؛ لا يعمل مع `--prod-tls`) |
 | `--help` | عرض المساعدة |
 
 سلوك السكربت:
@@ -142,16 +146,16 @@ public                 nginx (host)                     app container (loopback 
 
 - **HIGH**: `docker-compose.yml` الأساسي ينشر `3000` و`4097` على `0.0.0.0`. مع `WSD_TRUST_PROXY=1` على تركيب غير محمي يستطيع أي عميل على الشبكة تزوير `X-Forwarded-For` لتجاوز محدّدات المصادقة/الفتح/2FA. لذلك `WSD_TRUST_PROXY=1` **فقط** في `docker-compose.prod-tls.yml`، وبعد أن يصبح nginx المستمع العام الوحيد. لا تضبطه في `.env` للتركيب الأساسي.
 - **MEDIUM**: كوكي `madar_embed` يحصل على `Secure` فقط عندما يرى TLS على سطح `:4097`. القاعدة في `embedCookieSecure()` (`backend/src/services/embed-core.ts`): يُضاف `Secure` عندما تكون الوصلة TLS، أو عندما يكون `WSD_TRUST_PROXY=1` **و**وصلوكيل الموثوق بـ `X-Forwarded-Proto: https`. لا يُجعل غير مشروط لأن المتصفح **يُسقط بصمت** كوكي `Secure` وصل عبر `http://`، فيفشل VS Code و opencode لكل مستخدم بلا رسالة خطأ. والعكس: `X-Forwarded-Proto` لا يُقرأ بدون `WSD_TRUST_PROXY=1`، فلا يستطيع عميل تحصين الكوكي أو تعطيله بترويسة مزوّرة.
-- **LOW/INFO**: JWT يسافر في سلسلة استعلام مقابس WebSocket (`?token=`). لذلك سجلات وصول nginx يجب أن تستخدم `$uri` **وليس** `$request_uri`، وإلا كُتب الرمز في ملف السجل.
+- **LOW/INFO**: JWT يسافر في سلسلة استعلام مقابس WebSocket (`?token=`). لذلك سجلات وصول nginx يجب أن تستخدم `$uri` **وليس** `$request_uri`، وإلا كُتب الرمز في ملف السجل. صيغة `$uri` تحمي **سجل الوصول فقط**؛ أما `error.log` الافتراضي فقد يسجّل سطر الطلب مع `?token=` عند أخطاء upstream، فخفّفه بـ `error_log /var/log/nginx/error.log crit;` (أو ما يعادله) وأبقِ قراءة السجلات مقيَّدة (التفاصيل في [استكشاف الأخطاء](#استكشاف-الأخطاء)).
 
 `HttpOnly` + `SameSite=Strict` + بوابة `editor+` + عمر 12 ساعة + إعادة قراءة الدور الحيّ عند كل طلب (فحذف الحساب أو تخفيضه يُسقط الكوكي فورًا) تُحدّ من الضرر لو سُرِّبت قيمة، لكنها **لا تحمي قناة صريحة**: من يقرأ الحزمة يقرأ الكوكي ويستخدمه فورًا. التحكم هو TLS.
 
 ### خطوات النشر الإنتاجي
 
-تُعدّ ملفات النشر في `deploy/` و`docker-compose.prod-tls.yml` و`scripts/` من قِبل فريق DevOps؛ لا تُعدّل `docker-compose.yml` يدويًا. استبدل `madar.example.com` و`admin@madar.example.com` بنطاقك وبريدك قبل التنفيذ.
+تُعدّ ملفات النشر في `deploy/` و`docker-compose.prod-tls.yml` و`scripts/` من قِبل فريق DevOps؛ لا تُعدّل `docker-compose.yml` يدويًا. استبدل `<DOMAIN>` و`<EMAIL>` بنطاقك وبريدك قبل التنفيذ. المثبّت يرفض `madar.example.com` و`admin@madar.example.com` صراحةً، فلا تنسخهما في أمر قابل للتنفيذ.
 
 - `MADAR_DOMAIN` و`MADAR_EMAIL` كلاهما مطلوبان؛ مرّرهما إلى `scripts/install.sh --prod-tls` عبر `--domain` و`--email` (أو عبر المتغيّرين في البيئة)، فالسكربت يرفض القيم النموذجية.
-- حدّد واجهة `:4097` العامة بـ `--lan-ip <PUBLIC_IPv4>` أو `MADAR_LAN_IP=<PUBLIC_IPv4>`. إن حُذف، يكتشفها السكربت تلقائيًا من جهاز المسار الافتراضي باستخدام `ip -4 -o route show default` ثم `ip -4 -o addr show dev <dev> scope global`؛ ويرفض التثبيت إن تعذّر الكشف أو كانت القيمة ليست IPv4 عامًا صالحًا.
+- حدّد واجهة `:4097` العامة بـ `--lan-ip <PUBLIC_IPv4>` أو `MADAR_LAN_IP=<PUBLIC_IPv4>`. إن حُذف، يكتشفها السكربت تلقائيًا من جهاز المسار الافتراضي باستخدام `ip -4 -o route show default` ثم `ip -4 -o addr show dev <dev> scope global`؛ ويرفض التثبيت إن تعذّر الكشف أو كانت القيمة IPv4 غير صالحة بنيويًا (حلقية `127.*`، `0.*`، link-local `169.254.*`، `100.64.*`، `>=224`، أو octet يتجاوز 255). هذا الفحص **لا يتحقق من قابلية العنوان للتوجيه العام**: عناوين مثل `10.*` و`172.16-31.*` و`192.168.*` تمرّ منه، فعليك تزويد عنوان IPv4 عام فعلي مرتبط بالمضيف حتى يستجيب `:4097` للجمهور.
 - لا تثبّت `deploy/nginx/madar.conf` الخام كما هو: سطر `listen 4097 ssl;` يربط على كل العناوين ويتصادم مع ربط التطبيق على `127.0.0.1:4097` في التركيب الإنتاجي. المثبّت `--prod-tls` يستبدله بـ `listen <PUBLIC_IPv4>:4097 ssl;` قبل تثبيت الإعداد النهائي.
 - `.git/config:3` يحوي `filemode = false` (شائع على ويندوز)، فلا تعتمد على بت التنفيذ في سكربتات `deploy/certbot/`. استدعِ `obtain.sh` بـ `bash` كما يفعل المثبّت، وتعتمد وحدة التجديد على `ExecStart=/bin/sh "@MADAR_DIR@/deploy/certbot/renew.sh"`؛ لا تنفّذ `./deploy/certbot/renew.sh` مباشرة.
 
@@ -161,8 +165,8 @@ sudo apt-get update && sudo apt-get install -y nginx certbot
 sudo mkdir -p /var/www/certbot
 
 # 2) شغّل المثبّت الإنتاجي: يطلب الشهادة، ويولّد إعداد nginx النهائي، ويشغّل التركيب، ويثبّت وحدتي systemd
-# استبدل النطاق والبريد قبل التنفيذ؛ أضف --lan-ip <PUBLIC_IPv4> إن لم يُكتشف عنوان :4097 تلقائيًا
-sudo bash scripts/install.sh --prod-tls --domain madar.example.com --email admin@madar.example.com
+# استبدل العنصرين النائبين <DOMAIN> و<EMAIL> بقيمك الحقيقية؛ أضف --lan-ip <PUBLIC_IPv4> إن لم يُكتشف عنوان :4097 تلقائيًا
+sudo bash scripts/install.sh --prod-tls --domain <DOMAIN> --email <EMAIL>
 
 # 3) تحقّق من إعداد nginx النهائي الذي ثبّته المثبّت
 sudo nginx -t                       # يجب أن ينتهي بـ syntax is ok / test is successful
@@ -189,9 +193,10 @@ bash scripts/check-prod-binding.sh --check-running   # يفحص أيضًا ال�
 - `:80` يقدّم تحدي ACME تحت `/.well-known/acme-challenge/` ثم يعيد التوجيه إلى HTTPS؛ لا يمرّر حركة التطبيق على HTTP صريح.
 - `:443` يوكّل إلى `127.0.0.1:3000`؛ `:4097` على نفس المضيف يوكّل إلى `127.0.0.1:4097`. كوكي `madar_embed` مقيَّد بالمضيف (لا يميّز المنافذ)، و opencode يقدّم مسارات مطلقة (`/assets/...`) لذلك يُستخدم **منفذ TLS ثانٍ** وليس بادئة مسار.
 - ترويسات WebSocket (`Upgrade`/`Connection`) و`proxy_http_version 1.1` و`proxy_read_timeout` طويلة لمقابس IDE وopencode والطرفية والشات؛ بلا ترقية تنتهي الجلسة عند أول إطار.
-- `proxy_set_header X-Forwarded-Proto $scheme` حتى يرى `embedCookieSecure()` HTTPS ويُصدر الكوكي بـ `Secure`.
+- `proxy_set_header X-Forwarded-Proto https` قيمة ثابتة (لا `$scheme`) في كلا المستمعين `:443` و`:4097`، لأنهما TLS فقط؛ يثبّت المثبّت القيمة الثابتة (`deploy/nginx/madar.conf:45,74`) حتى يرى `embedCookieSecure()` HTTPS ويُصدر كوكي `madar_embed` بـ `Secure`.
 - `client_max_body_size 256m` — حد استيراد لقطة المشروع نفسه 200 ميغابايت (`backend/src/index.ts`)، و`256m` يترك هامشًا لبيانات multipart وترويسات الرفع؛ وأي قيمة أقل من حجم اللقطة تُرجع 413. مرفقات شات الفريق محدّدة بـ 10 ميغابايت (`chat-team-core.ts`)، ومرفقات شات المشروع بـ 4 ميغابايت و5 ملفات (`ws-chat.ts`).
 - سجل الوصول بصيغة تستخدم `$uri` (وليس `$request_uri`) في حقل المسار، وإلا كُتب الرمز في السجل؛ والترويسة `X-Forwarded-For: $remote_addr` تمرّر عنوان العميل من القفزة الموثوقة فقط.
+- `error_log /var/log/nginx/error.log crit;` (أو ما يعادله) لتقليل خطر تسريب JWT في `error.log`؛ التفاصيل في صف «JWT يظهر في سجل nginx» ضمن [استكشاف الأخطاء](#استكشاف-الأخطاء) أدناه.
 
 ### ملاحظات اختبار نزيهة
 
@@ -232,12 +237,12 @@ bash scripts/check-prod-binding.sh --check-running   # يفحص أيضًا ال�
 | Copilot يظهر من جديد أو يتضخم حجم صورة المحرر | `dpkg -i` (تحديث المكوّنات أو إعادة التطبيق عند الإقلاع) يستعيد `/usr/lib/code-server` الأصلي. أُغلقت هذه الثغرة: كل مسارات `dpkg` تشغّل `ide-hardening.sh apply && verify`، والإقلاع يشغّل `verify` أيضًا. تحقّق بـ `docker exec wsd-pro /usr/local/share/madar/ide-hardening.sh verify` — يجب أن ينتهي بـ `exit 0`، وأن يكون `@github` أصغر من 2 ميغابايت |
 | opencode لا يعمل | افتح `/#/opencode` من اللوحة (عبر الوكيل المصادَق على `4097`) وافحص `docker compose logs app`؛ أضف `OPENCODE_API_KEY` إن لم يكن مضبوطًا |
 | الدردشة تخطئ | افتح **Providers** واضغط فحص الاتصال للمزوّد — الرسالة تميز بين خطأ مفتاح وحصة ومنفذ |
-| إنتاج: اللوحة تُفتح على `http://host:3000` مباشرة | تركيب الإنتاج لم يُطبَّق. شغّل `docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --remove-orphans` ثم `bash scripts/check-prod-binding.sh` (يجب exit 0)، وافتح اللوحة عبر `https://madar.example.com` فقط |
+| إنتاج: اللوحة تُفتح على `http://host:3000` مباشرة | تركيب الإنتاج لم يُطبَّق. شغّل `docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --remove-orphans` ثم `bash scripts/check-prod-binding.sh` (يجب exit 0)، وافتح اللوحة عبر `https://<DOMAIN>` فقط |
 | إنتاج: iframe لـ VS Code/opencode ميت والكوكي بلا `Secure` | nginx لم يمرّر `X-Forwarded-Proto: https` أو `WSD_TRUST_PROXY` لم يُضبط في التراكب الإنتاجي. تحقق أن `sudo nginx -t` سليم، وأن `docker-compose.prod-tls.yml` مطبَّق، وأعد فتح الصفحة؛ الكوكي القديم بلا `Secure` لا يُحصَّن بأثر رجعي — سجّل دخولًا جديدًا |
 | إنتاج: 429 عشوائية على تسجيل الدخول/الفتح/2FA | `WSD_TRUST_PROXY=1` مفعّل أمام وكيل غير موثوق، فيرى المحدّد عنوان الوكيل بدل العميل. تأكد أن nginx هو المستمع العام الوحيد وأن `:3000`/`:4097` مرتبطان على `127.0.0.1` (`check-prod-binding.sh`) |
 | استيراد لقطة project يرجع 413 | رفع nginx (`client_max_body_size`) أقل من 256m. اضبطه إلى `256m` كما في `deploy/nginx/madar.conf`؛ حد استيراد التطبيق نفسه 200 ميغابايت، و`256m` يترك هامشًا لبيانات multipart وترويسات الرفع |
-| JWT يظهر في سجل nginx | الإعداد يستخدم `$request_uri` وهو يُسجّل سلسلة الاستعلام الكاملة بما فيها `?token=`. استبدله بـ `$uri` في صيغة `log_format` وأعد `sudo nginx -t && sudo systemctl reload nginx`، ثم طهّر السجل القديم |
-| تجديد الشهادة يفشل أو انتهت الشهادة | تحقق من `sudo systemctl status certbot-renew.timer` وسجلات systemd المتعلقة بـ certbot (`sudo journalctl -u 'certbot*' -n 100`)، وأن `/var/www/certbot` قابل للكتابة وأن المنفذ `80` مفتوح لتحدي ACME. أعد `MADAR_DOMAIN=madar.example.com MADAR_EMAIL=admin@madar.example.com bash deploy/certbot/obtain.sh` عند الحاجة (استبدل القيمتين النموذجيتين)، وتذكّر أن وحدة التجديد تستدعي `renew.sh` عبر `/bin/sh` لا تنفيذًا مباشرًا |
+| JWT يظهر في سجل nginx | تحقّق أن `log_format` في `/etc/nginx/conf.d/madar.conf` يستخدم `$uri` (لا `$request_uri`) كما في `deploy/nginx/madar.conf:6`؛ إن ظهر رمز في السجل فأعد `sudo nginx -t && sudo systemctl reload nginx` ثم طهّر السجل القديم. **ملاحظة LOW:** صيغة `$uri` تحمي **سجل الوصول فقط**؛ أما `error.log` الافتراضي فقد يدوّن سطر الطلب كاملًا بما فيه `?token=<JWT>` عند أخطاء الـ upstream أو إعادة تشغيل التطبيق. التخفيف: اضبط صريحًا `error_log /var/log/nginx/error.log crit;` (أو ما يعادله)، وتجنّب شحن `error.log` كاملًا إلى أنظمة خارجية، وأبقِ الوصول لقراءة السجلات مقيَّدًا |
+| تجديد الشهادة يفشل أو انتهت الشهادة | تحقق من `sudo systemctl status certbot-renew.timer` وسجلات systemd المتعلقة بـ certbot (`sudo journalctl -u 'certbot*' -n 100`)، وأن `/var/www/certbot` قابل للكتابة وأن المنفذ `80` مفتوح لتحدي ACME. أعد `sudo env MADAR_DOMAIN=<DOMAIN> MADAR_EMAIL=<EMAIL> MADAR_WEBROOT=/var/www/certbot MADAR_NGINX_CONF=/etc/nginx/conf.d/madar.conf bash deploy/certbot/obtain.sh` عند الحاجة (استبدل العنصرين النائبين `<DOMAIN>` و`<EMAIL>` بقيمك الحقيقية؛ السكربت يفرض root)، وتذكّر أن وحدة التجديد تستدعي `renew.sh` عبر `/bin/sh` لا تنفيذًا مباشرًا |
 | iframe ميت بعد تحديث الشهادة | أعد تحميل الصفحة؛ إن استمر، تحقق أن nginx أعاد قراءة الشهادة (`sudo systemctl reload nginx`) وأن `WSD_TRUST_PROXY=1` لا يزال ساريًا في الحاوية |
 | نُسيت كلمة المرور | احذف volume البيانات لإعادة ضبط كل شيء: `docker compose down -v` (**يمسح** الحساب والمزوّدين والجلسات — ملفات المشاريع تبقى) |
 
