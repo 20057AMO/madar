@@ -27,7 +27,7 @@ help() {
   --prod-tls      تثبيت نشر الإنتاج خلف nginx مع TLS وربط التطبيق على 127.0.0.1
   --domain NAME   نطاق الشهادة، مطلوب مع --prod-tls (أو MADAR_DOMAIN)
   --email ADDR    بريد Let's Encrypt، مطلوب مع --prod-tls (أو MADAR_EMAIL)
-  --lan-ip IP     عنوان الواجهة العامة لـ :4097 (أو MADAR_LAN_IP؛ يُكتشف تلقائيًا)
+  --lan-ip IP     عنوان IPv4 عام لـ :4097 (أو MADAR_LAN_IP؛ يُكتشف تلقائيًا؛ النطاقات 10.* و172.16-31.* و192.168.* مرفوضة)
   --no-systemd    تخطي تثبيت وحدة systemd (لا يعمل مع --prod-tls)
   --help          عرض هذه المساعدة
 EOF
@@ -63,6 +63,9 @@ valid_ipv4() {
   (( 10#$o1 != 0 && 10#$o1 != 127 && 10#$o1 < 224 )) || return 1
   [[ "$1" != 169.254.* ]] || return 1
   [[ "$1" != 100.64.* ]] || return 1
+  (( 10#$o1 != 10 )) || return 1
+  (( 10#$o1 != 172 || 10#$o2 < 16 || 10#$o2 > 31 )) || return 1
+  (( 10#$o1 != 192 || 10#$o2 != 168 )) || return 1
   return 0
 }
 

@@ -119,6 +119,7 @@ type StubOpts = {
   origin?: string;
   busyPort?: string;
   root?: boolean;
+  detectedIp?: string;
   env?: Record<string, string>;
 };
 
@@ -134,6 +135,7 @@ function stubPrelude(tmp: string, log: string, opts: StubOpts): string {
     `STUB_DIRTY=${opts.dirty ? '1' : '0'}`,
     `STUB_STACK_RUNNING=${opts.stackRunning === false ? '0' : '1'}`,
     `STUB_BUSY_PORT=${bashQuote(opts.busyPort ?? '')}`,
+    `STUB_DETECTED_IP=${bashQuote(opts.detectedIp ?? '')}`,
     `MADAR_SYSTEMD_PID1_DIR=${bashQuote(toBashPath(path.join(tmp, 'systemd-pid1')))}`,
     `MADAR_SYSTEMD_UNIT=${bashQuote(toBashPath(path.join(tmp, 'systemd-unit', 'madar.service')))}`,
     envLines,
@@ -155,7 +157,16 @@ function stubPrelude(tmp: string, log: string, opts: StubOpts): string {
     "curl() { stublog \"curl $*\"; printf '%s\\n' '{\"status\":\"ok\"}'; }",
     'systemctl() { stublog "systemctl $*"; }',
     `id() { stublog "id $*"; printf '%s\\n' '${uid}'; }`,
-    'ip() { stublog "ip $*"; return 0; }',
+    'ip() {',
+    '  stublog "ip $*"',
+    '  if [[ -n "$STUB_DETECTED_IP" ]]; then',
+    '    case "$*" in',
+    '      "-4 -o route show default") printf "default via 192.0.2.1 dev eth0\\n" ;;',
+    '      "-4 -o addr show dev eth0 scope global") printf "2: eth0 inet %s/24 brd 10.4.5.255 scope global eth0\\n" "$STUB_DETECTED_IP" ;;',
+    '    esac',
+    '  fi',
+    '  return 0',
+    '}',
     'nginx() { stublog "nginx $*"; return 0; }',
     'certbot() { stublog "certbot $*"; return 0; }',
     'bash() { stublog "bash $*"; command bash "$@"; }',
@@ -721,6 +732,31 @@ describe('Madar install/uninstall scripts (offline)', () => {
     });
   });
 
+  test('public IPv4 addresses outside RFC1918 are accepted on the :4097 TLS listener', (t) => {
+    if (!bashAvailable()) {
+      t.skip('bash is not available on this host');
+      return;
+    }
+    for (const ip of ['172.15.0.1', '172.32.0.1', '192.169.0.1', '223.255.255.1', '100.65.0.1']) {
+      withTemp((tmp) => {
+        const repo = makeRepo(tmp);
+        const log = path.join(tmp, 'stub.log');
+        fs.writeFileSync(log, '');
+        const result = runStubbed(
+          INSTALL,
+          ['--dir', toBashPath(repo), '--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', ip],
+          tmp,
+          log,
+          { root: true, env: prodEnv(tmp) },
+        );
+        assert.strictEqual(result.status, 0, `${ip}: ${result.stderr}\n${result.stdout}`);
+        const finalConf = fs.readFileSync(path.join(tmp, 'nginx', 'madar.conf'), 'utf8');
+        assert.ok(finalConf.includes(`listen ${ip}:4097 ssl;`), `${ip}: the nginx listener was not rewritten`);
+        assert.ok(result.stdout.includes(`${ip}:4097`), `${ip}: the public TLS port was not reported`);
+      });
+    }
+  });
+
   test('unsafe prod-TLS inputs are refused before compose or certificate side effects', (t) => {
     if (!bashAvailable()) {
       t.skip('bash is not available on this host');
@@ -732,6 +768,21 @@ describe('Madar install/uninstall scripts (offline)', () => {
       { label: 'placeholder domain', args: ['--prod-tls', '--domain', 'madar.example.com', '--email', 'admin@madar.example.test', '--lan-ip', '203.0.113.10'], error: /قيمة --domain غير صالحة/ },
       { label: 'placeholder email', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.com', '--lan-ip', '203.0.113.10'], error: /قيمة --email غير صالحة/ },
       { label: 'loopback LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '127.0.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'zero-network LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '0.0.0.0'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'RFC1918 10/8 LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '10.0.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'leading-zero RFC1918 10/8 LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '010.0.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'RFC1918 172.16/12 lower edge LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '172.16.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'RFC1918 172.16/12 upper edge LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '172.31.255.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'leading-zero RFC1918 172.16/12 lower edge LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '172.016.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'leading-zero RFC1918 172.16/12 upper edge LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '172.031.255.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'RFC1918 192.168/16 LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '192.168.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'leading-zero RFC1918 192.168/16 LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '192.168.001.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'link-local LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '169.254.1.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'CGNAT LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '100.64.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'multicast LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '224.0.0.1'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'out-of-range octet LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '1.2.3.256'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'three-octet LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '10.0.0'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
+      { label: 'five-octet LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '1.2.3.4.5'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
       { label: 'trusted proxy in .env', args: valid, envFile: 'WSD_TRUST_PROXY=1\n', error: /لا تضبط WSD_TRUST_PROXY في \.env/ },
       { label: 'non-root', args: valid, root: false, error: /يحتاج صلاحيات root/ },
       { label: '--no-systemd', args: [...valid, '--no-systemd'], error: /الوضع --prod-tls يحتاج systemd/ },
@@ -753,6 +804,60 @@ describe('Madar install/uninstall scripts (offline)', () => {
         assert.ok(!fs.existsSync(path.join(repo, '.prod-binding-checked')), `${c.label}: the binding guard ran`);
       });
     }
+  });
+
+  test('auto-detected private RFC1918 address is rejected before provisioning', (t) => {
+    if (!bashAvailable()) {
+      t.skip('bash is not available on this host');
+      return;
+    }
+    withTemp((tmp) => {
+      const repo = makeRepo(tmp);
+      const log = path.join(tmp, 'stub.log');
+      fs.writeFileSync(log, '');
+      const result = runStubbed(
+        INSTALL,
+        ['--dir', toBashPath(repo), '--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test'],
+        tmp,
+        log,
+        { root: true, detectedIp: '10.4.5.6', env: { ...prodEnv(tmp), MADAR_LAN_IP: '' } },
+      );
+      assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+      assert.match(result.stderr, /تعذّر تحديد عنوان IPv4 عام صالح/);
+      const calls = logLines(log);
+      assert.ok(calls.includes('ip -4 -o route show default'), calls.join('\n'));
+      assert.ok(calls.includes('ip -4 -o addr show dev eth0 scope global'), calls.join('\n'));
+      assert.ok(!hasComposeUp(calls), 'compose up ran before the refusal');
+      assert.ok(!fs.existsSync(path.join(tmp, 'webroot', 'obtain-ran')), 'a certificate was obtained');
+      assert.ok(!fs.existsSync(path.join(repo, '.prod-binding-checked')), 'the binding guard ran');
+    });
+  });
+
+  test('auto-detected public IPv4 address is used on the :4097 TLS listener', (t) => {
+    if (!bashAvailable()) {
+      t.skip('bash is not available on this host');
+      return;
+    }
+    withTemp((tmp) => {
+      const repo = makeRepo(tmp);
+      const log = path.join(tmp, 'stub.log');
+      fs.writeFileSync(log, '');
+      const result = runStubbed(
+        INSTALL,
+        ['--dir', toBashPath(repo), '--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test'],
+        tmp,
+        log,
+        { root: true, detectedIp: '203.0.113.10', env: { ...prodEnv(tmp), MADAR_LAN_IP: '' } },
+      );
+      assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      assert.doesNotMatch(result.stderr, /تعذّر تحديد عنوان IPv4 عام صالح/);
+      const calls = logLines(log);
+      assert.ok(calls.includes('ip -4 -o route show default'), calls.join('\n'));
+      assert.ok(calls.includes('ip -4 -o addr show dev eth0 scope global'), calls.join('\n'));
+      const finalConf = fs.readFileSync(path.join(tmp, 'nginx', 'madar.conf'), 'utf8');
+      assert.ok(finalConf.includes('listen 203.0.113.10:4097 ssl;'), finalConf);
+      assert.ok(result.stdout.includes('203.0.113.10:4097'), `${result.stderr}\n${result.stdout}`);
+    });
   });
 
   test('default uninstall keeps volumes, compose file and workspaces untouched', (t) => {

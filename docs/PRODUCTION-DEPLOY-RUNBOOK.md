@@ -4,7 +4,7 @@
 
 > **مصدر الحقيقة:** [الأمان في النشر — Security in production deployment](INSTALL.md#الأمان-في-النشر--security-in-production-deployment). لا تنسخ تفاصيله المطوّلة هنا؛ ارجع إليه عند أي خلاف.
 > **تحذير:** هذه قائمة تحقق **يجب تنفيذها على المضيف الحقيقي**. ما جرى قبل كتابتها كان فحصًا ثابتًا/محليًا للملفات فقط؛ لم يُنفَّذ نشر فعلي ولا إصدار شهادة هنا.
-> **ابدأ ب:** `bash scripts/install.sh --help`، ثم القسم 1. استبدل `<DOMAIN>` و`<EMAIL>` و`<PUBLIC_IPv4>` و`<INSTALL_DIR>` بقيمك الحقيقية. المثبّت يرفض `madar.example.com` و`admin@madar.example.com` النموذجيتين صراحةً؛ لا تنسخهما في أمر قابل للتنفيذ، ولا تضع أسرارًا في هذا الملف.
+> **ابدأ ب:** `bash scripts/install.sh --help`، ثم القسم 1. استبدل `<DOMAIN>` و`<EMAIL>` و`<PUBLIC_IPv4>` و`<INSTALL_DIR>` بقيمك الحقيقية؛ و`<PUBLIC_IPv4>` يجب أن يكون عنوان IPv4 عامًا مُسنَّدًا فعليًا إلى المضيف، فالعناوين الخاصة وفق RFC1918 مرفوضة. المثبّت يرفض `madar.example.com` و`admin@madar.example.com` النموذجيتين صراحةً؛ لا تنسخهما في أمر قابل للتنفيذ، ولا تضع أسرارًا في هذا الملف.
 
 المسار: 1) المتطلبات · 2) التنفيذ · 3) بوابة التحقق · 4) تجديد الشهادة · 5) استكشاف مختصر.
 
@@ -25,11 +25,11 @@ sudo apt-get update && sudo apt-get install -y nginx certbot
 sudo mkdir -p /var/www/certbot
 ```
 
-- [ ] راجع الواجهة، ثم شغّل المثبّت الإنتاجي بالقيم الحقيقية. `--lan-ip` اختياري إن نجح الكشف التلقائي من جهاز المسار الافتراضي؛ مرّره صراحةً إذا فشل الكشف:
+- [ ] راجع الواجهة، ثم شغّل المثبّت الإنتاجي بالقيم الحقيقية. `--lan-ip` اختياري فقط إن أعاد الكشف التلقائي من جهاز المسار الافتراضي عنوانًا عامًا مقبولًا؛ نجاح الكشف لا يكفي إن كان العنوان المكتشف خاصًا (`10.*` أو `172.16-31.*` أو `192.168.*`)، فالمثبّت يرفضه بالرسالة `تعذّر تحديد عنوان IPv4 عام صالح؛ مرّره عبر --lan-ip أو MADAR_LAN_IP.`: إن فشل الكشف أو أعاد عنوانًا خاصًا، مرّر `--lan-ip` صراحةً بعنوان IPv4 عام مُسنَّد فعليًا إلى المضيف:
 
 ```bash
 bash scripts/install.sh --help
-sudo bash scripts/install.sh --prod-tls --dir <INSTALL_DIR> --domain <DOMAIN> --email <EMAIL>   # أضف --lan-ip <PUBLIC_IPv4> إن فشل الكشف التلقائي
+sudo bash scripts/install.sh --prod-tls --dir <INSTALL_DIR> --domain <DOMAIN> --email <EMAIL>   # أضف --lan-ip <PUBLIC_IPv4> إن فشل الكشف التلقائي أو أعاد عنوانًا خاصًا
 ```
 
 - [ ] المثبّت ينفّذ: `obtain.sh`، ثم `docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml config --quiet`، ثم `up -d --build --remove-orphans`، ثم انتظار `http://127.0.0.1:3000/api/health` حتى 120 ثانية، ثم تثبيت إعداد nginx النهائي، ثم `check-prod-binding.sh --check-running`، ثم وحدتَي `madar.service` و`certbot-renew.timer` تحت `/etc/systemd/system/` بصلاحية `0644`.

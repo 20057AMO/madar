@@ -155,7 +155,7 @@ public                 nginx (host)                     app container (loopback 
 تُعدّ ملفات النشر في `deploy/` و`docker-compose.prod-tls.yml` و`scripts/` من قِبل فريق DevOps؛ لا تُعدّل `docker-compose.yml` يدويًا. استبدل `<DOMAIN>` و`<EMAIL>` بنطاقك وبريدك قبل التنفيذ. المثبّت يرفض `madar.example.com` و`admin@madar.example.com` صراحةً، فلا تنسخهما في أمر قابل للتنفيذ.
 
 - `MADAR_DOMAIN` و`MADAR_EMAIL` كلاهما مطلوبان؛ مرّرهما إلى `scripts/install.sh --prod-tls` عبر `--domain` و`--email` (أو عبر المتغيّرين في البيئة)، فالسكربت يرفض القيم النموذجية.
-- حدّد واجهة `:4097` العامة بـ `--lan-ip <PUBLIC_IPv4>` أو `MADAR_LAN_IP=<PUBLIC_IPv4>`. إن حُذف، يكتشفها السكربت تلقائيًا من جهاز المسار الافتراضي باستخدام `ip -4 -o route show default` ثم `ip -4 -o addr show dev <dev> scope global`؛ ويرفض التثبيت إن تعذّر الكشف أو كانت القيمة IPv4 غير صالحة بنيويًا (حلقية `127.*`، `0.*`، link-local `169.254.*`، `100.64.*`، `>=224`، أو octet يتجاوز 255). هذا الفحص **لا يتحقق من قابلية العنوان للتوجيه العام**: عناوين مثل `10.*` و`172.16-31.*` و`192.168.*` تمرّ منه، فعليك تزويد عنوان IPv4 عام فعلي مرتبط بالمضيف حتى يستجيب `:4097` للجمهور.
+- حدّد واجهة `:4097` العامة بـ `--lan-ip <PUBLIC_IPv4>` أو `MADAR_LAN_IP=<PUBLIC_IPv4>`. إن حُذف، يكتشفها السكربت تلقائيًا من جهاز المسار الافتراضي باستخدام `ip -4 -o route show default` ثم `ip -4 -o addr show dev <dev> scope global`؛ ثم يمرّر القيمة — صريحةً كانت أم مكتشفة — على التحقق نفسه في `valid_ipv4()`. يرفض التثبيت إن تعذّر الكشف، أو كانت القيمة IPv4 غير صالحة بنيويًا (حلقية `127.*`، `0.*`، link-local `169.254.*`، `100.64.*`، `>=224`، أو octet يتجاوز 255)، أو كانت عنوانًا خاصًا وفق RFC1918 (`10.*` و`172.16-31.*` و`192.168.*`). نجاح الكشف لا يكفي إن أعاد عنوانًا خاصًا: يفشل المثبّت بالرسالة `تعذّر تحديد عنوان IPv4 عام صالح؛ مرّره عبر --lan-ip أو MADAR_LAN_IP.`: الحل خلف NAT أن تمرّر عبر `--lan-ip` أو `MADAR_LAN_IP` عنوان IPv4 عامًا مُسنَّدًا فعليًا إلى المضيف حتى يستجيب `:4097` للجمهور.
 - لا تثبّت `deploy/nginx/madar.conf` الخام كما هو: سطر `listen 4097 ssl;` يربط على كل العناوين ويتصادم مع ربط التطبيق على `127.0.0.1:4097` في التركيب الإنتاجي. المثبّت `--prod-tls` يستبدله بـ `listen <PUBLIC_IPv4>:4097 ssl;` قبل تثبيت الإعداد النهائي.
 - `.git/config:3` يحوي `filemode = false` (شائع على ويندوز)، فلا تعتمد على بت التنفيذ في سكربتات `deploy/certbot/`. استدعِ `obtain.sh` بـ `bash` كما يفعل المثبّت، وتعتمد وحدة التجديد على `ExecStart=/bin/sh "@MADAR_DIR@/deploy/certbot/renew.sh"`؛ لا تنفّذ `./deploy/certbot/renew.sh` مباشرة.
 
@@ -165,7 +165,7 @@ sudo apt-get update && sudo apt-get install -y nginx certbot
 sudo mkdir -p /var/www/certbot
 
 # 2) شغّل المثبّت الإنتاجي: يطلب الشهادة، ويولّد إعداد nginx النهائي، ويشغّل التركيب، ويثبّت وحدتي systemd
-# استبدل العنصرين النائبين <DOMAIN> و<EMAIL> بقيمك الحقيقية؛ أضف --lan-ip <PUBLIC_IPv4> إن لم يُكتشف عنوان :4097 تلقائيًا
+# استبدل العنصرين النائبين <DOMAIN> و<EMAIL> بقيمك الحقيقية؛ أضف --lan-ip <PUBLIC_IPv4> إن فشل الكشف التلقائي أو أعاد عنوانًا خاصًا
 sudo bash scripts/install.sh --prod-tls --domain <DOMAIN> --email <EMAIL>
 
 # 3) تحقّق من إعداد nginx النهائي الذي ثبّته المثبّت
