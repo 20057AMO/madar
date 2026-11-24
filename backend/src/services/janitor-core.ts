@@ -12,6 +12,8 @@
 import fs from 'fs';
 import path from 'path';
 
+export const WORKSPACE_LIFECYCLE_LOCK = 'workspace:lifecycle';
+
 /** Directory names we are ever willing to touch — no traversal, no dot-dirs. */
 export function safeName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) && !name.startsWith('.');

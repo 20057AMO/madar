@@ -45,7 +45,11 @@ fs.mkdirSync(workspacesDir, { recursive: true });
 
 const store = await import('../src/services/projects-meta.ts');
 const dm = await import('../src/services/docker-manager.ts');
+const core = await import('../src/services/janitor-core.ts');
+const janitor = await import('../src/services/workspace-janitor.ts');
+const queue = await import('../src/services/write-queue.ts');
 
+const readSource = (relative: string) => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
 const metaFile = (slug: string) => path.join(dataDir, 'projects', slug, 'meta.json');
 const SLUG_STOP = 'meta-race-stop';
 const SLUG_LOCK = 'meta-race-lock';
@@ -88,6 +92,66 @@ after(async () => {
     try { await dm.removeProject(slug); } catch { /* best-effort */ }
   }
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+});
+
+describe('workspace lifecycle lock — offline contract', () => {
+  test('janitor sweep and createProject share one async lock key', () => {
+    assert.strictEqual(core.WORKSPACE_LIFECYCLE_LOCK, 'workspace:lifecycle');
+    const janitorSrc = readSource('../src/services/workspace-janitor.ts');
+    const dmSrc = readSource('../src/services/docker-manager.ts');
+    const storeSrc = readSource('../src/services/projects-meta.ts').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.match(janitorSrc, /withFileLockAsync\(\s*WORKSPACE_LIFECYCLE_LOCK/);
+    assert.match(dmSrc, /withFileLockAsync\(\s*WORKSPACE_LIFECYCLE_LOCK/);
+    assert.ok(!/withFileLock\(\s*['"]workspace:lifecycle['"]/.test(janitorSrc));
+    assert.ok(!/withFileLock\(\s*['"]workspace:lifecycle['"]/.test(dmSrc));
+    assert.ok(!/await\s+mutator\(/.test(storeSrc), 'updateMetaAsync must not await its mutator');
+    assert.ok(
+      !/updateMetaAsync\(\s*[^,]+,\s*async\s*\(/.test(dmSrc),
+      'createProject must not hand an async mutator to updateMetaAsync',
+    );
+  });
+
+  test('createProject calls runSweep after the lifecycle lock, never inside it', () => {
+    const dmSrc = readSource('../src/services/docker-manager.ts');
+    const start = dmSrc.indexOf('export async function createProject(');
+    const end = dmSrc.indexOf('export async function listProjects(', start);
+    assert.ok(start >= 0 && end > start, 'createProject source must be present');
+    const body = dmSrc.slice(start, end);
+    const lockAt = body.indexOf('withFileLockAsync(WORKSPACE_LIFECYCLE_LOCK');
+    const sweepAt = body.indexOf('runSweep()');
+    assert.ok(lockAt >= 0, 'createProject must take the shared lifecycle lock');
+    assert.ok(sweepAt >= 0, 'createProject must still trigger an event-driven sweep');
+    assert.ok(
+      lockAt < sweepAt,
+      'runSweep takes the same lock — calling it inside the lifecycle section self-deadlocks',
+    );
+  });
+
+  test('a creator holding the lifecycle lock blocks the janitor sweep until release', async () => {
+    const slug = 'lock-gate-orphan';
+    const dir = path.join(workspacesDir, slug);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'canary.txt'), 'safe');
+
+    let acquired!: () => void;
+    let release!: () => void;
+    const acquiredPromise = new Promise<void>((resolve) => { acquired = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const hold = queue.withFileLockAsync(core.WORKSPACE_LIFECYCLE_LOCK, async () => {
+      acquired();
+      await gate;
+    });
+    await acquiredPromise;
+
+    const sweep = janitor.runSweep();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.strictEqual(fs.existsSync(path.join(dir, 'canary.txt')), true);
+    release();
+    await hold;
+    const r = await sweep;
+    assert.ok(r.archived.includes(slug), `sweep must archive after release: ${r.archived}`);
+    assert.strictEqual(fs.existsSync(dir), false);
+  });
 });
 
 describe('stopProject — an unreadable meta store must not fail the stop', { skip }, () => {

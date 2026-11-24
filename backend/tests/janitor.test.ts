@@ -13,6 +13,9 @@ import assert from 'node:assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { register } from 'node:module';
+
+register(new URL('./ts-ext-resolve.mjs', import.meta.url).href);
 
 describe('Workspace janitor', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wsd-janitor-'));
@@ -21,22 +24,20 @@ describe('Workspace janitor', () => {
 
   // Env is read at module-import time, so set it before the dynamic import.
   process.env.WSD_DATA_DIR = dataDir; // audits (transitively imported) stay in temp
+  process.env.WSD_PROJECTS_DIR = wsRoot;
+  process.env.WSD_ARCHIVE_DAYS = '0';
 
-  let runSweep!: () => { archived: string[]; purged: string[] };
+  let runSweep!: () => Promise<{ archived: string[]; purged: string[] }>;
+  let withFileLockAsync!: (key: string, fn: () => Promise<void>) => Promise<void>;
+  let lifecycleLock!: string;
 
   const ready = (async () => {
-    const { sweepWorkspaces } = await import('../src/services/janitor-core.ts');
-    const listMetaSlugs = (): string[] => {
-      const metaDir = path.join(dataDir, 'projects');
-      try {
-        return fs
-          .readdirSync(metaDir)
-          .filter((s) => s && !s.startsWith('.') && fs.existsSync(path.join(metaDir, s, 'meta.json')));
-      } catch {
-        return [];
-      }
-    };
-    runSweep = () => sweepWorkspaces(wsRoot, listMetaSlugs(), 0);
+    const { WORKSPACE_LIFECYCLE_LOCK } = await import('../src/services/janitor-core.ts');
+    const { runSweep: serviceRunSweep } = await import('../src/services/workspace-janitor.ts');
+    const { withFileLockAsync: lock } = await import('../src/services/write-queue.ts');
+    lifecycleLock = WORKSPACE_LIFECYCLE_LOCK;
+    withFileLockAsync = lock;
+    runSweep = serviceRunSweep;
 
     // Fixtures: two orphans, one live project, one runtime dot-dir.
     fs.mkdirSync(path.join(wsRoot, 'orphan-a', 'nested'), { recursive: true });
@@ -57,7 +58,7 @@ describe('Workspace janitor', () => {
 
   test('first sweep archives orphans, keeps live projects and dot-dirs', async () => {
     await ready;
-    const r = runSweep();
+    const r = await runSweep();
     assert.ok(r.archived.includes('orphan-a'), `orphan-a not archived: ${r.archived}`);
     assert.ok(r.archived.includes('orphan-b'), `orphan-b not archived: ${r.archived}`);
     assert.ok(!r.archived.includes('live-proj'), 'live project must never be archived');
@@ -80,7 +81,7 @@ describe('Workspace janitor', () => {
 
   test('second sweep purges expired archive entries (ARCHIVE_DAYS=0)', async () => {
     await ready;
-    const r = runSweep();
+    const r = await runSweep();
     assert.ok(r.purged.length >= 2, `expected purged entries, got ${r.purged.length}`);
     const remaining = fs.existsSync(path.join(wsRoot, '.archive'))
       ? fs.readdirSync(path.join(wsRoot, '.archive'))
@@ -91,7 +92,7 @@ describe('Workspace janitor', () => {
 
   test('sweep over an empty root is a clean no-op', async () => {
     await ready;
-    const r = runSweep();
+    const r = await runSweep();
     assert.deepStrictEqual(r, { archived: [], purged: [] });
   });
 
@@ -104,7 +105,34 @@ describe('Workspace janitor', () => {
     );
     fs.mkdirSync(path.join(wsRoot, 'late-live'), { recursive: true });
     fs.writeFileSync(path.join(wsRoot, 'late-live', 'data.txt'), 'd');
-    runSweep();
+    await runSweep();
     assert.strictEqual(fs.existsSync(path.join(wsRoot, 'late-live', 'data.txt')), true);
+  });
+
+  test('a sweep waits for a held lifecycle lock instead of archiving mid-create', async () => {
+    await ready;
+    const slug = 'locked-orphan';
+    const dir = path.join(wsRoot, slug);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'canary.txt'), 'safe');
+
+    let acquired!: () => void;
+    let release!: () => void;
+    const acquiredPromise = new Promise<void>((resolve) => { acquired = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const hold = withFileLockAsync(lifecycleLock, async () => {
+      acquired();
+      await gate;
+    });
+    await acquiredPromise;
+
+    const sweep = runSweep();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.strictEqual(fs.existsSync(path.join(dir, 'canary.txt')), true);
+    release();
+    await hold;
+    const r = await sweep;
+    assert.ok(r.archived.includes(slug), `held-lock sweep must archive after release: ${r.archived}`);
+    assert.strictEqual(fs.existsSync(dir), false);
   });
 });

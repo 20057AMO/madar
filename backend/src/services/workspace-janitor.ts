@@ -19,36 +19,40 @@
  */
 import { listMetaSlugs } from './projects-meta';
 import { recordAudit } from './audit-store';
-import { sweepWorkspaces } from './janitor-core';
+import { WORKSPACE_LIFECYCLE_LOCK, sweepWorkspaces } from './janitor-core';
 import { purgeOpencodeProjectRows } from './opencode-store';
+import { withFileLockAsync } from './write-queue';
 
 const WORKSPACES_ROOT = process.env.WSD_PROJECTS_DIR || '/workspaces';
 const ARCHIVE_DAYS = Math.max(0, Number(process.env.WSD_ARCHIVE_DAYS ?? '7') || 0);
 const INTERVAL_MS = Math.max(250, Number(process.env.WSD_JANITOR_INTERVAL_MS ?? '') || 15 * 60 * 1000);
 
-export function runSweep(): { archived: string[]; purged: string[] } {
-  const r = sweepWorkspaces(WORKSPACES_ROOT, listMetaSlugs(), ARCHIVE_DAYS);
-  if (r.archived.length > 0) purgeOpencodeProjectRows(r.archived);
-  if (r.archived.length > 0 || r.purged.length > 0) recordAudit('workspace-janitor', true);
-  return r;
+export async function runSweep(): Promise<{ archived: string[]; purged: string[] }> {
+  try {
+    return await withFileLockAsync(WORKSPACE_LIFECYCLE_LOCK, async () => {
+      const r = sweepWorkspaces(WORKSPACES_ROOT, listMetaSlugs(), ARCHIVE_DAYS);
+      if (r.archived.length > 0) purgeOpencodeProjectRows(r.archived);
+      if (r.archived.length > 0 || r.purged.length > 0) recordAudit('workspace-janitor', true);
+      return r;
+    });
+  } catch (err) {
+    console.warn('[janitor] sweep failed:', err);
+    return { archived: [], purged: [] };
+  }
 }
 
 /** Boot sweep + fixed-interval sweeps. Returns a stop handle (for tests). */
 export function startJanitor(): () => void {
   // Defer slightly so boot stays fast and first paint is unaffected.
   const boot = setTimeout(() => {
-    try {
-      runSweep();
-    } catch {
+    void runSweep().catch(() => {
       /* never crash startup over cleanup */
-    }
+    });
   }, 5_000);
   const timer = setInterval(() => {
-    try {
-      runSweep();
-    } catch {
+    void runSweep().catch(() => {
       /* ignore */
-    }
+    });
   }, INTERVAL_MS);
   return () => {
     clearTimeout(boot);

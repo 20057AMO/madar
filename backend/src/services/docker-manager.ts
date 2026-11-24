@@ -31,6 +31,9 @@ import { getWorkspaceMount, mountRefusalCode } from './workspaces-mount';
 import { dispatchWebhook } from './webhook-sender';
 import { parseCpu, parseMemory, sanitizeLimitsPatch, limitsEqual, isEmptyLimits, checkCeilings, checkCeilingsSync, resolveDefaultLimits, getHostInfo, formatMemory, formatCpu, type ProjectLimits } from './project-limits';
 import { runSweep } from './workspace-janitor';
+import { WORKSPACE_LIFECYCLE_LOCK } from './janitor-core';
+import { isPortConflictError, PORTS_IN_USE_MESSAGE } from './port-conflict-core';
+import { withFileLockAsync } from './write-queue';
 import {
   createOpencodeSession,
   ensureOpencodeSession as ensureOpencodeSessionApi,
@@ -428,10 +431,11 @@ async function requireContainer(slug: string) {
   return info;
 }
 
-function ensureWorkspaceDir(slug: string): string {
+function ensureWorkspaceDir(slug: string): { created: boolean } {
   const dir = path.join(WORKSPACES_ROOT, slug);
+  const created = !fs.existsSync(dir);
   fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return { created };
 }
 
 // opencode runtime integration (sessions, version, updates) lives in
@@ -601,11 +605,11 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
         'and retry.',
     );
   }
-  ensureWorkspaceDir(slug);
   const bindSource = `${hostPath.replace(/\\/g, '/')}/${slug}`;
   const containerName = `wsd-${slug}`;
   const image = clean.image || BASE_IMAGE;
   await ensureImage(image);
+  const workspaceImage = await inspectWorkspaceImage();
 
   // Port mappings: expose requested host ports (bound to all interfaces)
   const portBindings: Record<string, any> = {};
@@ -620,66 +624,113 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
     }
   }
 
-  const container = await docker.createContainer({
-    name: containerName,
-    Image: image,
-    Cmd: ['/bin/bash', '-c', 'sleep infinity'],
-    Tty: true,
-    OpenStdin: true,
-    Env: [
-      ...Object.entries(clean.env || {}).map(([k, v]) => `${k}=${v}`),
-      'DEBIAN_FRONTEND=noninteractive',
-    ],
-    ExposedPorts: exposedPorts,
-    HostConfig: {
-      Binds: [`${bindSource}:/workspace`],
-      PortBindings: portBindings,
-      // Resource limits – omitted if undefined (unlimited).
-      ...(effectiveLimits?.memory ? { Memory: parseMemory(effectiveLimits.memory)!.bytes } : {}),
-      ...(effectiveLimits?.cpu ? { NanoCpus: parseCpu(effectiveLimits.cpu)!.nano } : {}),
-      // Without MemorySwap Docker silently defaults swap to 2× RAM, which
-      // would undermine the memory cap. MemorySwap is the memory+swap TOTAL,
-      // so passing the exact memory limit disables swap: the container is
-      // OOM-killed at the cap instead of thrashing host swap. NB -1 would mean
-      // UNLIMITED swap — that is the opposite of what a "limit" promises.
-      ...(effectiveLimits?.memory
-        ? { MemorySwap: parseMemory(effectiveLimits.memory)!.bytes }
-        : {}),
-      RestartPolicy: { Name: 'unless-stopped' },
-    },
-    Labels: {
-      'wsd.project': slug,
-      'wsd.name': clean.name,
-      'wsd.managed': 'true',
-      'wsd.createdAt': new Date().toISOString(),
-    },
-    WorkingDir: '/workspace',
-  });
-
-  try {
-    await container.start();
-  } catch (err: any) {
-    if (err.message && err.message.includes('port is already allocated')) {
-      throw {
-        statusCode: 409,
-        message: 'One or more requested ports are already in use by another project or service.',
-      };
+  const committed = await withFileLockAsync(WORKSPACE_LIFECYCLE_LOCK, async () => {
+    const { created } = ensureWorkspaceDir(slug);
+    let containerId: string | undefined;
+    try {
+      const container = await docker.createContainer({
+        name: containerName,
+        Image: image,
+        Cmd: ['/bin/bash', '-c', 'sleep infinity'],
+        Tty: true,
+        OpenStdin: true,
+        Env: [
+          ...Object.entries(clean.env || {}).map(([k, v]) => `${k}=${v}`),
+          'DEBIAN_FRONTEND=noninteractive',
+        ],
+        ExposedPorts: exposedPorts,
+        HostConfig: {
+          Binds: [`${bindSource}:/workspace`],
+          PortBindings: portBindings,
+          // Resource limits – omitted if undefined (unlimited).
+          ...(effectiveLimits?.memory ? { Memory: parseMemory(effectiveLimits.memory)!.bytes } : {}),
+          ...(effectiveLimits?.cpu ? { NanoCpus: parseCpu(effectiveLimits.cpu)!.nano } : {}),
+          // Without MemorySwap Docker silently defaults swap to 2× RAM, which
+          // would undermine the memory cap. MemorySwap is the memory+swap TOTAL,
+          // so passing the exact memory limit disables swap: the container is
+          // OOM-killed at the cap instead of thrashing host swap. NB -1 would mean
+          // UNLIMITED swap — that is the opposite of what a "limit" promises.
+          ...(effectiveLimits?.memory
+            ? { MemorySwap: parseMemory(effectiveLimits.memory)!.bytes }
+            : {}),
+          RestartPolicy: { Name: 'unless-stopped' },
+        },
+        Labels: {
+          'wsd.project': slug,
+          'wsd.name': clean.name,
+          'wsd.managed': 'true',
+          'wsd.createdAt': new Date().toISOString(),
+        },
+        WorkingDir: '/workspace',
+      });
+      containerId = container.id;
+      try {
+        await container.start();
+      } catch (err: any) {
+        if (isPortConflictError(err?.message)) {
+          throw new HttpError(409, PORTS_IN_USE_MESSAGE);
+        }
+        throw err;
+      }
+      const createdAt = new Date().toISOString();
+      // The read-modify-write below runs INSIDE the per-slug meta queue
+      // (updateMetaAsync), which is the whole point: the previous loadMeta/saveMeta
+      // pair was unlocked, so a writer that held a document across an await (the
+      // shape updateProjectLimits uses) could interleave here and persist its STALE
+      // copy — silently reverting this fresh container's createdAt / ports / image.
+      // Queued, each writer loads the other's result and only its own fields change.
+      await updateMetaAsync(slug, (meta) => {
+        // Merge with any existing meta instead of overwriting: a recreate (or any
+        // later call with the same slug) must preserve membership, owner and the
+        // snapshot schedule rather than silently demoting a team project to the
+        // "legacy, allow all" state. A fresh slug sees an empty meta → current behavior.
+        // Crash state (crash / requestedStop / crashWatch) is NEVER carried over —
+        // a brand-new container starts clean; the detector re-seeds its watch on
+        // the next inspect pass.
+        Object.assign(meta, {
+          name: clean.name,
+          description: clean.description,
+          image,
+          ports: clean.ports,
+          limits: effectiveLimits,
+          createdAt,
+          env: clean.env,
+        });
+        // Activity history is owned by project-activity (activity.json) — never
+        // carried through meta, even on a recreate where the document may hold
+        // legacy rows. Force the store's lazy backfill HERE, while meta.json on disk
+        // still holds the legacy `activity` array: the deletes below then wipe
+        // meta.activity, and a deferred migration would read the already-cleaned
+        // meta → [] (the pre-migration history would be lost on the first recreate).
+        loadActivity(slug);
+        delete meta.activity;
+        delete meta.crash;
+        delete meta.requestedStop;
+        delete meta.crashWatch;
+      });
+      return { containerId, createdAt };
+    } catch (err) {
+      if (containerId) {
+        await docker.getContainer(containerId).remove({ force: true }).catch((e: any) =>
+          console.warn(`[create] rollback failed to remove container '${slug}':`, e?.message || e),
+        );
+      }
+      if (created) removeWorkspaceDir(slug);
+      throw err;
     }
-    throw err;
-  }
+  });
 
   await registerOpencodeProject(slug);
 
-  const workspaceImage = await inspectWorkspaceImage();
   const info: ProjectInfo = {
-    id: container.id,
+    id: committed.containerId,
     name: clean.name,
     slug,
     description: clean.description,
     status: 'running',
-    containerId: container.id,
+    containerId: committed.containerId,
     hostPorts,
-    createdAt: new Date().toISOString(),
+    createdAt: committed.createdAt,
     image,
     imageId: image === BASE_IMAGE ? workspaceImage.imageId : null,
     imageCurrent: image === BASE_IMAGE && Boolean(workspaceImage.imageId),
@@ -688,42 +739,6 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
     limits: effectiveLimits,
     liveLimits: effectiveLimits,
   };
-
-// The read-modify-write below runs INSIDE the per-slug meta queue
-  // (updateMetaAsync), which is the whole point: the previous loadMeta/saveMeta
-  // pair was unlocked, so a writer that held a document across an await (the
-  // shape updateProjectLimits uses) could interleave here and persist its STALE
-  // copy — silently reverting this fresh container's createdAt / ports / image.
-  // Queued, each writer loads the other's result and only its own fields change.
-  await updateMetaAsync(slug, (meta) => {
-    // Merge with any existing meta instead of overwriting: a recreate (or any
-    // later call with the same slug) must preserve membership, owner and the
-    // snapshot schedule rather than silently demoting a team project to the
-    // "legacy, allow all" state. A fresh slug sees an empty meta → current behavior.
-    // Crash state (crash / requestedStop / crashWatch) is NEVER carried over —
-    // a brand-new container starts clean; the detector re-seeds its watch on
-    // the next inspect pass.
-    Object.assign(meta, {
-      name: clean.name,
-      description: clean.description,
-      image,
-      ports: clean.ports,
-      limits: effectiveLimits,
-      createdAt: info.createdAt,
-      env: clean.env,
-    });
-    // Activity history is owned by project-activity (activity.json) — never
-    // carried through meta, even on a recreate where the document may hold
-    // legacy rows. Force the store's lazy backfill HERE, while meta.json on disk
-    // still holds the legacy `activity` array: the deletes below then wipe
-    // meta.activity, and a deferred migration would read the already-cleaned
-    // meta → [] (the pre-migration history would be lost on the first recreate).
-    loadActivity(slug);
-    delete meta.activity;
-    delete meta.crash;
-    delete meta.requestedStop;
-    delete meta.crashWatch;
-  });
   // The `created` event lands in the activity store (append oldest→newest).
   recordActivity(slug, 'created', { userId });
 
@@ -750,11 +765,9 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
   // /workspaces) shows exactly the Projects-page set right now — not at the
   // next periodic sweep. Meta exists by this point, so the new project is
   // already "live" from the sweep's perspective.
-  try {
-    runSweep();
-  } catch {
-    /* never fail a create over cleanup */
-  }
+  void runSweep().catch((e) =>
+    console.warn(`[janitor] create sweep failed for '${slug}':`, e?.message || e),
+  );
 
   dispatchWebhook('created', { event: 'created', slug, name: clean.name, at: new Date().toISOString() });
 
@@ -1003,11 +1016,9 @@ export async function removeProject(slug: string, userId?: string): Promise<void
   // If the workspace dir could not be fully removed (busy files, partial
   // failure), archive the leftover NOW instead of letting it haunt
   // code-server/opencode until the next periodic sweep.
-  try {
-    runSweep();
-  } catch {
-    /* non-fatal */
-  }
+  void runSweep().catch((e) =>
+    console.warn(`[janitor] remove sweep failed for '${projectSlug}':`, e?.message || e),
+  );
   // The project no longer exists — drop any cached project list.
   invalidateProjectsCache();
 }

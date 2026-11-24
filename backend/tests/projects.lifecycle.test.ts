@@ -2,7 +2,69 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';
+import net from 'net';
+import { execFileSync } from 'child_process';
 import { uniqueId, reqAuth, initTestAuth } from './helpers.ts';
+
+const CONTAINER = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
+const PORTS_IN_USE = 'One or more requested ports are already in use by another project or service.';
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
+function holdPort(requestedPort = 0): Promise<{ port: number; release: () => Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(requestedPort, '0.0.0.0', () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      resolve({
+        port,
+        release: () => new Promise((done, fail) => {
+          srv.close((err) => (err ? fail(err) : done()));
+        }),
+      });
+    });
+  });
+}
+
+function readMetaRaw(slug: string): string {
+  const hostPath = path.resolve(import.meta.dirname!, '..', '..', 'data', 'projects', slug, 'meta.json');
+  if (fs.existsSync(hostPath)) return fs.readFileSync(hostPath, 'utf8');
+  return execFileSync(
+    'docker',
+    ['exec', CONTAINER, 'cat', `/app/data/projects/${slug}/meta.json`],
+    { encoding: 'utf8', timeout: 15000 },
+  );
+}
+
+function hostWorkspaceDir(slug: string): string {
+  return path.resolve(import.meta.dirname!, '..', '..', 'workspaces', slug);
+}
+
+function cleanupTestProject(slug: string): void {
+  if (!slug) return;
+  try {
+    execFileSync('docker', ['rm', '-f', `wsd-${slug}`], { stdio: 'ignore', timeout: 15000 });
+  } catch { /* best effort */ }
+  try {
+    execFileSync('docker', ['exec', CONTAINER, 'rm', '-rf', `/app/data/projects/${slug}`], {
+      stdio: 'ignore',
+      timeout: 15000,
+    });
+  } catch { /* best effort */ }
+  try {
+    fs.rmSync(hostWorkspaceDir(slug), { recursive: true, force: true });
+  } catch { /* best effort */ }
+}
 
 describe('Project lifecycle (real Docker container)', () => {
   before(async () => { await initTestAuth(); });
@@ -43,9 +105,20 @@ describe('Project lifecycle (real Docker container)', () => {
     assert.strictEqual(env.WSD_TEST_VAR, 'lifecycle');
   });
 
-  test('files listing responds', async () => {
+  test('files listing responds with structured entries', async () => {
+    const put = await reqAuth('PUT', `/projects/${slug}/file?path=marker.txt`, { content: 'lifecycle' });
+    assert.strictEqual(put.status, 200, `write file: ${put.status}`);
     const res = await reqAuth('GET', `/projects/${slug}/files`);
     assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.ok(Array.isArray(data.entries), 'files listing must expose an entries array');
+    assert.ok(
+      data.entries.every((e: any) => typeof e?.path === 'string' && ['file', 'dir', 'link'].includes(e?.type)),
+      'every entry must expose { path, type }',
+    );
+    const marker = data.entries.find((e: any) => e.path === 'marker.txt');
+    assert.ok(marker, 'the seeded marker must appear in the listing');
+    assert.strictEqual(marker.type, 'file');
   });
 
   test('scripts listing returns an object', async () => {
@@ -114,17 +187,106 @@ describe('Project lifecycle (real Docker container)', () => {
 
 });
 
-describe('Project duplicate (real Docker container)', () => {
+describe('Project lifecycle rollback (real Docker container)', () => {
   before(async () => { await initTestAuth(); });
 
+  const rollbackSlug = uniqueId('lc-rollback');
+  let rollbackCreated = false;
+  let failedCreateSlug = '';
+  let failedCreateCreated = false;
+
+  after(async () => {
+    if (rollbackCreated) { try { await reqAuth('DELETE', `/projects/${rollbackSlug}`); } catch { /* best effort */ } }
+    if (failedCreateCreated) { try { await reqAuth('DELETE', `/projects/${failedCreateSlug}`); } catch { /* best effort */ } }
+    cleanupTestProject(rollbackSlug);
+    cleanupTestProject(failedCreateSlug);
+  });
+
+  test('failed create rolls back the container, meta and workspace', async () => {
+    failedCreateSlug = uniqueId('lc-failed-create');
+    const held = await holdPort();
+    try {
+      const res = await reqAuth('POST', '/projects', {
+        name: 'Failed create rollback',
+        slug: failedCreateSlug,
+        ports: [held.port],
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 201) failedCreateCreated = true;
+      assert.strictEqual(res.status, 409, `create should fail: ${res.status} ${JSON.stringify(data)}`);
+      assert.strictEqual(data.error, PORTS_IN_USE);
+
+      const detail = await reqAuth('GET', `/projects/${failedCreateSlug}`);
+      assert.strictEqual(detail.status, 404, 'failed create must not leave a project');
+      assert.strictEqual(fs.existsSync(hostWorkspaceDir(failedCreateSlug)), false, 'failed create must remove its workspace');
+      assert.throws(() => readMetaRaw(failedCreateSlug), 'failed create must not persist meta');
+      const containers = execFileSync('docker', ['ps', '-a', '--filter', `name=^/wsd-${failedCreateSlug}$`, '--format', '{{.Names}}'], { encoding: 'utf8' });
+      assert.ok(!containers.includes(`wsd-${failedCreateSlug}`), 'failed create must not leave a container');
+    } finally {
+      await held.release();
+    }
+  });
+
+  test('a failed recreate preserves the workspace and meta but leaves no container', async () => {
+    const port = await freePort();
+    const created = await reqAuth('POST', '/projects', {
+      name: 'Recreate rollback',
+      slug: rollbackSlug,
+      description: 'temporary rollback test',
+      ports: [port],
+    });
+    const createdData = await created.json().catch(() => ({}));
+    assert.strictEqual(created.status, 201, `create failed: ${created.status} ${JSON.stringify(createdData)}`);
+    rollbackCreated = true;
+
+    const put = await reqAuth('PUT', `/projects/${rollbackSlug}/file?path=rollback-marker.txt`, { content: 'keep-me' });
+    assert.strictEqual(put.status, 200, `write marker: ${put.status}`);
+
+    const stopped = await reqAuth('POST', `/projects/${rollbackSlug}/stop`);
+    assert.strictEqual(stopped.status, 200, `stop failed: ${stopped.status}`);
+
+    const held = await holdPort(port);
+    try {
+      const recreated = await reqAuth('POST', `/projects/${rollbackSlug}/recreate`);
+      const data = await recreated.json().catch(() => ({}));
+      assert.strictEqual(recreated.status, 409, `recreate should fail: ${recreated.status} ${JSON.stringify(data)}`);
+      assert.strictEqual(data.error, PORTS_IN_USE);
+    } finally {
+      await held.release();
+    }
+
+    const detail = await reqAuth('GET', `/projects/${rollbackSlug}`);
+    assert.strictEqual(detail.status, 404, 'failed recreate must not leave a container');
+    const marker = path.join(hostWorkspaceDir(rollbackSlug), 'rollback-marker.txt');
+    assert.strictEqual(fs.existsSync(marker), true, 'failed recreate must keep workspace files');
+    assert.strictEqual(fs.readFileSync(marker, 'utf8').trim(), 'keep-me');
+    const meta = JSON.parse(readMetaRaw(rollbackSlug));
+    assert.strictEqual(meta.name, 'Recreate rollback');
+    assert.deepStrictEqual(meta.ports, [port]);
+
+    rollbackCreated = false;
+  });
+});
+
+describe('Project duplicate (real Docker container)', () => {
   const srcSlug = uniqueId('dup-src');
   const copySlug = uniqueId('dup-copy');
   let srcCreated = false;
   let copyCreated = false;
+  let srcPort = 0;
+  let copyPort = 0;
+
+  before(async () => {
+    await initTestAuth();
+    srcPort = await freePort();
+    copyPort = await freePort();
+  });
 
   after(async () => {
     if (copyCreated) { try { await reqAuth('DELETE', `/projects/${copySlug}`); } catch { /* best effort */ } }
     if (srcCreated) { try { await reqAuth('DELETE', `/projects/${srcSlug}`); } catch { /* best effort */ } }
+    cleanupTestProject(srcSlug);
+    cleanupTestProject(copySlug);
   });
 
   test('create the source project (201)', async () => {
@@ -132,7 +294,7 @@ describe('Project duplicate (real Docker container)', () => {
       name: 'Duplicate Source',
       slug: srcSlug,
       description: 'source for duplicate tests',
-      ports: [8091],
+      ports: [srcPort],
     });
     assert.strictEqual(res.status, 201, `create source failed: ${res.status}`);
     srcCreated = true;
@@ -162,7 +324,7 @@ describe('Project duplicate (real Docker container)', () => {
       name: 'Copied Project',
       slug: copySlug,
       description: 'a copy',
-      ports: [8092],
+      ports: [copyPort],
     });
     const data = await res.json();
     assert.strictEqual(res.status, 201, `duplicate failed: ${res.status} -> ${JSON.stringify(data)}`);
@@ -175,7 +337,7 @@ describe('Project duplicate (real Docker container)', () => {
     const res = await reqAuth('GET', `/projects/${copySlug}`);
     assert.strictEqual(res.status, 200);
     const data = await res.json();
-    assert.ok(data.project.ports.includes(8092), 'the provided ports should be applied');
+    assert.ok(data.project.ports.includes(copyPort), 'the provided ports should be applied');
   });
 
   test('duplicate copies the workspace file', async () => {
