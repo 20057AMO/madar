@@ -50,6 +50,47 @@ function runBash(script: string, args: string[] = []) {
   });
 }
 
+type BashResult = {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error?: Error;
+  stdout: string;
+  stderr: string;
+};
+type BashRunner = (script: string, args: string[]) => BashResult;
+
+function spawnErrorCode(result: BashResult): string | undefined {
+  return (result.error as { code?: string } | undefined)?.code;
+}
+
+function isTimeoutKill(result: BashResult): boolean {
+  return result.status === null && result.signal === 'SIGTERM' && spawnErrorCode(result) === 'ETIMEDOUT';
+}
+
+const BASH_SNIPPET_MAX = 200;
+
+function clipBashText(value: string): string {
+  const flat = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!flat) return '<empty>';
+  return flat.length > BASH_SNIPPET_MAX ? `${flat.slice(0, BASH_SNIPPET_MAX)}…` : flat;
+}
+
+function formatBashFacts(result: BashResult, timedOutOnce: boolean): string {
+  return `status=${String(result.status)} signal=${String(result.signal ?? 'none')} ` +
+    `error=${spawnErrorCode(result) ?? 'none'} timeoutRetry=${timedOutOnce ? 'yes' : 'no'} ` +
+    `stderr="${clipBashText(result.stderr)}" stdout="${clipBashText(result.stdout)}"`;
+}
+
+function runBashWithTimeoutRetry(
+  script: string,
+  args: string[],
+  run: BashRunner = runBash,
+): { result: BashResult; timedOutOnce: boolean } {
+  const first = run(script, args);
+  if (!isTimeoutKill(first)) return { result: first, timedOutOnce: false };
+  return { result: run(script, args), timedOutOnce: true };
+}
+
 function cleanupTemp(tmp: string): void {
   // The stubbed scripts run under WSL bash, which creates files inside this
   // Windows temp dir that Win32 cannot always unlink (EPERM). Let WSL remove
@@ -254,8 +295,11 @@ describe('Madar install/uninstall scripts (offline)', () => {
       return;
     }
     for (const script of [INSTALL, UNINSTALL]) {
-      const result = runBash(script, ['--definitely-not-a-flag']);
-      assert.strictEqual(result.status, 1, script);
+      const { result, timedOutOnce } = runBashWithTimeoutRetry(script, ['--definitely-not-a-flag']);
+      assert.strictEqual(
+        result.status, 1,
+        `${path.basename(script)}: ${formatBashFacts(result, timedOutOnce)}`,
+      );
       assert.match(result.stderr, /خيار غير معروف/);
       assert.strictEqual(result.stdout, '');
     }
@@ -976,5 +1020,95 @@ describe('Madar install/uninstall scripts (offline)', () => {
     assert.match(doc, /NoNewPrivileges=true/);
     assert.match(doc, /لم يُحذف أي شيء/);
     assert.match(doc, /سحب `--ff-only` ثم إعادة بناء وفحص صحة وتحديث وحدة systemd/);
+  });
+});
+
+describe('unknown-flag spawn diagnostics (offline)', () => {
+  type FakeBashPatch = {
+    status?: number | null;
+    signal?: NodeJS.Signals | null;
+    error?: { code?: string };
+    stdout?: string;
+    stderr?: string;
+  };
+
+  function fakeBash(patch: FakeBashPatch = {}): BashResult {
+    return {
+      status: patch.status ?? null,
+      signal: patch.signal ?? null,
+      error: patch.error ? Object.assign(new Error('synthetic spawn error'), patch.error) : undefined,
+      stdout: patch.stdout ?? '',
+      stderr: patch.stderr ?? '',
+    };
+  }
+
+  test('a timeout kill retries exactly once and returns the second outcome', () => {
+    const timeout = fakeBash({ signal: 'SIGTERM', error: { code: 'ETIMEDOUT' } });
+    const rejected = fakeBash({ status: 1, stderr: 'خيار غير معروف: --definitely-not-a-flag' });
+    const calls: string[][] = [];
+    const runner: BashRunner = (_script, args) => {
+      calls.push(args);
+      return calls.length === 1 ? timeout : rejected;
+    };
+    const outcome = runBashWithTimeoutRetry('install.sh', ['--definitely-not-a-flag'], runner);
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(outcome.timedOutOnce, true);
+    assert.strictEqual(outcome.result, rejected);
+  });
+
+  test('two consecutive timeouts stop at two calls with diagnosable final facts', () => {
+    const timeout = fakeBash({ signal: 'SIGTERM', error: { code: 'ETIMEDOUT' } });
+    let calls = 0;
+    const outcome = runBashWithTimeoutRetry('install.sh', ['--definitely-not-a-flag'], () => {
+      calls += 1;
+      return timeout;
+    });
+    assert.strictEqual(calls, 2);
+    assert.strictEqual(outcome.timedOutOnce, true);
+    const facts = formatBashFacts(outcome.result, outcome.timedOutOnce);
+    assert.ok(facts.includes('status=null signal=SIGTERM error=ETIMEDOUT timeoutRetry=yes'), facts);
+  });
+
+  test('contract failures and near-miss errors are never retried', () => {
+    const cases: FakeBashPatch[] = [
+      { status: 1, stderr: 'خيار غير معروف' },
+      { status: 1, stderr: 'wrong' },
+      { status: 0 },
+      { status: 1, error: { code: 'ETIMEDOUT' } },
+      { signal: 'SIGTERM', error: { code: 'EACCES' } },
+      { signal: 'SIGABRT', error: { code: 'ETIMEDOUT' } },
+      { error: { code: 'ETIMEDOUT' } },
+      { signal: 'SIGTERM', error: undefined },
+    ];
+    for (const patch of cases) {
+      const result = fakeBash(patch);
+      let calls = 0;
+      const outcome = runBashWithTimeoutRetry('install.sh', ['--definitely-not-a-flag'], () => {
+        calls += 1;
+        return result;
+      });
+      assert.strictEqual(calls, 1, formatBashFacts(result, outcome.timedOutOnce));
+      assert.strictEqual(outcome.timedOutOnce, false);
+      assert.strictEqual(outcome.result, result);
+    }
+  });
+
+  test('diagnostic facts stay bounded and leak no path or bulk output', () => {
+    const script = path.join(os.tmpdir(), 'not-a-real-install.sh');
+    const noisy = fakeBash({
+      stderr: 'x'.repeat(1000),
+      stdout: 'y'.repeat(1000),
+      error: { code: 'ETIMEDOUT' },
+    });
+    const outcome = runBashWithTimeoutRetry(script, ['--definitely-not-a-flag'], () => noisy);
+    const facts = formatBashFacts(outcome.result, outcome.timedOutOnce);
+    assert.ok(facts.includes('…'), facts);
+    assert.ok(facts.length < 600, `diagnostic facts grew to ${facts.length} chars`);
+    assert.ok(!facts.includes(os.tmpdir()), facts);
+    assert.ok(!facts.includes(path.basename(script)), facts);
+    assert.ok(!facts.includes('x'.repeat(210)), facts);
+    assert.ok(!facts.includes('y'.repeat(210)), facts);
+    const blank = formatBashFacts(fakeBash({ stderr: '   ', stdout: '' }), false);
+    assert.ok(blank.includes('stderr="<empty>" stdout="<empty>"'), blank);
   });
 });
