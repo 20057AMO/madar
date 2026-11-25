@@ -873,6 +873,25 @@ export function Chat() {
     });
   };
 
+  // Dialog focus management: move focus in on open, Escape closes, trap Tab,
+  // restore focus to the opener when closed.
+  const trapTab = (e: KeyboardEvent, container: HTMLElement | null) => {
+    if (e.key !== 'Tab' || !container) return;
+    const focusables = Array.from(
+      container.querySelectorAll<HTMLElement>('button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])')
+    ).filter((el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true');
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   // Drawer focus management (ConfirmModal pattern): save the opening trigger,
   // move focus into the channel list, close on Escape, restore focus on close.
   useEffect(() => {
@@ -883,6 +902,7 @@ export function Chat() {
       (first || railRef.current)?.focus();
     });
     const onKey = (e: KeyboardEvent) => {
+      if (railRef.current?.getAttribute('aria-modal') === 'true') trapTab(e, railRef.current);
       if (e.key !== 'Escape' || modalsOpenRef.current) return;
       e.preventDefault();
       setRailOpen(false);
@@ -1145,12 +1165,17 @@ export function Chat() {
     }
   };
   const sock = useTeamChatSocket(onEvent);
-  const connTitle = sock.status === 'open' ? 'Connected' : sock.status === 'reconnecting' ? 'Reconnecting…' : 'Offline';
   const connectionLabel = sock.status === 'open'
     ? t2('متصل', 'Connected')
     : sock.status === 'reconnecting'
       ? t2('جارٍ إعادة الاتصال', 'Reconnecting')
       : t2('غير متصل', 'Offline');
+  const soundLabel = soundOn
+    ? t2('تعطيل صوت الإشعارات', 'Disable notification sound')
+    : t2('تفعيل صوت الإشعارات', 'Enable notification sound');
+  const railCollapseLabel = railCollapsed
+    ? t2('توسيع قائمة القنوات', 'Expand channel list')
+    : t2('طي قائمة القنوات', 'Collapse channel list');
 
   // ── initial load
   useEffect(() => {
@@ -1617,25 +1642,6 @@ export function Chat() {
       setIsRecording(false);
     };
   }, []);
-
-  // Dialog focus management: move focus in on open, Escape closes, trap Tab,
-  // restore focus to the opener when closed.
-  const trapTab = (e: KeyboardEvent, container: HTMLElement | null) => {
-    if (e.key !== 'Tab' || !container) return;
-    const focusables = Array.from(
-      container.querySelectorAll<HTMLElement>('button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])')
-    ).filter((el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true');
-    if (!focusables.length) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
 
   // Escape cancels edit mode
   useEffect(() => {
@@ -2483,7 +2489,7 @@ export function Chat() {
   if (loading) {
     return (
       <div class="view">
-        <div style="display:flex;align-items:center;justify-content:center;height:60vh;gap:8px">
+        <div style="display:flex;align-items:center;justify-content:center;height:60vh;gap:8px" role="status" aria-live="polite">
           <Loader2 width={20} height={20} class="icon spin" />
           <span class="dim">Loading channels…</span>
         </div>
@@ -2493,11 +2499,14 @@ export function Chat() {
 
   return (
     <div class="view chat-view">
-      <div class={`tchat-backdrop${railOpen ? ' open' : ''}`} onClick={closeRail} />
+      <div class={`tchat-backdrop${railOpen ? ' open' : ''}`} aria-hidden="true" onClick={closeRail} />
       <div
         id="tchat-rail"
         ref={railRef}
         class={`tchat-rail${railOpen ? ' open' : ''}${railCollapsed ? ' collapsed' : ''}`}
+        role={railOpen && isPhone ? 'dialog' : undefined}
+        aria-modal={railOpen && isPhone ? 'true' : undefined}
+        aria-label={railOpen && isPhone ? t2('قنوات المحادثة', 'Chat channels') : undefined}
       >
         <nav class="tchat-rail-nav" aria-label={t2('القنوات', 'Channels')}>
         <div class="tchat-rail-head">
@@ -2509,15 +2518,17 @@ export function Chat() {
             <span
               class={`tchat-conn-dot tchat-conn-${sock.status}`}
               role="status"
-              aria-label={connTitle}
-              title={connTitle}
-            />
+              aria-live="polite"
+              title={connectionLabel}
+            >
+              <span class="sr-only">{connectionLabel}</span>
+            </span>
             <button
               class="btn btn-icon btn-sm"
               onClick={toggleSound}
               aria-pressed={soundOn}
-              title={soundOn ? 'Disable notification sound' : 'Enable notification sound'}
-              aria-label={soundOn ? 'Disable notification sound' : 'Enable notification sound'}
+              title={soundLabel}
+              aria-label={soundLabel}
             >
               {soundOn ? <Volume2 width={14} height={14} /> : <VolumeX width={14} height={14} />}
             </button>
@@ -2525,8 +2536,9 @@ export function Chat() {
               class="btn btn-icon btn-sm tchat-collapse-btn"
               onClick={toggleRailCollapsed}
               aria-expanded={!railCollapsed}
-              title={railCollapsed ? 'Expand channel list' : 'Collapse channel list'}
-              aria-label={railCollapsed ? 'Expand channel list' : 'Collapse channel list'}
+              aria-controls="tchat-channel-list"
+              title={railCollapseLabel}
+              aria-label={railCollapseLabel}
             >
               {railCollapsed ? <ChevronRight width={14} height={14} /> : <ChevronLeft width={14} height={14} />}
             </button>
@@ -2534,7 +2546,8 @@ export function Chat() {
               class="btn btn-icon btn-sm"
               ref={globalSearchBtnRef}
               onClick={toggleGlobalSearch}
-              aria-pressed={globalOpen}
+              aria-expanded={globalOpen}
+              aria-controls={globalOpen ? 'tchat-global-search' : undefined}
               title={t2('البحث في كل القنوات', 'Search all channels')}
               aria-label={t2('البحث في كل القنوات', 'Search all channels')}
             >
@@ -2559,7 +2572,7 @@ export function Chat() {
           </div>
         </div>
         {globalOpen && (
-          <div class="tchat-global-search">
+          <div class="tchat-global-search" id="tchat-global-search">
             <input
               ref={searchBoxRef}
               class="input"
@@ -2579,10 +2592,12 @@ export function Chat() {
                 }
               }}
             />
-            {globalLoading && <div class="tchat-global-status" role="status"><Loader2 width={12} height={12} class="icon spin" /> {t2('جارٍ البحث…', 'Searching…')}</div>}
-            {!globalLoading && globalQ.trim().length === 1 && (
-              <div class="tchat-global-empty" role="status">{t2('أدخل حرفين على الأقل.', 'Enter at least 2 characters.')}</div>
-            )}
+            <div role="status" aria-live="polite">
+              {globalLoading && <div class="tchat-global-status"><Loader2 width={12} height={12} class="icon spin" /> {t2('جارٍ البحث…', 'Searching…')}</div>}
+              {!globalLoading && globalQ.trim().length === 1 && (
+                <div class="tchat-global-empty">{t2('أدخل حرفين على الأقل.', 'Enter at least 2 characters.')}</div>
+              )}
+            </div>
             {!globalLoading && globalError && (
               <div class="tchat-global-error" role="alert">{t2('تعذر البحث. حاول مجددًا.', 'Search failed. Try again.')}</div>
             )}
@@ -2606,6 +2621,7 @@ export function Chat() {
                           class="tchat-global-hit"
                           role="button"
                           tabIndex={0}
+                          aria-label={t2(`افتح رسالة من ${m.username} في ${gr.channelName}`, `Open message from ${m.username} in ${gr.channelName}`)}
                           onClick={() => {
                             setGlobalOpen(false);
                             setGlobalQ('');
@@ -2669,7 +2685,7 @@ export function Chat() {
             )}
           </div>
         )}
-        <div class="tchat-channel-list" aria-label={t2('قائمة القنوات', 'Channel list')}>
+        <div class="tchat-channel-list" id="tchat-channel-list" aria-label={t2('قائمة القنوات', 'Channel list')}>
           {visibleChannels.length === 0 && (
             <div class="tchat-channel-empty" role="status">{t2('لا توجد قنوات مطابقة.', 'No matching channels.')}</div>
           )}
@@ -2709,7 +2725,14 @@ export function Chat() {
                     </span>
                     <span class="tchat-channel-bottom">
                       <span class={`tchat-channel-preview${c.unread ? ' unread' : ''}`}>{preview}</span>
-                      {c.unread ? <span class="tchat-unread-badge">{c.unread > 99 ? '99+' : c.unread}</span> : null}
+                      {c.unread ? (
+                        <span class="tchat-unread-badge">
+                          <span aria-hidden="true">{c.unread > 99 ? '99+' : c.unread}</span>
+                          <span class="sr-only">{c.unread === 1
+                            ? t2('رسالة واحدة غير مقروءة', '1 unread message')
+                            : t2(`${c.unread} رسائل غير مقروءة`, `${c.unread} unread messages`)}</span>
+                        </span>
+                      ) : null}
                     </span>
                   </span>
                 </div>
@@ -2800,7 +2823,7 @@ export function Chat() {
                           : t2('الإرسال للمدراء فقط', 'Admins only')}
                       </span>
                     )}
-                    <span class="tchat-head-connection" role="status" title={connectionLabel}>
+                    <span class="tchat-head-connection" role="status" aria-live="polite" title={connectionLabel}>
                       <span class={`tchat-conn-dot tchat-conn-${sock.status}`} aria-hidden="true" />
                       {connectionLabel}
                     </span>
@@ -2828,7 +2851,7 @@ export function Chat() {
                 <button class="btn btn-sm tchat-search-toggle" ref={channelSearchBtnRef} onClick={() => {
                   setSearchedQuery('');
                   setSearchResults((prev) => (prev === null ? [] : null));
-                }} aria-pressed={searchResults !== null} title={t2('بحث', 'Search')} aria-label={t2('البحث في رسائل هذه القناة', 'Search messages in this channel')}>
+                }} aria-expanded={searchResults !== null} aria-controls={searchResults !== null ? 'tchat-channel-search' : undefined} title={t2('بحث', 'Search')} aria-label={t2('البحث في رسائل هذه القناة', 'Search messages in this channel')}>
                   <Search width={14} height={14} /> {t2('بحث', 'Search')}
                 </button>
                 <button
@@ -2859,7 +2882,7 @@ export function Chat() {
                       }}
                       aria-haspopup="menu"
                       aria-expanded={settingsOpen}
-                      aria-controls="tchat-settings-menu"
+                      aria-controls={settingsOpen ? 'tchat-settings-menu' : undefined}
                       title={t2('إعدادات القناة', 'Channel settings')}
                       aria-label={t2('إعدادات القناة', 'Channel settings')}
                     >
@@ -2917,7 +2940,7 @@ export function Chat() {
 
             {/* search box */}
             {searchResults !== null && (
-              <div class="tchat-searchbox">
+              <div class="tchat-searchbox" id="tchat-channel-search">
                 <div class="tchat-search-controls">
                   <input
                     class="input"
@@ -2972,11 +2995,15 @@ export function Chat() {
                      ))}
                    </div>
                 )}
-                {!searchQ.trim()
-                  ? <div class="tchat-search-hint">{t2('اكتب كلمة للبحث في هذه المحادثة.', 'Type a keyword to search this conversation.')}</div>
-                  : searchQ.trim() !== searchedQuery
-                    ? <div class="tchat-search-hint">{t2('اضغط بحث أو Enter لعرض النتائج.', 'Select Search or press Enter to see results.')}</div>
-                    : searchResults.length === 0 && <div class="tchat-search-hint">{t2('لا نتائج مطابقة.', 'No matches found.')}</div>}
+                <div class="tchat-search-hint" role="status" aria-live="polite">
+                  {!searchQ.trim()
+                    ? t2('اكتب كلمة للبحث في هذه المحادثة.', 'Type a keyword to search this conversation.')
+                    : searchQ.trim() !== searchedQuery
+                      ? t2('اضغط بحث أو Enter لعرض النتائج.', 'Select Search or press Enter to see results.')
+                      : searchResults.length === 0
+                        ? t2('لا نتائج مطابقة.', 'No matches found.')
+                        : ''}
+                </div>
               </div>
             )}
 
@@ -3037,7 +3064,9 @@ export function Chat() {
                   requestAnimationFrame(() => listRef.current?.focus());
                 }
               }}
-              aria-label={t2('انتقل للأحدث', 'Jump to latest')}
+              aria-label={missedCount > 0
+                ? t2(`انتقل للأحدث · ${missedCount} رسائل جديدة`, `Jump to latest · ${missedCount} new messages`)
+                : t2('انتقل للأحدث', 'Jump to latest')}
               title={t2('انتقل للأحدث', 'Jump to latest')}
               disabled={!showJump}
               aria-hidden={!showJump}
@@ -3047,7 +3076,7 @@ export function Chat() {
               <ArrowDownToLine width={16} height={16} />
               {missedCount > 0 && <span class="tchat-jump-badge" aria-hidden="true">{missedCount > 99 ? '99+' : missedCount}</span>}
             </button>
-            {deletedNotice && <div role="status" aria-live="polite" class="sr-only">{deletedNotice}</div>}
+            <div role="status" aria-live="polite" class="sr-only">{deletedNotice}</div>
 
             {/* typing row */}
             {typing.length > 0 && (
@@ -3059,9 +3088,10 @@ export function Chat() {
 
             {error && <div class="form-error" role="alert">{error}</div>}
 
-            {/* Outcome of the last attach attempt (paste / drop / picker). Kept
-                mounted so the live region actually announces changes. */}
-            <div class="tchat-attach-notice" role="status" aria-live="polite">{attachNotice}</div>
+            {/* The visual notice is hidden from assistive tech so its text is not
+                announced twice; the always-mounted sr-only twin owns the live region. */}
+            <div class="tchat-attach-notice" aria-hidden="true">{attachNotice}</div>
+            <div role="status" aria-live="polite" class="sr-only">{attachNotice}</div>
 
             {/* composer */}
             {userCanWrite() ? (
