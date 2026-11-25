@@ -304,6 +304,40 @@ test('chat_bump preview: 80-char cap with whitespace folding, attachment ids nev
   sock.close();
 });
 
+test('bot reply emits chat_bump: @madar answer reaches a member socket after the message frame', async (t) => {
+  const rig = await setupProjectChannel(t);
+  if (!rig) return;
+  const { channelId } = rig;
+  const member = await makeUser('bumpBotM', 'editor');
+  const add = await api('POST', `/projects/${rig.slug}/members`, { userId: member.id, role: 'editor' });
+  assert.strictEqual(add.status, 200, JSON.stringify(add.json));
+
+  const sock = openChatSocket(member.token, channelId);
+  await sock.subscribed;
+
+  const sent = await api('POST', `${chatBase}/messages`, { channelId, text: '@madar bump from another identity' });
+  assert.strictEqual(sent.status, 201, JSON.stringify(sent.json));
+
+  const msgFrame = await sock.waitFrame((f) => f.type === 'message' && f.message?.userId === 'bot-madar', 60_000);
+  const bump = await sock.waitFrame((f) => f.type === 'chat_bump' && f.message?.id === msgFrame.message.id, 60_000);
+  assert.strictEqual(msgFrame.message.userId, 'bot-madar');
+  assert.strictEqual(msgFrame.message.username, 'madar');
+  assert.deepStrictEqual(
+    Object.keys(bump.message).sort(),
+    ['createdAt', 'id', 'text', 'userId', 'username'],
+    'bot bump is the same compact shape as a human bump'
+  );
+  assert.strictEqual(bump.message.id, msgFrame.message.id);
+  assert.ok(bump.message.text.length > 0);
+  assert.ok(bump.message.text.length <= 80);
+  assert.ok(
+    sock.frames.indexOf(msgFrame) < sock.frames.indexOf(bump),
+    'bot bump must follow the bot message frame on the same socket'
+  );
+
+  sock.close();
+});
+
 test('an open project-channel socket loses access immediately after membership removal', async (t) => {
   const rig = await setupProjectChannel(t);
   if (!rig) return;

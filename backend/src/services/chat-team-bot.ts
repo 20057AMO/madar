@@ -31,7 +31,7 @@ import { getProviderMeta } from './provider-store';
 import { getChatConfig, buildSystemPrompt } from './chat-config';
 import { getProjectContext } from './project-context';
 import { streamChat } from './ollama-chat';
-import { broadcastBotTyping, broadcastChatMessage } from '../ws/ws-chat-team';
+import { broadcastBotTyping, broadcastChatBump, broadcastChatMessage } from '../ws/ws-chat-team';
 
 /** Injectable seam — the real singleton uses the real wire, tests can inject
  *  a fake stream / legacy-name guard into a second instance. */
@@ -164,7 +164,10 @@ export function createTeamChatBot(deps: TeamChatBotDeps = {}): TeamChatBot {
       const appended = await appendMessage(channelId, message);
       if (!appended) return;
       const fresh = getChannel(channelId);
-      if (fresh) broadcastChatMessage(fresh, message);
+      if (fresh) {
+        broadcastChatMessage(fresh, message);
+        broadcastChatBump({ id: BOT_USER_ID, username: BOT_USERNAME, role: 'viewer' }, fresh, message);
+      }
       void opts;
     },
     stream: async (
