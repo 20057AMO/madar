@@ -106,6 +106,7 @@ interface ComposerState {
 const MAX_MESSAGE_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_MB = 10;
 const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
+const COMPOSER_MAX_HEIGHT_PX = 120;
 
 interface MentionDraft {
   start: number;
@@ -1471,13 +1472,13 @@ export function Chat() {
     return () => clearTimeout(t);
   }, [typing]);
 
-  // Composer auto-grow: fit the textarea to its content (cap at 150px), and
+  // Composer auto-grow: fit the textarea to its content (cap at 120px), and
   // reset it whenever the draft is cleared or the channel switches.
   useEffect(() => {
     const el = taRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    if (composer.text) el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+    if (composer.text) el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`;
   }, [composer.text, activeId]);
 
   // ── pendingJump: load older pages as needed, then scroll to the result
@@ -1743,6 +1744,7 @@ export function Chat() {
       });
       setComposer({ text: '', attachments: [] });
       setMentionDraft(null);
+      focusComposer();
     } catch (err) {
       setError(err instanceof Error ? err.message : t2('فشل إرسال الرسالة', 'Failed to send message'));
     } finally {
@@ -2216,9 +2218,22 @@ export function Chat() {
     });
   };
 
-  // Focus the composer when an empty channel invites the first message —
-  // the textarea unmounts during recording, so focus falls back to the
-  // mic/send FAB rather than dropping to <body>.
+  const insertEmojiAtCaret = (emoji: string) => {
+    const textarea = taRef.current;
+    const text = composer.text;
+    const start = textarea?.selectionStart ?? text.length;
+    const end = textarea?.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    const caret = start + emoji.length;
+    setComposer((current) => ({ ...current, text: next }));
+    setMentionDraft(findMentionDraft(next, caret));
+    setMentionActiveIndex(0);
+    requestAnimationFrame(() => {
+      taRef.current?.focus();
+      taRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
   // Focus the composer when an empty channel invites the first message —
   // the textarea unmounts during recording, so focus falls back to the
   // mic/send FAB rather than dropping to <body>.
@@ -3187,13 +3202,14 @@ export function Chat() {
                            setMentionActiveIndex(0);
                            if (v.trim()) sock.sendTyping(active.id);
                            el.style.height = 'auto';
-                           el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+                           el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`;
                          }}
                          onClick={(e: MouseEvent) => {
                            const el = e.currentTarget as HTMLTextAreaElement;
                            setMentionDraft(findMentionDraft(el.value, el.selectionStart));
                          }}
                          onKeyUp={(e: KeyboardEvent) => {
+                           if (e.key === 'Escape') return;
                            const el = e.currentTarget as HTMLTextAreaElement;
                            setMentionDraft(findMentionDraft(el.value, el.selectionStart));
                          }}
@@ -3217,6 +3233,11 @@ export function Chat() {
                            if (e.key === 'Escape' && mentionDraft) {
                              e.preventDefault();
                              setMentionDraft(null);
+                             return;
+                           }
+                           if (e.key === 'Escape' && composer.replyTo) {
+                             e.preventDefault();
+                             setComposer((c) => ({ ...c, replyTo: undefined }));
                              return;
                            }
                            if (e.key === 'Enter' && !e.shiftKey) {
@@ -3287,10 +3308,7 @@ export function Chat() {
                  </div>
                  {emojiPanelOpen && (
                    <ComposerEmojiPanel
-                     onPick={(emoji) => {
-                       setComposer((c) => ({ ...c, text: c.text + emoji }));
-                       requestAnimationFrame(() => taRef.current?.focus());
-                     }}
+                     onPick={(emoji) => insertEmojiAtCaret(emoji)}
                      onClose={() => setEmojiPanelOpen(false)}
                    />
                  )}
