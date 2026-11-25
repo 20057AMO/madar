@@ -102,6 +102,18 @@ function writeReadMap(map: ReadMap): void {
   fs.writeFileSync(READ_FILE, JSON.stringify(map), 'utf8');
 }
 
+function isReadAnchorBackwards(
+  messages: TeamMessage[],
+  currentAnchor: string | undefined,
+  candidateAnchor: string
+): boolean {
+  if (!currentAnchor) return false;
+  const currentIdx = messages.findIndex((m) => m.id === currentAnchor);
+  if (currentIdx === -1) return false;
+  const candidateIdx = messages.findIndex((m) => m.id === candidateAnchor);
+  return candidateIdx !== -1 && candidateIdx < currentIdx;
+}
+
 export function getLastMessage(channelId: string): TeamMessage | null {
   const messages = readMessagesRaw(channelId);
   return messages.length > 0 ? messages[messages.length - 1] : null;
@@ -599,10 +611,11 @@ export async function markMessagesAsRead(
     await withFileLockAsync('chat-read', async () => {
       const map = readReadMap();
       if (!map[channelId]) map[channelId] = {};
-      if (map[channelId][userId] !== anchorMsgId) {
-        map[channelId][userId] = anchorMsgId || messages[upTo]?.id || '';
-        writeReadMap(map);
-      }
+      const candidate = anchorMsgId || messages[upTo]?.id || '';
+      if (map[channelId][userId] === candidate) return;
+      if (isReadAnchorBackwards(messages, map[channelId][userId], candidate)) return;
+      map[channelId][userId] = candidate;
+      writeReadMap(map);
     });
   });
   return anchorMissing ? null : changed;
@@ -612,11 +625,13 @@ export async function markMessagesAsRead(
 export async function setReadPosition(channelId: string, userId: string, msgId: string): Promise<void> {
   if (!isChannelId(channelId) || !isMessageId(msgId)) return;
   await withFileLockAsync(`msgs:${channelId}`, async () => {
-    if (!readMessagesRaw(channelId).some((m) => m.id === msgId)) return;
+    const messages = readMessagesRaw(channelId);
+    if (!messages.some((m) => m.id === msgId)) return;
     await withFileLockAsync('chat-read', async () => {
       const map = readReadMap();
       if (!map[channelId]) map[channelId] = {};
       if (map[channelId][userId] === msgId) return;
+      if (isReadAnchorBackwards(messages, map[channelId][userId], msgId)) return;
       map[channelId][userId] = msgId;
       writeReadMap(map);
     });

@@ -421,6 +421,37 @@ test('read position drives unread counts', async () => {
   assert.strictEqual(bad.status, 400);
 });
 
+test('stale read anchors cannot resurrect unread messages', async () => {
+  const ch = await makeChannel(uniqueId('unread-anchor'));
+  const m1 = await sendChannelMessage(ch.id, 'first');
+  const m2 = await sendChannelMessage(ch.id, 'second');
+  const m3 = await sendChannelMessage(ch.id, 'third');
+  const reader = await makeUser('anchor-reader', 'viewer');
+  const asReader = runAs(reader.token);
+
+  const fresh = await asReader('GET', `${chatBase}/channels`);
+  const freshRow = fresh.json.channels.find((c: any) => c.id === ch.id);
+  assert.strictEqual(freshRow.unread, 3);
+  assert.strictEqual(freshRow.firstUnreadId, m1.id);
+
+  const newest = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m3.id });
+  assert.strictEqual(newest.status, 200);
+  const atNewest = await asReader('GET', `${chatBase}/channels`);
+  const atNewestRow = atNewest.json.channels.find((c: any) => c.id === ch.id);
+  assert.strictEqual(atNewestRow.unread, 0);
+  assert.strictEqual(atNewestRow.firstUnreadId, undefined);
+
+  const staleSecond = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m2.id });
+  assert.strictEqual(staleSecond.status, 200);
+  const staleFirst = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m1.id });
+  assert.strictEqual(staleFirst.status, 200);
+
+  const afterStale = await asReader('GET', `${chatBase}/channels`);
+  const afterStaleRow = afterStale.json.channels.find((c: any) => c.id === ch.id);
+  assert.strictEqual(afterStaleRow.unread, 0);
+  assert.strictEqual(afterStaleRow.firstUnreadId, undefined);
+});
+
 test('channel delete: admin can delete project channels; they stay deleted across recreate', async () => {
   const slug = uniqueId('teamchat');
   const created = await api('POST', '/projects', { name: 'Team Chat T', slug });
