@@ -138,16 +138,20 @@ function execStatus(
  *                             127 = no `test` binary, …) and must not pretend
  *
  * `test -e` is tri-state by POSIX convention (0 = present, 1 = absent), so exit
- * codes 0/1 are verdicts and anything else is a failure to obtain one.
+ * codes 0/1 are verdicts and anything else is a failure to obtain one;
+ * `reachable` separates "no verdict at all" from a real failed exit.
  */
-type PathProbe = { ok: true; exists: boolean } | { ok: false; error: string };
+type PathProbe =
+  | { ok: true; reachable: true; exists: boolean }
+  | { ok: false; reachable: boolean; error: string };
 
 function containerHas(absPath: string): PathProbe {
   const { code, detail } = execStatus(['test', '-e', absPath]);
-  if (code === 0) return { ok: true, exists: true };
-  if (code === 1) return { ok: true, exists: false };
+  if (code === 0) return { ok: true, reachable: true, exists: true };
+  if (code === 1) return { ok: true, reachable: true, exists: false };
   return {
     ok: false,
+    reachable: code !== null,
     error: `docker exec test -e ${absPath} → exit ${code} (${detail || 'no stderr'})`,
   };
 }
@@ -197,9 +201,12 @@ async function waitForFile(
  * opencode sessions registered for a workspace directory — tri-state for the
  * same reason as `containerHas`: a failed `curl` must NOT read as "no
  * sessions", or the "a refused call created no session" row would pass for
- * the wrong reason.
+ * the wrong reason. `reachable:false` means docker gave no verdict; a real
+ * exit code stays `reachable:true` even when the body is not usable JSON.
  */
-type SessionProbe = { ok: true; sessions: Array<{ id?: string }> } | { ok: false; error: string };
+type SessionProbe =
+  | { ok: true; reachable: true; sessions: Array<{ id?: string }> }
+  | { ok: false; reachable: boolean; error: string };
 
 function opencodeSessions(slug: string): SessionProbe {
   const r = execStatus([
@@ -207,16 +214,28 @@ function opencodeSessions(slug: string): SessionProbe {
     `${OPENCODE_API}/session?directory=${encodeURIComponent(workspaceDir(slug))}`,
   ]);
   if (r.code !== 0) {
-    return { ok: false, error: `opencode session list → exit ${r.code} (${r.detail || 'no stderr'})` };
+    return {
+      ok: false,
+      reachable: r.code !== null,
+      error: `opencode session list → exit ${r.code} (${r.detail || 'no stderr'})`,
+    };
   }
   try {
     const parsed = JSON.parse(r.stdout);
     if (!Array.isArray(parsed)) {
-      return { ok: false, error: `opencode session list is not an array (${parsed === null ? 'null' : typeof parsed})` };
+      return {
+        ok: false,
+        reachable: true,
+        error: `opencode session list is not an array (${parsed === null ? 'null' : typeof parsed})`,
+      };
     }
-    return { ok: true, sessions: parsed };
+    return { ok: true, reachable: true, sessions: parsed };
   } catch (e: any) {
-    return { ok: false, error: `opencode session list is not JSON: ${String(e?.message || e)}` };
+    return {
+      ok: false,
+      reachable: true,
+      error: `opencode session list is not JSON: ${String(e?.message || e)}`,
+    };
   }
 }
 
@@ -257,7 +276,7 @@ function stripWorkspace(slug: string): StripResult {
   }
   for (let i = 0; i < 8; i += 1) {
     const listed = opencodeSessions(slug);
-    if (!listed.ok) return { ...listed, unreachable: true };
+    if (!listed.ok) return { ok: false, unreachable: !listed.reachable, error: listed.error };
     if (listed.sessions.length === 0) break;
     for (const s of listed.sessions) {
       if (!s?.id) continue;
@@ -267,12 +286,53 @@ function stripWorkspace(slug: string): StripResult {
     }
   }
   const git = containerHas(gitDir(slug));
-  if (!git.ok) return { ...git, unreachable: true };
+  if (!git.ok) return { ok: false, unreachable: !git.reachable, error: git.error };
   if (git.exists) return { ok: false, unreachable: false, error: `${gitDir(slug)} still present after stripping` };
   const after = opencodeSessions(slug);
-  if (!after.ok) return { ...after, unreachable: true };
+  if (!after.ok) return { ok: false, unreachable: !after.reachable, error: after.error };
   if (after.sessions.length > 0) return { ok: false, unreachable: false, error: `${after.sessions.length} opencode session(s) survived the strip` };
   return { ok: true };
+}
+
+/**
+ * A timed-out registration is parked and re-driven by the server every
+ * REGISTRATION_RETRY_MS for up to REGISTRATION_MAX_ATTEMPTS; the reconciler
+ * creates a session WITHOUT re-seeding `.git`, and a strip does not cancel the
+ * parked timer. So a strip alone is not a stable pre-state: wait until no
+ * session reappears for longer than one abort+retry+create cycle.
+ */
+const REGISTRATION_DRAIN_QUIET_WINDOW_MS = 12_000;
+const REGISTRATION_DRAIN_CAP_MS = 60_000;
+
+type DrainResult = StripResult;
+
+async function drainPendingRegistrations(slug: string): Promise<DrainResult> {
+  const deadline = Date.now() + REGISTRATION_DRAIN_CAP_MS;
+  let quietSince: number | null = null;
+  for (;;) {
+    const listed = opencodeSessions(slug);
+    if (!listed.ok) return { ok: false, unreachable: !listed.reachable, error: listed.error };
+    if (listed.sessions.length > 0) {
+      quietSince = null;
+      const stripped = stripWorkspace(slug);
+      if (!stripped.ok) return stripped;
+    } else if (quietSince === null) {
+      quietSince = Date.now();
+    } else if (Date.now() - quietSince >= REGISTRATION_DRAIN_QUIET_WINDOW_MS) {
+      return { ok: true };
+    }
+    if (Date.now() >= deadline) {
+      const final = opencodeSessions(slug);
+      if (!final.ok) return { ok: false, unreachable: !final.reachable, error: final.error };
+      if (final.sessions.length === 0) return { ok: true };
+      return {
+        ok: false,
+        unreachable: false,
+        error: `${final.sessions.length} opencode session(s) still present after ${REGISTRATION_DRAIN_CAP_MS}ms for ${slug}`,
+      };
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
 }
 
 /** sha1 of the directory BASENAME — what seedOpencodeProjectId() writes. */
@@ -793,6 +853,18 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
             `silently weaken every side-effect row below: ${stripped.error}`,
         );
       }
+      const drained = await drainPendingRegistrations(slug);
+      if (!drained.ok) {
+        if (drained.unreachable) {
+          return t.skip(
+            `precondition unreachable — queued opencode registrations could not be drained: ${drained.error}`,
+          );
+        }
+        assert.fail(
+          `queued opencode registrations are reachable but did not settle, so the un-seeded pre-state ` +
+            `cannot be trusted: ${drained.error}`,
+        );
+      }
       // Re-verify independently of the helper that produced it.
       const git = containerHas(gitDir(slug));
       if (!git.ok) return t.skip(`docker gave no answer: ${git.error}`);
@@ -899,8 +971,9 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
       // (GET /projects/:slug also 404s a viewer for a missing slug), so it is
       // platform-wide, NOT introduced by this round. What matters — and what is
       // asserted below — is that the loose gate cannot become a WRITE
-      // primitive: getProject() 404s BEFORE ensureOpencodeSession() runs
-      // (index.ts:2096 vs 2101), so no workspace is ever materialised.
+      // primitive: the 403 gate (index.ts:2705-2709) and getProject()/404
+      // (:2710-2716) both run BEFORE ensureOpencodeSession() (:2718), so no
+      // workspace is ever materialised.
       const real = await rawReq('POST', '/opencode/open', asUser(outsiderToken), { slug });
       const fakeSlug = uniqueId('emb-fabricated');
       const fake = await rawReq('POST', '/opencode/open', asUser(outsiderToken), { slug: fakeSlug });
@@ -924,6 +997,17 @@ describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live
   describe('POST /api/opencode/open — an editor MEMBER is accepted and seeds the workspace', () => {
     test('an EDITOR MEMBER gets 200 with {ok:true, directory:"/workspaces/<slug>"}', async (t) => {
       if (!projectCreated || !usersCreated) return t.skip('setup did not complete');
+      const drained = await drainPendingRegistrations(slug);
+      if (!drained.ok) {
+        if (drained.unreachable) {
+          return t.skip(
+            `precondition unreachable — pending registrations could not be drained before the accepted call: ${drained.error}`,
+          );
+        }
+        assert.fail(
+          `pending registrations are reachable but did not settle before the accepted call: ${drained.error}`,
+        );
+      }
       const res = await rawReq('POST', '/opencode/open', asUser(editorToken), { slug });
       if (res.status === 429) return t.skip('rate limited (429)');
       assert.strictEqual(res.status, 200, `editor member open: ${res.status} -> ${res.text}`);
