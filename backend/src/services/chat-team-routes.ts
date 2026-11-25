@@ -669,8 +669,8 @@ export function registerChatTeamRoutes(app: any): void {
     if (canAccessChannel(user, channel) === 'none') return res.status(403).json({ error: 'Access denied' });
     const msgId = typeof req.body?.msgId === 'string' ? req.body.msgId : '';
     if (!isMessageId(msgId)) return res.status(400).json({ error: 'Invalid message id' });
-    const changed = await markMessagesAsRead(cid, user.id, msgId);
-    if (changed === null) return res.status(404).json({ error: 'Message not found' });
+    const result = await markMessagesAsRead(cid, user.id, msgId);
+    if (result === null) return res.status(404).json({ error: 'Message not found' });
     res.json({ ok: true });
   });
 

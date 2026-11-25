@@ -36,7 +36,6 @@ import {
   getChannel,
   getMessages,
   getAllMessages,
-  getReadPosition,
   markMessageAsDelivered,
   markMessagesAsRead,
 } from '../services/chat-team-store';
@@ -401,21 +400,19 @@ export function handleChatTeamSocket(
         // The anchor must genuinely exist in the channel: markMessagesAsRead
         // returns null (and changes nothing) for a nonexistent msgId — no
         // readBy/status mutation, no read position, no broadcast to the room.
-        const before = getReadPosition(channelId, client.user.id);
-        const changed = await markMessagesAsRead(channelId, client.user.id, msg.msgId);
-        if (changed === null) {
+        const result = await markMessagesAsRead(channelId, client.user.id, msg.msgId);
+        if (result === null) {
           send(ws, { type: 'error', message: 'Message not found' });
           return;
         }
-        const after = getReadPosition(channelId, client.user.id);
-        if (changed.length > 0) {
+        if (result.changed.length > 0) {
           broadcastToChannel(channelId, {
             type: 'status_update',
             channelId,
-            updates: changed,
+            updates: result.changed,
           });
         }
-        if (after === msg.msgId && before !== msg.msgId) {
+        if (result.advanced) {
           broadcastToChannel(channelId, {
             type: 'read',
             channelId,

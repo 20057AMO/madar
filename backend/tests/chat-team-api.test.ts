@@ -2019,6 +2019,115 @@ test('WS: a stale read anchor is not broadcast as a read receipt', async () => {
   }
 });
 
+test('WS: concurrent identical read anchors broadcast exactly one receipt', async () => {
+  const ch = await makeChannel(uniqueId('wsreadonce'));
+  await sendChannelMessage(ch.id, 'first');
+  const m2 = await sendChannelMessage(ch.id, 'second');
+  const m3 = await sendChannelMessage(ch.id, 'third');
+  const reader = await makeUser('wsreadonce', 'editor');
+  const asReader = runAs(reader.token);
+
+  const readerMessage = async (text: string): Promise<any> => {
+    const sent = await asReader('POST', `${chatBase}/messages`, { channelId: ch.id, text });
+    assert.strictEqual(sent.status, 201, JSON.stringify(sent.json));
+    return sent.json.message;
+  };
+  const barrierA = await readerMessage('barrier a');
+  const barrierB = await readerMessage('barrier b');
+
+  const sockets: WebSocket[] = [];
+  try {
+    const readerA = await subscribeFrame(reader.token, ch.id);
+    sockets.push(readerA.ws);
+    const readerB = await subscribeFrame(reader.token, ch.id);
+    sockets.push(readerB.ws);
+    const observer = await subscribeFrame(signTestToken(), ch.id);
+    sockets.push(observer.ws);
+
+    const readFrames: any[] = [];
+    const collect = (raw: any) => {
+      let frame: any;
+      try { frame = JSON.parse(raw.toString()); } catch { return; }
+      if (frame.type === 'read' && frame.channelId === ch.id && frame.userId === reader.id) readFrames.push(frame);
+    };
+    observer.ws.on('message', collect);
+
+    const waitDelivered = (id: string) => waitFrame(observer.ws, (frame) =>
+      frame.type === 'status_update' && frame.channelId === ch.id &&
+      Array.isArray(frame.updates) && frame.updates.some((u: any) => u.id === id && u.status === 'delivered'), 8000);
+
+    const positive = waitFrame(observer.ws, (frame) =>
+      frame.type === 'read' && frame.channelId === ch.id && frame.userId === reader.id, 8000);
+    readerA.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m3.id }));
+    readerB.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m3.id }));
+    const advanced = await positive;
+    assert.strictEqual(advanced.msgId, m3.id, 'the winning anchor must be the one broadcast');
+
+    const deliveredA = waitDelivered(barrierA.id);
+    const deliveredB = waitDelivered(barrierB.id);
+    readerA.ws.send(JSON.stringify({ type: 'message_delivered', channelId: ch.id, msgId: barrierA.id }));
+    readerB.ws.send(JSON.stringify({ type: 'message_delivered', channelId: ch.id, msgId: barrierB.id }));
+    await Promise.all([deliveredA, deliveredB]);
+    assert.strictEqual(readFrames.length, 1, 'two concurrent advances must broadcast exactly one receipt');
+
+    const negativeBarrier = await readerMessage('barrier negative');
+    const negativeDelivered = waitDelivered(negativeBarrier.id);
+    readerA.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m3.id }));
+    readerA.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m2.id }));
+    readerA.ws.send(JSON.stringify({ type: 'message_delivered', channelId: ch.id, msgId: negativeBarrier.id }));
+    await negativeDelivered;
+    assert.strictEqual(readFrames.length, 1, 'repeated and backwards anchors must add no receipts');
+  } finally {
+    for (const ws of sockets) ws.terminate();
+  }
+});
+
+test('WS: a REST read that already advanced the anchor emits no duplicate receipt', async () => {
+  const ch = await makeChannel(uniqueId('wsrestread'));
+  await sendChannelMessage(ch.id, 'first');
+  const m2 = await sendChannelMessage(ch.id, 'second');
+  const m3 = await sendChannelMessage(ch.id, 'third');
+  const reader = await makeUser('wsrestread', 'editor');
+  const asReader = runAs(reader.token);
+
+  const seed = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m2.id });
+  assert.strictEqual(seed.status, 200, JSON.stringify(seed.json));
+
+  const sent = await asReader('POST', `${chatBase}/messages`, { channelId: ch.id, text: 'rest barrier' });
+  assert.strictEqual(sent.status, 201, JSON.stringify(sent.json));
+  const barrier = sent.json.message;
+
+  const sockets: WebSocket[] = [];
+  try {
+    const readerSocket = await subscribeFrame(reader.token, ch.id);
+    sockets.push(readerSocket.ws);
+    const observer = await subscribeFrame(signTestToken(), ch.id);
+    sockets.push(observer.ws);
+
+    const readFrames: any[] = [];
+    const collect = (raw: any) => {
+      let frame: any;
+      try { frame = JSON.parse(raw.toString()); } catch { return; }
+      if (frame.type === 'read' && frame.channelId === ch.id && frame.userId === reader.id) readFrames.push(frame);
+    };
+    observer.ws.on('message', collect);
+
+    const rest = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m3.id });
+    assert.strictEqual(rest.status, 200, JSON.stringify(rest.json));
+    assert.deepStrictEqual(rest.json, { ok: true }, 'REST keeps its original response shape');
+
+    const delivered = waitFrame(observer.ws, (frame) =>
+      frame.type === 'status_update' && frame.channelId === ch.id &&
+      Array.isArray(frame.updates) && frame.updates.some((u: any) => u.id === barrier.id && u.status === 'delivered'), 8000);
+    readerSocket.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m3.id }));
+    readerSocket.ws.send(JSON.stringify({ type: 'message_delivered', channelId: ch.id, msgId: barrier.id }));
+    await delivered;
+    assert.strictEqual(readFrames.length, 0, 'a WS repeat of a REST-won anchor must not broadcast');
+  } finally {
+    for (const ws of sockets) ws.terminate();
+  }
+});
+
 test('deleting the last-read message re-anchors the read position (no unread regrowth)', async () => {
   const ch = await makeChannel(uniqueId('readdel'));
   const m1 = await sendChannelMessage(ch.id, 'first');

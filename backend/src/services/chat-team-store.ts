@@ -563,21 +563,28 @@ export async function markMessageAsDelivered(channelId: string, msgId: string): 
   return updated;
 }
 
+export interface MarkReadResult {
+  changed: { id: string; status: string }[];
+  advanced: boolean;
+}
+
 /**
  * Mark messages read by a user, up to and including the anchor message.
  * The anchor must actually EXIST in the channel (a client can never forge a
  * read receipt against a nonexistent `msgId`), and only messages at or before
  * the anchor's position change status — an anchor mid-history never marks
  * newer messages as read (anti-spoofing: read receipts stay honest).
- * Returns the messages whose status changed, or null when the anchor message
- * is unknown — callers must then skip persisting the read position too.
+ * Returns `{ changed, advanced }`, or null when the anchor message is unknown —
+ * callers must then skip persisting the read position too. `advanced` is true
+ * only when this call persisted a new read position inside the lock.
  */
 export async function markMessagesAsRead(
   channelId: string,
   userId: string,
   anchorMsgId?: string
-): Promise<{ id: string; status: string }[] | null> {
+): Promise<MarkReadResult | null> {
   const changed: { id: string; status: string }[] = [];
+  let advanced = false;
   let anchorMissing = false;
   await withFileLockAsync(`msgs:${channelId}`, async () => {
     const messages = readMessagesRaw(channelId);
@@ -616,9 +623,10 @@ export async function markMessagesAsRead(
       if (isReadAnchorBackwards(messages, map[channelId][userId], candidate)) return;
       map[channelId][userId] = candidate;
       writeReadMap(map);
+      advanced = true;
     });
   });
-  return anchorMissing ? null : changed;
+  return anchorMissing ? null : { changed, advanced };
 }
 
 /** Record the last read message id for a user in a channel. */
