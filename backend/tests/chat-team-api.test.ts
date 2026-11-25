@@ -1966,6 +1966,59 @@ test('WS: deleting a channel delivers channel_deleted to its subscribers', async
   }
 });
 
+test('WS: a stale read anchor is not broadcast as a read receipt', async () => {
+  const ch = await makeChannel(uniqueId('wsread'));
+  await sendChannelMessage(ch.id, 'first');
+  const m2 = await sendChannelMessage(ch.id, 'second');
+  const m3 = await sendChannelMessage(ch.id, 'third');
+  const reader = await makeUser('wsread', 'editor');
+  const asReader = runAs(reader.token);
+
+  // Seed the persisted anchor at m2 over REST BEFORE either socket opens.
+  const seed = await asReader('POST', `${chatBase}/channels/${ch.id}/read`, { msgId: m2.id });
+  assert.strictEqual(seed.status, 200, JSON.stringify(seed.json));
+
+  const sockets: WebSocket[] = [];
+  try {
+    const asReaderSocket = await subscribeFrame(reader.token, ch.id);
+    sockets.push(asReaderSocket.ws);
+    const observer = await subscribeFrame(signTestToken(), ch.id);
+    sockets.push(observer.ws);
+
+    // Collect ONLY targeted read frames on the observer. Attached before any
+    // read frame is sent; status_update/typing/presence frames are ignored.
+    const readFrames: any[] = [];
+    const collect = (raw: any) => {
+      let f: any;
+      try { f = JSON.parse(raw.toString()); } catch { return; }
+      if (f.type === 'read' && f.channelId === ch.id && f.userId === reader.id) readFrames.push(f);
+    };
+    observer.ws.on('message', collect);
+
+    // Positive control: advancing m2 → m3 must broadcast exactly one receipt.
+    const positive = waitFrame(observer.ws, (f) =>
+      f.type === 'read' && f.channelId === ch.id && f.userId === reader.id && f.msgId === m3.id, 8000);
+    asReaderSocket.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m3.id }));
+    const advanced = await positive;
+    assert.strictEqual(advanced.msgId, m3.id, 'the advancing anchor must be broadcast');
+    assert.strictEqual(readFrames.length, 1, 'exactly one targeted read frame for the advance');
+
+    // Repeating the SAME anchor did not advance the persisted position, so no
+    // second receipt may reach the room (bounded negative observation window).
+    asReaderSocket.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m3.id }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.strictEqual(readFrames.length, 1, 'a repeated read of the current anchor must not be broadcast');
+
+    // Walking the anchor BACKWARDS to m2 must never announce a stale receipt —
+    // the store keeps m3 as the persisted position.
+    asReaderSocket.ws.send(JSON.stringify({ type: 'read', channelId: ch.id, msgId: m2.id }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.strictEqual(readFrames.length, 1, 'a stale/backwards read anchor must not be broadcast');
+  } finally {
+    for (const ws of sockets) ws.terminate();
+  }
+});
+
 test('deleting the last-read message re-anchors the read position (no unread regrowth)', async () => {
   const ch = await makeChannel(uniqueId('readdel'));
   const m1 = await sendChannelMessage(ch.id, 'first');
