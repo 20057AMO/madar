@@ -130,6 +130,47 @@ builtin_map() {
 map_dir() { awk -F'\t' -v id="$1" '$1 == id { print $2; exit }'; }
 map_has() { awk -F'\t' -v id="$1" '$1 == id { found = 1 } END { exit !found }'; }
 
+github_named_exports() {
+  local scan_root="$CS_ROOT/lib/vscode"
+  [ -d "$scan_root" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$scan_root" "$GITHUB_DIR" <<'PY' | sort -u
+import os
+import re
+import sys
+
+root, skip = sys.argv[1], os.path.realpath(sys.argv[2])
+patterns = [
+    re.compile(r'(?:import|export)\s*(?:[A-Za-z_$][A-Za-z0-9_$]*\s*,\s*)?\{([^}]*)\}\s*from\s*(["\'])(@github/[A-Za-z0-9._-]+)\2', re.S),
+    re.compile(r'(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*(["\'])(@github/[A-Za-z0-9._-]+)\2\s*\)', re.S),
+]
+valid = re.compile(r'[A-Za-z_$][A-Za-z0-9_$]*\Z')
+for dirpath, dirnames, filenames in os.walk(root):
+    here = os.path.realpath(dirpath)
+    if here == skip or here.startswith(skip + os.sep):
+        dirnames[:] = []
+        continue
+    for filename in filenames:
+        if not filename.endswith(('.js', '.mjs', '.cjs')):
+            continue
+        try:
+            with open(os.path.join(dirpath, filename), encoding='utf-8', errors='ignore') as handle:
+                source = handle.read()
+        except OSError:
+            continue
+        for pattern in patterns:
+            for match in pattern.finditer(source):
+                for item in match.group(1).split(','):
+                    item = item.strip()
+                    if not item or item.startswith('type '):
+                        continue
+                    item = re.split(r'\s+as\s+|\s*:\s*', item, maxsplit=1)[0].strip()
+                    if item == 'default' or not valid.fullmatch(item):
+                        continue
+                    print('%s\t%s' % (match.group(3), item))
+PY
+}
+
 saved_ids() {
   local d id
   [ -d "$SAVED_DIR" ] || return 0
@@ -199,7 +240,8 @@ cmd_capture() {
 # REPLACED by a stub (rm -rf + recreate, so no leftover dist bundles survive),
 # and the flavour is chosen structurally from each package.json rather than from
 # its name: a package that declares `bin` is SPAWNED as an executable, so its
-# stub exits 0; everything else is imported, so its stub exports {}.
+# stub exits 0; everything else is imported, so its stub exports the named
+# bindings the code-server bundle imports statically, or {} when none exist.
 #
 # Name-based stubbing was tried first and was wrong: code-server 4.138 ships a
 # FOURTH package, @github/copilot-sdk-linux-x64 (127 MB of native payload) that
@@ -207,7 +249,8 @@ cmd_capture() {
 # intended ~330 MB, while every named check still passed green. Stubbing the
 # whole tree is what makes this survive the next package rename.
 # `spawned` when the package declares `bin` (it is executed, so the stub must
-# exit 0 immediately), `imported` otherwise (the stub must export {}).
+# exit 0 immediately), `imported` otherwise (the stub must export the named
+# bindings discovered in the bundle, or {} when none are discoverable).
 # SINGLE definition, shared by the writer and the checker below: as two
 # hand-written jq expressions they disagreed on a package with no `bin` field at
 # all — the writer emitted an import stub while the checker demanded an exit
@@ -227,12 +270,14 @@ github_stub_bin_json() {
 write_github_stubs() {
   mkdir -p "$GITHUB_DIR" || { log "warning: cannot create $GITHUB_DIR"; return 1; }
 
-  local pkg name kind bin_json
+  local pkg name kind bin_json named_map exports sym stub_body
+  named_map=$(github_named_exports)
   for pkg in "$GITHUB_DIR"/*/; do
     [ -d "$pkg" ] || continue
     name=$(jq -r '.name // empty' "$pkg/package.json" 2>/dev/null)
     [ -n "$name" ] || name="$(basename "$pkg")"
     kind=$(github_stub_kind "$pkg/package.json")
+    bin_json=""
     # Read the REAL bin map before the package.json is replaced: the command
     # name VS Code spawns by is whatever this declares (copilot-linux-x64 says
     # `github-copilot`, not `@github/copilot-linux-x64`), and a stub published
@@ -246,8 +291,15 @@ write_github_stubs() {
       chmod +x "$pkg/index.js"
       log "stubbed the spawned @github package $name (bin $(jq -r '.bin | if type == "string" then . else keys | join(",") end' "$pkg/package.json"))"
     else
+      exports=$(printf '%s\n' "$named_map" | awk -F'\t' -v want="$name" '$1 == want { print $2 }' | sort -u | paste -sd, -)
+      stub_body=""
+      while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        stub_body="${stub_body}module.exports.$sym=function(){};"
+      done <<< "$(printf '%s\n' "$exports" | tr ',' '\n')"
+      [ -n "$stub_body" ] || stub_body='module.exports={}'
       printf '{"name":"%s","version":"0.0.0","main":"index.js"}\n' "$name" > "$pkg/package.json"
-      printf 'module.exports={}\n' > "$pkg/index.js"
+      printf '%s\n' "$stub_body" > "$pkg/index.js"
       log "stubbed the imported @github package $name"
     fi
   done
@@ -326,13 +378,14 @@ check_i2_sidecar_stubbed() {
 }
 
 check_i3_js_stubs() {
-  # Every @github package that is IMPORTED rather than spawned must be an empty
-  # export: agentHost's static `import '@github/copilot'` resolves this, and a
-  # 753 KB dist bundle surviving here is both dead weight and a sign the
-  # replace-in-place approach came back (the old Dockerfile overwrote index.js
-  # without removing the rest of the directory).
-  local pkg name kind bytes imported=0
+  # Every @github package that is IMPORTED rather than spawned must export the
+  # named bindings the code-server bundle imports statically, or {} when it
+  # imports none; a 753 KB dist bundle surviving here is both dead weight and a
+  # sign the replace-in-place approach came back.
+  local pkg name kind bytes imported=0 named_map required sym
   [ -d "$GITHUB_DIR" ] || fail "I3: $GITHUB_DIR is missing — agentHost dies with ERR_MODULE_NOT_FOUND"
+  command -v python3 >/dev/null 2>&1 || fail "I3: python3 is required to derive @github named exports from the bundle"
+  named_map=$(github_named_exports)
   for pkg in "$GITHUB_DIR"/*/; do
     [ -d "$pkg" ] || continue
     [ "$(github_stub_kind "$pkg/package.json" 2>/dev/null)" = "imported" ] || continue
@@ -342,8 +395,17 @@ check_i3_js_stubs() {
     bytes=$(dir_bytes "$pkg")
     [ -n "$bytes" ] || fail "I3: cannot measure $GITHUB_DIR/$name"
     [ "$bytes" -lt 65536 ] || fail "I3: the imported package $name is $bytes bytes (>= 64 KiB) — the real SDK payload is back"
-    grep -qF 'module.exports={}' "$pkg/index.js" 2>/dev/null \
-      || fail "I3: $name/index.js does not export an empty object"
+    required=$(printf '%s\n' "$named_map" | awk -F'\t' -v want="$name" '$1 == want { print $2 }' | sort -u | paste -sd, -)
+    if [ -n "$required" ]; then
+      while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        grep -qF "module.exports.$sym=function(){}" "$pkg/index.js" 2>/dev/null \
+          || fail "I3: $name/index.js does not export the required named binding $sym"
+      done <<< "$(printf '%s\n' "$required" | tr ',' '\n')"
+    else
+      grep -qF 'module.exports={}' "$pkg/index.js" 2>/dev/null \
+        || fail "I3: $name/index.js does not export an empty object"
+    fi
   done
   [ "$imported" -gt 0 ] \
     || fail "I3: no imported @github package found under $GITHUB_DIR — the tree was emptied instead of stubbed (agentHost would log ERR_MODULE_NOT_FOUND)"

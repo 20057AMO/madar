@@ -211,7 +211,11 @@ describe('IDE hardening — the shipped install', { skip: READY ? false : `${SCR
     for (const { name, kind, bytes } of pkgs) {
       assert.ok(bytes < 1024 * 1024, `${name} is ${bytes} bytes — the real ${kind} payload is back`);
       const idx = sh(`cat ${GITHUB_DIR}/${name.split('/').pop()}/index.js`);
-      assert.match(idx.stdout, kind === 'spawned' ? /process\.exit\(0\)/ : /module\.exports=\{\}/, `${name} is not a ${kind} stub: ${idx.stdout}`);
+      // 4.146 derives imported names from the bundle and writes one inert
+      // `module.exports.<Name>=function(){};` token per binding; the old
+      // empty-object shape remains valid only when no names were found.
+      const importedStub = /^(?:module\.exports=\{\}|(?:module\.exports\.[A-Za-z_$][A-Za-z0-9_$]*=function\(\)\{\};)+)$/;
+      assert.match(idx.stdout.trim(), kind === 'spawned' ? /process\.exit\(0\)/ : importedStub, `${name} is not a ${kind} stub: ${idx.stdout}`);
     }
   });
 
@@ -430,6 +434,49 @@ describe('IDE hardening — the shipped install', { skip: READY ? false : `${SCR
   });
 });
 
+describe('IDE hardening — boot sync stamp guard', { skip: inContainer(['test', '-f', '/app/entrypoint.sh']).code === 0 ? false : '/app/entrypoint.sh is missing' }, () => {
+  test('a failed extension install or verify keeps the previous ide-sync stamp', () => {
+    const src = sh(`sed -n '/^ide_sync_managed_files()/,/^}/p' /app/entrypoint.sh`);
+    assert.strictEqual(src.code, 0, src.stderr);
+    const body = src.stdout;
+    assert.match(body, /^ide_sync_managed_files\(\)/m, 'the boot sync function is missing from /app/entrypoint.sh');
+
+    const initAt = body.search(/\bsync_failed=0\b/);
+    const installAt = body.indexOf('code-server --install-extension');
+    const verifyAt = body.indexOf('verify >/dev/null');
+    assert.ok(initAt >= 0, 'sync_failed must be initialized to 0 before any step can fail');
+    assert.ok(installAt > initAt, 'the VSIX install loop must run after the initializer');
+    assert.ok(verifyAt > installAt, 'the hardening verify step must run after the VSIX loop');
+
+    for (const [label, needle] of [
+      ['VSIX install', 'code-server --install-extension'],
+      ['ide-hardening verify', 'verify >/dev/null'],
+    ] as const) {
+      const at = body.indexOf(needle);
+      const local = body.slice(at, at + 200);
+      assert.match(
+        local,
+        /\|\|[\s\S]{0,160}?\bsync_failed=1\b/,
+        `the ${label} failure must mark sync_failed=1`,
+      );
+    }
+
+    const guardAt = body.search(/\[\s*"\$sync_failed"\s+-ne\s+0\s*\]/);
+    assert.ok(guardAt >= 0, 'the stamp write must be guarded by sync_failed');
+    assert.ok(guardAt > verifyAt, 'the guard must run after both failure branches');
+    const afterGuard = body.slice(guardAt);
+    const stampAt = afterGuard.search(/printf[^\n]*"stamp"/);
+    assert.ok(stampAt >= 0, 'the stamp must be written after the guard');
+    const returnAt = afterGuard.search(/\breturn\s+0\b/);
+    assert.ok(returnAt >= 0 && returnAt < stampAt, 'a failed step must return before the stamp is written');
+    assert.match(
+      afterGuard.slice(stampAt),
+      /mv\s+-f\s+"\$tmp"\s+"\$IDE_STAMP_FILE"/,
+      'the guarded write must be the actual stamp promotion',
+    );
+  });
+});
+
 // ── Enforcement, driven against synthetic trees in /tmp ─────────────────────
 
 /**
@@ -624,6 +671,50 @@ describe('IDE hardening — enforcement (synthetic tree)', { skip: READY && SHIP
      printf '{"name":"@github/copilot-linux-x64","version":"0.0.0","main":"index.js","bin":{"github-copilot":"index.js"}}' > ${GH}/copilot-linux-x64/package.json
      printf '#!/usr/bin/env node\\nprocess.exit(0)\\n' > ${GH}/copilot-linux-x64/index.js`,
     /I2: .*@github is missing/,
+  );
+
+  test('apply reads named @github imports from the bundle and verify accepts them', () => {
+    const bundle = `${ROOT}/lib/vscode/agentHostMain.js`;
+    const planted = sh(`
+      mkdir -p ${ROOT}/lib/vscode
+      printf '%s\\n' 'import{CopilotClient:BG,RuntimeConnection:qG}from"@github/copilot-sdk"' > ${bundle}
+      WSD_CODE_SERVER_ROOT=${ROOT} WSD_IDE_BUILTIN_DIR=${SAVED} ${SCRIPT} apply > /dev/null
+      echo "APPLY_EXIT=$?"
+      echo "SDK=$(cat ${GH}/copilot-sdk/index.js)"
+      WSD_CODE_SERVER_ROOT=${ROOT} WSD_IDE_BUILTIN_DIR=${SAVED} ${SCRIPT} verify > /dev/null
+      echo "VERIFY_EXIT=$?"
+    `);
+    try {
+      assert.strictEqual(planted.code, 0, planted.stderr);
+      assert.match(planted.stdout, /APPLY_EXIT=0/, `apply failed: ${planted.stdout}${planted.stderr}`);
+      assert.match(
+        planted.stdout,
+        /module\.exports\.CopilotClient=function\(\)\{\};/,
+        `apply did not derive CopilotClient from the bundle: ${planted.stdout}`,
+      );
+      assert.match(
+        planted.stdout,
+        /module\.exports\.RuntimeConnection=function\(\)\{\};/,
+        `apply did not derive RuntimeConnection from the bundle: ${planted.stdout}`,
+      );
+      assert.match(planted.stdout, /VERIFY_EXIT=0/, `verify rejected the named exports: ${planted.stdout}${planted.stderr}`);
+    } finally {
+      const healed = sh(`
+        rm -f ${bundle}
+        WSD_CODE_SERVER_ROOT=${ROOT} WSD_IDE_BUILTIN_DIR=${SAVED} ${SCRIPT} apply > /dev/null
+        WSD_CODE_SERVER_ROOT=${ROOT} WSD_IDE_BUILTIN_DIR=${SAVED} ${SCRIPT} verify; echo "EXIT=$?"
+      `);
+      assert.strictEqual(hardenExit(healed), 0, `the tree did not heal after the named-export test: ${healed.stdout}${healed.stderr}`);
+    }
+  });
+
+  expectRejected(
+    'a named-import stub exports an empty object (code-server would fail to load)',
+    `mkdir -p ${ROOT}/lib/vscode
+     printf '%s\\n' 'import{CopilotClient:BG,RuntimeConnection:qG}from"@github/copilot-sdk"' > ${ROOT}/lib/vscode/agentHostMain.js
+     printf 'module.exports={}\\n' > ${GH}/copilot-sdk/index.js`,
+    `rm -f ${ROOT}/lib/vscode/agentHostMain.js`,
+    /I3: @github\/copilot-sdk\/index\.js does not export the required named binding CopilotClient/,
   );
 
   test('verify exits 0 and writes NOTHING when the extensions tree is absent', () => {

@@ -77,9 +77,19 @@ IDE_HARDENING=/usr/local/share/madar/ide-hardening.sh
 IDE_STAMP_FILE="$DATA_DIR/ide-sync.json"
 IDE_SETTINGS=/root/.local/share/code-server/User/settings.json
 
+ide_sync_stderr_tail() {
+  local file="$1" label="$2" excerpt
+  [ -n "$file" ] && [ -f "$file" ] && [ -s "$file" ] || return 0
+  excerpt="$(tail -n 5 "$file" 2>/dev/null | tr '\r\n' '  ' | cut -c1-400)"
+  [ -n "$excerpt" ] || return 0
+  printf 'Madar: %s stderr (last 5 lines, <=400 chars): %s\n' "$label" "$excerpt" >&2
+}
+
 ide_sync_managed_files() {
+  local err_file="" err_target=/dev/null
   [ -d "$IDE_MANAGED_DIR" ] || {
     echo "Madar: $IDE_MANAGED_DIR absent — skipping the managed IDE config sync"
+    [ -n "$err_file" ] && rm -f "$err_file"
     return 0
   }
   # Stamp over every managed input (settings, config.yaml, the pinned VSIX and
@@ -90,13 +100,21 @@ ide_sync_managed_files() {
   # settings path changed nothing about the managed inputs, so a stamp computed
   # only over them short-circuited and the sync kept writing to the dead file.
   # Moving the target is exactly the kind of change this gate must notice.
-  local stamp current=""
+  #
+  # The extensions tree is deliberately NOT part of the stamp: installing the
+  # pinned Todo Tree VSIX mutates it on every successful sync, so hashing it
+  # would leave the stamp permanently stale and re-run the sync on every boot.
+  # Managed inputs, the target path and this script's own path are enough; the
+  # hardening verify step re-checks the resulting tree independently.
+  local stamp current="" sync_failed=0
+  err_file="$(mktemp "$DATA_DIR/ide-sync-stderr.XXXXXX" 2>/dev/null)" && err_target="$err_file"
   stamp="$( { find "$IDE_MANAGED_DIR" "$IDE_VSIX_DIR" -type f 2>/dev/null; [ -f "$IDE_HARDENING" ] && echo "$IDE_HARDENING"; } \
     | sort | xargs -r sha256sum 2>/dev/null \
-    | { cat; printf '%s\n' "settings-target=$IDE_SETTINGS"; } \
+    | { cat; printf '%s\n' "settings-target=$IDE_SETTINGS"; printf '%s\n' "boot-script=$0"; } \
     | sha256sum | cut -c1-64 )"
   if [ -z "$stamp" ]; then
     echo "Madar: could not compute the managed IDE config stamp — skipping the sync"
+    [ -n "$err_file" ] && rm -f "$err_file"
     return 0
   fi
   if [ -f "$IDE_STAMP_FILE" ]; then
@@ -104,6 +122,7 @@ ide_sync_managed_files() {
   fi
   if [ "$current" = "$stamp" ]; then
     echo "Madar: managed IDE config already at stamp ${stamp:0:8} — nothing to sync"
+    [ -n "$err_file" ] && rm -f "$err_file"
     return 0
   fi
   echo "Madar: applying managed IDE config (stamp ${current:-none} -> ${stamp:0:8})"
@@ -124,23 +143,30 @@ ide_sync_managed_files() {
   local vsix
   for vsix in "$IDE_VSIX_DIR"/*.vsix; do
     [ -f "$vsix" ] || continue
-    code-server --install-extension "$vsix" >/dev/null 2>&1 \
-      || echo "Madar: warning — could not install the pinned $(basename "$vsix")" >&2
+    code-server --install-extension "$vsix" >/dev/null 2>"$err_target" \
+      || { sync_failed=1; echo "Madar: warning — could not install the pinned $(basename "$vsix"); the IDE sync stamp will not be updated" >&2; ide_sync_stderr_tail "$err_target" "install $(basename "$vsix")"; }
   done
 
   if [ -x "$IDE_HARDENING" ]; then
-    "$IDE_HARDENING" verify >/dev/null 2>&1 \
-      || echo "Madar: warning — ide-hardening verify failed; run '$IDE_HARDENING verify' and read the image build log" >&2
+    "$IDE_HARDENING" verify >/dev/null 2>"$err_target" \
+      || { sync_failed=1; echo "Madar: warning — ide-hardening verify failed ('$IDE_HARDENING verify'); the IDE sync stamp will not be updated" >&2; ide_sync_stderr_tail "$err_target" "ide-hardening verify"; }
   fi
 
-  # The stamp is written LAST — only once every step above was attempted, so a
-  # crash mid-migration re-runs instead of claiming success.
+  if [ "$sync_failed" -ne 0 ]; then
+    echo "Madar: warning — the managed IDE sync did not complete; keeping the previous stamp so the next boot retries" >&2
+    [ -n "$err_file" ] && rm -f "$err_file"
+    return 0
+  fi
+
+  # The stamp is written LAST — only once every step above succeeded, so a
+  # failed step or crash mid-migration re-runs instead of claiming success.
   local tmp="$IDE_STAMP_FILE.madar-tmp"
   printf '{"stamp":"%s","appliedAt":"%s"}\n' "$stamp" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null \
     && chmod 600 "$tmp" \
     && mv -f "$tmp" "$IDE_STAMP_FILE" \
     || echo "Madar: warning — could not persist the IDE sync stamp" >&2
   rm -f "$tmp"
+  [ -n "$err_file" ] && rm -f "$err_file"
   return 0
 }
 ide_sync_managed_files || echo "Madar: warning — the managed IDE config sync failed (non-fatal)" >&2
