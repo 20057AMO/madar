@@ -765,9 +765,10 @@ export function Chat() {
 
   // ── Responsive layout: drawer rail on phones, collapsible rail on tablets
   const isTablet = useMediaQuery('(max-width: 1023px)');
-  const isPhone = useMediaQuery('(max-width: 639px)');
+  const isPhone = useMediaQuery('(max-width: 640px)');
   const [railOpen, setRailOpen] = useState(false);
   const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem('wsd.chat.railCollapsed') === '1');
+  const effectiveRailCollapsed = isTablet && !isPhone && railCollapsed;
 
   // ── Load-earlier paging + jump-to-bottom FAB
   const [noMore, setNoMore] = useState(false);
@@ -859,11 +860,21 @@ export function Chat() {
   const closeRail = () => setRailOpen(false);
 
   const toggleRailCollapsed = () => {
+    const collapsing = isTablet && !isPhone && !railCollapsed;
     setRailCollapsed((c) => {
       const next = !c;
       localStorage.setItem('wsd.chat.railCollapsed', next ? '1' : '0');
       return next;
     });
+    if (collapsing) {
+      requestAnimationFrame(() => {
+        const target = burgerRef.current
+          || document.querySelector<HTMLButtonElement>('.tchat-browse-btn')
+          || taRef.current;
+        if (target) target.focus();
+        else if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      });
+    }
   };
 
   const toggleSound = () => {
@@ -992,6 +1003,24 @@ export function Chat() {
     if (soundOnRef.current) playChatSound();
   };
 
+  const appendActiveMessage = (channelId: string, message: TeamChatMessage) => {
+    if (activeIdRef.current !== channelId) return;
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === message.id)) return prev;
+      const max = Math.max(500, prev.length);
+      return [...prev, message].slice(-max);
+    });
+    lastMsgDraft.current.delete(channelId);
+    setChannels((prev) => {
+      const next = prev.map((c) => {
+        if (c.id !== channelId) return c;
+        return { ...c, lastMessageAt: message.createdAt, unread: 0 };
+      });
+      next.sort((a, b) => new Date(b.lastMessageAt || b.createdAt).getTime() - new Date(a.lastMessageAt || a.createdAt).getTime());
+      return next;
+    });
+  };
+
   // ── socket — one connection per session
   const onEvent = (ev: ChatSocketEvent) => {
     if (ev.type === 'subscribed') {
@@ -1034,30 +1063,21 @@ export function Chat() {
       return;
     }
     if (ev.type === 'message') {
-      // Drop own message dupes (broadcast echo of the REST write).
       const cid = ev.channel.id;
-      const list = cid === activeIdRef.current;
-      if (list) {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === ev.message.id)) return prev;
-          // Dynamic ceiling: live appends must never truncate history that
-          // loadEarlier paged in (up to 2000). Cap at max(500, current size)
-          // so prepended history survives incremental live messages.
-          const max = Math.max(500, prev.length);
-          return [...prev, ev.message].slice(-max);
-        });
-      } else {
-        bumpUnread(cid, ev.message);
-        // WhatsApp-style instant rail preview for non-active channels.
-        lastMsgDraft.current.set(cid, { text: ev.message.text || '📎', at: Date.now() });
+      if (cid === activeIdRef.current) {
+        appendActiveMessage(cid, ev.message);
+        return;
       }
-      // Instant re-sort (recent activity first) + instant unread badge for
-      // non-active channels (bumpUnread already tallied them locally).
+      bumpUnread(cid, ev.message);
+      lastMsgDraft.current.set(cid, { text: ev.message.text || '📎', at: Date.now() });
       setChannels((prev) => {
         const next = prev.map((c) => {
           if (c.id !== cid) return c;
-          const unread = list ? 0 : (unreadLocal.current.get(cid)?.size ?? c.unread ?? 0);
-          return { ...c, lastMessageAt: ev.message.createdAt, unread };
+          return {
+            ...c,
+            lastMessageAt: ev.message.createdAt,
+            unread: (unreadLocal.current.get(cid)?.size ?? c.unread ?? 0),
+          };
         });
         next.sort((a, b) => new Date(b.lastMessageAt || b.createdAt).getTime() - new Date(a.lastMessageAt || a.createdAt).getTime());
         return next;
@@ -1174,7 +1194,7 @@ export function Chat() {
   const soundLabel = soundOn
     ? t2('تعطيل صوت الإشعارات', 'Disable notification sound')
     : t2('تفعيل صوت الإشعارات', 'Enable notification sound');
-  const railCollapseLabel = railCollapsed
+  const railCollapseLabel = effectiveRailCollapsed
     ? t2('توسيع قائمة القنوات', 'Expand channel list')
     : t2('طي قائمة القنوات', 'Collapse channel list');
 
@@ -1722,7 +1742,8 @@ export function Chat() {
   }, [settingsOpen]);
 
   const doSend = async () => {
-    if (!activeId || sending) return;
+    const channelId = activeId;
+    if (!channelId || sending) return;
     // Uploads are uploaded-then-sent, never concurrently: refuse the send and
     // say why, so Enter is never silently swallowed while the composer looks ready.
     if (uploading > 0) {
@@ -1737,11 +1758,12 @@ export function Chat() {
       const atts = composer.attachments.length
         ? composer.attachments.map((a) => ({ id: a.id, name: a.name }))
         : undefined;
-      await sendChatMessage(activeId, {
+      const { message } = await sendChatMessage(channelId, {
         text,
         replyTo: composer.replyTo?.id,
         attachments: atts,
       });
+      appendActiveMessage(channelId, message);
       setComposer({ text: '', attachments: [] });
       setMentionDraft(null);
       focusComposer();
@@ -2073,16 +2095,18 @@ export function Chat() {
   };
 
   const sendVoiceNote = async (blob: Blob) => {
-    if (!activeId) return;
+    const channelId = activeId;
+    if (!channelId) return;
     setSending(true);
     setError('');
     try {
       const file = new File([blob], `voice-${Date.now()}.webm`, { type: 'audio/webm' });
-      const { attachment } = await uploadChatAttachment(activeId, file);
-      await sendChatMessage(activeId, {
+      const { attachment } = await uploadChatAttachment(channelId, file);
+      const { message } = await sendChatMessage(channelId, {
         text: '',
         attachments: [{ id: attachment.id, name: attachment.name }],
       });
+      appendActiveMessage(channelId, message);
     } catch (err) {
       setError(err instanceof Error ? err.message : t2('فشل إرسال الرسالة الصوتية', 'Failed to send voice note'));
     } finally {
@@ -2492,6 +2516,7 @@ export function Chat() {
   }, [messages, meId, active, viewerOnly, activeCanSend, canWrite, editingMsgId, editText, emojiPickerFor, newDividerId, lang, user?.role]);
 
   const pinned = useMemo(() => messages.filter((m) => m.pinned), [messages]);
+  const railOffCanvas = isTablet && ((isPhone && !railOpen) || effectiveRailCollapsed);
   const normalizedChannelFilter = channelFilter.trim().toLocaleLowerCase();
   const visibleChannels = normalizedChannelFilter
     ? channels.filter((channel) => (
@@ -2518,7 +2543,9 @@ export function Chat() {
       <div
         id="tchat-rail"
         ref={railRef}
-        class={`tchat-rail${railOpen ? ' open' : ''}${railCollapsed ? ' collapsed' : ''}`}
+        class={`tchat-rail${railOpen ? ' open' : ''}${effectiveRailCollapsed ? ' collapsed' : ''}`}
+        inert={railOffCanvas}
+        aria-hidden={railOffCanvas ? 'true' : undefined}
         role={railOpen && isPhone ? 'dialog' : undefined}
         aria-modal={railOpen && isPhone ? 'true' : undefined}
         aria-label={railOpen && isPhone ? t2('قنوات المحادثة', 'Chat channels') : undefined}
@@ -2550,12 +2577,12 @@ export function Chat() {
             <button
               class="btn btn-icon btn-sm tchat-collapse-btn"
               onClick={toggleRailCollapsed}
-              aria-expanded={!railCollapsed}
+              aria-expanded={!effectiveRailCollapsed}
               aria-controls="tchat-channel-list"
               title={railCollapseLabel}
               aria-label={railCollapseLabel}
             >
-              {railCollapsed ? <ChevronRight width={14} height={14} /> : <ChevronLeft width={14} height={14} />}
+              {effectiveRailCollapsed ? <ChevronRight width={14} height={14} /> : <ChevronLeft width={14} height={14} />}
             </button>
             <button
               class="btn btn-icon btn-sm"
@@ -2792,12 +2819,12 @@ export function Chat() {
           <>
             <div class="tchat-head">
               <div style="display:flex;align-items:center;gap:10px;min-width:0">
-                {(isTablet || railCollapsed) && (
+                {(isPhone || effectiveRailCollapsed) && (
                   <button
                     ref={burgerRef}
                     class="tchat-burger"
                     onClick={openRail}
-                    aria-expanded={isPhone ? railOpen : !railCollapsed}
+                    aria-expanded={isPhone ? railOpen : !effectiveRailCollapsed}
                     aria-controls="tchat-rail"
                     title={t2('إظهار/إخفاء قائمة القنوات', 'Toggle channel list')}
                     aria-label={t2('إظهار/إخفاء قائمة القنوات', 'Toggle channel list')}
@@ -3000,7 +3027,7 @@ export function Chat() {
                          key={m.id}
                          role="button"
                          tabIndex={0}
-                         aria-label={t2('انتقل إلى الرسالة', 'Jump to message')}
+                         aria-label={t2(`انتقل إلى الرسالة من ${m.username}: ${m.text.slice(0, 140)}${m.text.length > 140 ? '…' : ''}`, `Jump to message from ${m.username}: ${m.text.slice(0, 140)}${m.text.length > 140 ? '…' : ''}`)}
                          onClick={() => requestMessageJump(activeId!, m.id)}
                          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); requestMessageJump(activeId!, m.id); } }}
                        >

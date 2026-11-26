@@ -460,7 +460,7 @@
 }
 .tchat-search-controls .input { min-width: 0; flex: 1; }
 .tchat-search-controls .btn { flex-shrink: 0; }
-.tchat-search-toggle[aria-pressed="true"] {
+.tchat-search-toggle[aria-expanded="true"] {
   border-color: var(--accent);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
@@ -1990,7 +1990,7 @@ mark.tchat-search-hit {
   .tchat-backdrop.open { inset-block-start: 55px; }
 }
 /* Tablet: the rail pins open unless explicitly collapsed */
-@media (min-width: 640px) and (max-width: 1023px) {
+@media (min-width: 641px) and (max-width: 1023px) {
   .tchat-rail,
   .tchat-rail:dir(rtl) { transform: none; }
   .tchat-rail.collapsed { transform: translateX(-110%); }
@@ -2060,11 +2060,11 @@ mark.tchat-search-hit {
   .tchat-emoji-picker { grid-template-columns: repeat(6, 44px); }
   .tchat-burger { width: 44px; height: 44px; }
   .vn-speed-btn { min-width: 44px; min-height: 44px; }
-  .tchat-delete-btn { opacity: 1; min-width: 40px; min-height: 40px; }
+  .tchat-delete-btn { opacity: 1; min-width: 44px; min-height: 44px; }
   .tchat-channel-row { min-height: 56px; }
   .tchat-msg-side { opacity: 1; }
   .tchat-quick-reactions { display: none; } /* context menu via long-press instead */
-  .tchat-pill-btn { min-width: 40px; min-height: 40px; }
+  .tchat-pill-btn { min-width: 44px; min-height: 44px; }
   .tchat-guide-trigger { min-width: 44px; min-height: 44px; }
   .tchat-guide-close { min-width: 44px; min-height: 44px; }
   .tchat-textarea { font-size: 16px; min-height: 40px; }
