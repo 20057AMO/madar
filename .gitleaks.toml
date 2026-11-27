@@ -1,0 +1,26 @@
+# Madar local pre-commit secret gate.
+# Default gitleaks rules apply to the entire staged diff. The only allowances
+# below are rule + path + regex conjunctions for fixtures that are PUBLIC by
+# design. There is deliberately no path-only exemption.
+title = "Madar local secret gate"
+
+[extend]
+useDefault = true
+
+# jwt-secret-core.ts keeps a deny-list of retired JWT fallback literals;
+# jwt-secret.test.ts repeats them as regression fixtures. Their whole purpose
+# is to be refused, so they are safe to keep. Allow ONLY those two exact public
+# strings, ONLY in those two paths, ONLY for the rule that could flag them.
+# condition = "AND" requires all three dimensions to match: a newly introduced
+# real secret in either file still blocks the commit.
+[[allowlists]]
+description = "Retired public JWT fallback literals in the deny-list and its tests"
+targetRules = [ "generic-api-key" ]
+condition = "AND"
+paths = [
+  '''(^|/)backend/src/services/jwt-secret-core\.ts$''',
+  '''(^|/)backend/tests/jwt-secret\.test\.ts$''',
+]
+regexes = [
+  '''(?i)\b(?:wsd-pro-insecure-default|wsd-pro-default-secret-change-me)\b''',
+]
