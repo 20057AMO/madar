@@ -1,16 +1,18 @@
 /**
  * projects-cache.test.ts
- * Offline unit coverage for the GET /api/projects TTL cache + singleflight
+ * Offline unit coverage for the GET /api/projects cache + singleflight
  * (services/projects-cache.ts). No server, no Docker — the factory is driven
  * with a fake builder that counts invocations, exactly like
  * project-limits-core.test.ts / storage-core.test.ts.
  *
- * Proves the three contracts the endpoint depends on:
- *  - TTL: a fresh call after the window expires rebuilds; within the window
- *    the SAME reference is served without re-running the builder.
+ * Proves the contracts the endpoint depends on:
+ *  - TTL / stale-while-revalidate: a fresh read reuses the SAME reference;
+ *    once expired the stale value is served immediately and a single refresh
+ *    runs in the background (injected clock, no real sleeps).
  *  - Singleflight: concurrent callers share ONE in-flight build (asserted via
  *    a builder counter), even while a build is being held open.
- *  - Invalidation: invalidate() clears the cache so the next call rebuilds.
+ *  - Invalidation: invalidate() clears the cache so the next call rebuilds,
+ *    including while a background refresh is still in flight.
  *  - Never partial data: the cache is swapped only after the builder resolves;
  *    a rejected build is never cached and the next call retries.
  *  - Hygiene: the TTL is floored at 500ms and honors the env knob.
@@ -23,6 +25,39 @@ import assert from 'node:assert';
 import { createProjectsCache } from '../src/services/projects-cache-core.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const SENTINEL = Symbol('immediate');
+
+/** Injected clock + a builder whose resolution/rejection the test drives. */
+function harness<T>(ttlMs: number) {
+  let clock = 1_000;
+  let calls = 0;
+  const pending: Array<{ resolve: (value: T) => void; reject: (error: Error) => void }> = [];
+  const cache = createProjectsCache<T>(() => {
+    calls += 1;
+    return new Promise<T>((resolve, reject) => pending.push({ resolve, reject }));
+  }, { ttlMs, now: () => clock });
+  return {
+    cache,
+    get calls() {
+      return calls;
+    },
+    advance(ms: number) {
+      clock += ms;
+    },
+    immediate: () => new Promise<typeof SENTINEL>((r) => setImmediate(() => r(SENTINEL))),
+    settle: () => new Promise<void>((r) => setImmediate(r)),
+    release(value: T) {
+      const build = pending.shift();
+      assert.ok(build, 'a build is waiting');
+      build.resolve(value);
+    },
+    fail(error: Error) {
+      const build = pending.shift();
+      assert.ok(build, 'a build is waiting');
+      build.reject(error);
+    },
+  };
+}
 
 describe('createProjectsCache (TTL + singleflight)', () => {
   test('serves the SAME cached value within TTL without re-running the builder', async () => {
@@ -63,16 +98,26 @@ describe('createProjectsCache (TTL + singleflight)', () => {
     assert.strictEqual(r3, r1, 'concurrent caller C resolved the same array');
   });
 
-  test('TTL expiry triggers a rebuild on the next call', async () => {
-    let calls = 0;
-    const cache = createProjectsCache(async () => ({ version: ++calls }), { ttlMs: 500 });
+  test('expired entry is served stale immediately and revalidated in the background', async () => {
+    const h = harness<string>(500);
+    const first = h.cache.get();
+    h.release('A');
+    await first;
+    assert.strictEqual(h.cache.debug().cacheAt, 1_000);
 
-    const a = await cache.get();
-    assert.strictEqual(a.version, 1);
-    await sleep(650); // outlive the 500ms TTL
-    const b = await cache.get();
-    assert.strictEqual(b.version, 2, 'fresh call after TTL rebuilds');
-    assert.notStrictEqual(b, a, 'expired entry is replaced, not reused');
+    h.advance(501);
+    const got = h.cache.get();
+    assert.strictEqual(await Promise.race([got, h.immediate()]), 'A', 'stale value wins over the immediate sentinel');
+    assert.strictEqual(h.calls, 2, 'the refresh started in the background');
+    assert.strictEqual(h.cache.debug().refreshing, true, 'background refresh is visible');
+    assert.strictEqual(h.cache.debug().cacheAt, 1_000, 'the stale stamp is kept until refresh resolves');
+
+    h.release('B');
+    await h.settle();
+    assert.strictEqual(h.cache.debug().cacheAt, 1_501, 'cacheAt advances with the refresh');
+    assert.strictEqual(h.cache.debug().refreshing, false, 'refresh slot is released');
+    assert.strictEqual(await h.cache.get(), 'B', 'the next read observes the refreshed value');
+    assert.strictEqual(h.calls, 2, 'no extra build for that read');
   });
 
   test('invalidation clears the cache so the next call rebuilds', async () => {
@@ -163,5 +208,92 @@ describe('createProjectsCache (TTL + singleflight)', () => {
       if (prev === undefined) delete process.env.WSD_PROJECTS_LIST_TTL_MS;
       else process.env.WSD_PROJECTS_LIST_TTL_MS = prev;
     }
+  });
+
+  test('concurrent stale reads join one refresh and get the same stale reference', async () => {
+    const h = harness<{ version: number }>(500);
+    const first = h.cache.get();
+    h.release({ version: 1 });
+    const good = await first;
+
+    h.advance(501);
+    const p1 = h.cache.get();
+    const p2 = h.cache.get();
+    const p3 = h.cache.get();
+    assert.strictEqual(await Promise.race([p1, h.immediate()]), good, 'caller A is not blocked');
+    assert.strictEqual(await Promise.race([p2, h.immediate()]), good, 'caller B is not blocked');
+    assert.strictEqual(await Promise.race([p3, h.immediate()]), good, 'caller C is not blocked');
+    assert.strictEqual(h.calls, 2, 'all stale callers share one refresh');
+
+    h.release({ version: 2 });
+    await h.settle();
+    assert.strictEqual((await h.cache.get()).version, 2, 'the next read sees the refreshed list');
+    assert.strictEqual(h.calls, 2, 'no extra build was started');
+  });
+
+  test('invalidate during a background refresh makes the next read cold and never repopulates stale', async () => {
+    const h = harness<{ version: number }>(500);
+    const first = h.cache.get();
+    h.release({ version: 1 });
+    await first;
+
+    h.advance(501);
+    const stale = h.cache.get();
+    assert.strictEqual(await Promise.race([stale, h.immediate()]).then((v) => v.version), 1);
+
+    h.cache.invalidate();
+    assert.strictEqual(h.cache.debug().cacheAt, null, 'invalidate drops the stale entry');
+    assert.strictEqual(h.cache.debug().refreshing, false, 'old generation is no longer a live refresh');
+    const cold = h.cache.get();
+    assert.strictEqual(h.calls, 3, 'the next read is a cold build, not a join on the old refresh');
+
+    h.release({ version: 99 });
+    await h.settle();
+    assert.strictEqual(h.cache.debug().cacheAt, null, 'the invalidated refresh cannot repopulate the cache');
+    h.release({ version: 2 });
+    assert.strictEqual((await cold).version, 2);
+    assert.strictEqual(h.cache.debug().cacheAt, 1_501);
+    assert.strictEqual((await h.cache.get()).version, 2);
+  });
+
+  test('a failed background refresh keeps the last-good value and retries on a later stale read', async () => {
+    const h = harness<{ version: number }>(500);
+    const first = h.cache.get();
+    h.release({ version: 1 });
+    const good = await first;
+
+    h.advance(501);
+    const stale = h.cache.get();
+    assert.strictEqual(await Promise.race([stale, h.immediate()]), good);
+    h.fail(new Error('docker down'));
+    await h.settle();
+    assert.strictEqual(h.cache.debug().cacheAt, 1_000, 'failed refresh keeps the old stamp');
+    assert.strictEqual(h.cache.debug().refreshing, false, 'the rejected refresh frees its slot');
+
+    const retry = h.cache.get();
+    assert.strictEqual(await Promise.race([retry, h.immediate()]), good, 'last-good value still served');
+    assert.strictEqual(h.calls, 3, 'a stale read after the failure retries the refresh');
+    h.release({ version: 2 });
+    await h.settle();
+    assert.strictEqual(h.cache.debug().cacheAt, 1_501);
+    assert.strictEqual((await h.cache.get()).version, 2);
+  });
+
+  test('debug().refreshing reflects the active build and clears when it settles', async () => {
+    const h = harness<number>(500);
+    const cold = h.cache.get();
+    assert.strictEqual(typeof h.cache.debug().refreshing, 'boolean');
+    assert.strictEqual(h.cache.debug().refreshing, true, 'cold build is reported');
+    h.release(1);
+    await cold;
+    assert.strictEqual(h.cache.debug().refreshing, false, 'cold build settled');
+
+    h.advance(501);
+    const stale = h.cache.get();
+    assert.strictEqual(await Promise.race([stale, h.immediate()]), 1);
+    assert.strictEqual(h.cache.debug().refreshing, true, 'background refresh is reported');
+    h.release(2);
+    await h.settle();
+    assert.strictEqual(h.cache.debug().refreshing, false, 'background refresh settled');
   });
 });
