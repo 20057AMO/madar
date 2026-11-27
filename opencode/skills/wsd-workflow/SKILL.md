@@ -14,14 +14,14 @@ Scope: every code change in this repo. If you touched `frontend/` or `backend/` 
    ```
    Every feature is tested inside the running container. No exceptions.
 2. **Local gates before Docker**:
-   - `cd frontend && node node_modules\typescript\bin\tsc --noEmit`
-   - `cd frontend && node node_modules\vite\bin\vite.js build`
-   - `cd backend && node node_modules\typescript\bin\tsc --noEmit`
+   - `cd frontend && npm run typecheck`
+   - `cd frontend && npm run build`
+   - `cd backend && npm run typecheck`
 3. **Full suite** (server up on :3000):
    ```
-   cd backend && node --test --test-concurrency=1 "tests/**/*.test.ts"
+   cd backend && npm test
    ```
-4. **Commit discipline**: task + tests + verification → `git add -A`, descriptive message, push, watch CI green.
+4. **Commit discipline**: task + tests + verification -> stage only intended files (`git add <paths>`, never `git add -A`), descriptive message, push, watch CI green.
 
 ## Area-by-area method (بالقطع)
 One feature/area per round · full context + vertical goal BEFORE any edit · clarifying questions before new work.

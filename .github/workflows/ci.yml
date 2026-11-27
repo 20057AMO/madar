@@ -11,6 +11,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repo-checks:
+    name: Repo checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate compose files
+        run: |
+          docker compose config -q
+          docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.socket-proxy.yml config -q
+
+      - name: Check shell syntax
+        run: |
+          for f in scripts/*.sh; do bash -n "$f"; done
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Private/organization installs that require a Gitleaks license must
+          # add this repository secret; a failed scan is never suppressed.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
   integration:
     name: Typecheck + build + full backend suite
     runs-on: ubuntu-latest
@@ -34,6 +64,10 @@ jobs:
       - name: Typecheck backend
         working-directory: backend
         run: npm run typecheck
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
 
       - name: Generate ephemeral JWT secret
         run: echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
@@ -64,7 +98,7 @@ jobs:
 
       - name: Run full backend test suite
         working-directory: backend
-        run: node --test --test-concurrency=1 "tests/**/*.test.ts"
+        run: npm test
 
       - name: Dump app logs on failure
         if: failure()
