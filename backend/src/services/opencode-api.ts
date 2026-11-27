@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 
-import { assertAllowedUpdateBase, isStrictPublisherVersion, semverEquals, parseSemver } from './updates-core';
+import { assertAllowedUpdateBase, semverCompare, semverEquals, parseSemver } from './updates-core';
 import { bootTimeoutMs } from './code-server-update';
 import { runRestartSequence, type RestartVerdict } from './opencode-restart-core';
 
@@ -13,8 +13,9 @@ import { runRestartSequence, type RestartVerdict } from './opencode-restart-core
  *
  * Every runtime call to opencode (session management, version probing,
  * self-update) goes through here so a future major version only needs new
- * implementations behind the same facade. The SUPPORTED_MAJORS gate drives
+ * implementations behind the same facade. The supported-major gate drives
  * the Studio update channel: majors we have not adapted are never offered.
+ * WSD_UPDATE_OPENCODE_MAJOR overrides the default major at runtime.
  */
 
 const PORT = process.env.WSD_OPENCODE_PORT || '4096';
@@ -35,8 +36,25 @@ function dataDir(): string {
   return process.env.WSD_DATA_DIR || '/app/data';
 }
 
-/** Majors this integration layer is verified against. Extend to unlock v2. */
+/** Default major this integration layer is verified against. Kept for compatibility. */
 export const SUPPORTED_MAJORS: number[] = [1];
+
+/** Runtime major gate; junk/missing values fall back to the default. */
+export function getSupportedOpencodeMajors(): number[] {
+  const raw = (process.env.WSD_UPDATE_OPENCODE_MAJOR || '').trim();
+  if (!/^\d+$/.test(raw)) return [...SUPPORTED_MAJORS];
+  const major = Number(raw);
+  return Number.isSafeInteger(major) && major > 0 ? [major] : [...SUPPORTED_MAJORS];
+}
+
+/** Exact published release only: injection/range/prerelease strings never pass. */
+const EXACT_RELEASE_RE = /^\d+\.\d+\.\d+$/;
+
+function exactReleaseVersion(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const version = raw.trim();
+  return EXACT_RELEASE_RE.test(version) ? version : null;
+}
 
 let cachedMajor: number | null = null;
 let cachedVersion: string | null = null;
@@ -67,14 +85,14 @@ export function probeOpencodeVersion(force = false): Promise<VersionInfo> {
         resolve({
           version: cachedVersion,
           major: cachedMajor,
-          supported: cachedMajor === null ? false : SUPPORTED_MAJORS.includes(cachedMajor),
+          supported: cachedMajor === null ? false : getSupportedOpencodeMajors().includes(cachedMajor),
         });
         return;
       }
       resolve({
         version: force || cachedVersion === null ? 'unknown' : cachedVersion,
         major: cachedMajor,
-        supported: cachedMajor === null ? false : SUPPORTED_MAJORS.includes(cachedMajor),
+        supported: cachedMajor === null ? false : getSupportedOpencodeMajors().includes(cachedMajor),
       });
     });
   });
@@ -551,13 +569,29 @@ export function clearLatestVersionCache(): void {
   latestVersionCache = { at: 0, data: { latest: null, latestMajor: null, channelUnlocked: false } };
 }
 
+/** Highest exact published version whose major is allowed. */
+function highestAllowedRelease(versions: unknown, majors: number[]): string | null {
+  if (!versions || typeof versions !== 'object' || Array.isArray(versions)) return null;
+  let best: string | null = null;
+  for (const key of Object.keys(versions)) {
+    const version = exactReleaseVersion(key);
+    if (!version) continue;
+    const parsed = parseSemver(version);
+    if (!parsed || !majors.includes(parsed.major)) continue;
+    if (best === null || semverCompare(version, best) > 0) best = version;
+  }
+  return best;
+}
+
 /**
- * Latest published version on npm (1.x `latest` dist-tag), short 60s TTL
- * mirroring code-server's release cache (every status poll must not hammer
- * the registry). `force` bypasses the cache — used by the apply downgrade
- * gate so a stale `latest` can never sneak a downgrade past the check.
+ * Latest compatible published version, short 60s TTL mirroring code-server's
+ * release cache (every status poll must not hammer the registry). The npm
+ * packument wins when available: a `2.0.0` release cannot hide `1.9.0` behind
+ * the `latest` dist-tag. `force` bypasses the cache — used by the apply
+ * downgrade gate so a stale `latest` can never sneak a downgrade past it.
  */
 export function fetchLatestVersion(force = false): Promise<RegistryInfo> {
+  const majors = getSupportedOpencodeMajors();
   const now = Date.now();
   if (!force && latestVersionCache.at > 0 && now - latestVersionCache.at < LATEST_VERSION_CACHE_MS) {
     return Promise.resolve(latestVersionCache.data);
@@ -567,24 +601,28 @@ export function fetchLatestVersion(force = false): Promise<RegistryInfo> {
     latestVersionCache = { at: Date.now(), data: info };
     return info;
   };
-  return fetch(`${npmBase()}/opencode-ai/latest`, {
-    signal: AbortSignal.timeout(8000),
-  })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((j: any) => {
-      // Strict publisher format only — a forged range/dist-tag from a
-      // registry response (`1.99.0 || 2.0.0`, `latest`, `../evil`) must
-      // never reach the npm install argv and must never fake a comparison.
-      const latest = isStrictPublisherVersion(j?.version) ? String(j.version).trim() : null;
-      const latestMajor = latest ? parseInt(latest, 10) : null;
-      const info: RegistryInfo = {
-        latest,
-        latestMajor,
-        channelUnlocked:
-          latestMajor !== null && SUPPORTED_MAJORS.includes(latestMajor),
-      };
-      latestVersionCache = { at: Date.now(), data: info };
-      return info;
+  const finish = (latest: string | null): RegistryInfo => {
+    const parsed = latest ? parseSemver(latest) : null;
+    const latestMajor = parsed?.major ?? null;
+    const info: RegistryInfo = {
+      latest,
+      latestMajor,
+      channelUnlocked: latestMajor !== null && majors.includes(latestMajor),
+    };
+    latestVersionCache = { at: Date.now(), data: info };
+    return info;
+  };
+  const base = npmBase();
+  return fetch(`${base}/opencode-ai`, { signal: AbortSignal.timeout(8000) })
+    .then((r) => (r.ok ? r.json().catch(() => null) : null))
+    .then((packument: any) => {
+      if (packument && typeof packument === 'object' && !Array.isArray(packument) && 'versions' in packument) {
+        return finish(highestAllowedRelease(packument.versions, majors));
+      }
+      return fetch(`${base}/opencode-ai/latest`, { signal: AbortSignal.timeout(8000) })
+        .then((r) => (r.ok ? r.json().catch(() => null) : null))
+        .then((j: any) => finish(exactReleaseVersion(j?.version)))
+        .catch(() => fail());
     })
     .catch(() => fail());
 }
@@ -601,9 +639,9 @@ export interface UpdateResult {
  * Install a PINNED opencode version via npm, restart the supervised web
  * process into it and verify the new binary boots (CLI version + web server
  * + supervised-pid change — the same checks `waitForOpencodeBoot` applies to
- * interactive updates and rollbacks). Single-flight; refuses non-publisher
- * version strings (injection/range forms) and majors outside
- * SUPPORTED_MAJORS before a byte moves.
+ * interactive updates and rollbacks). Single-flight; refuses non-exact
+ * version strings (injection/range/prerelease forms) and majors outside the
+ * runtime gate before a byte moves.
  *
  * Shared primitive behind three callers:
  *  - performOpencodeUpdate (registry latest → install);
@@ -629,11 +667,12 @@ export interface UpdateResult {
  *  is surfaced in the error.
  */
 export function installOpencodeVersion(target: string): Promise<UpdateResult> {
-  if (!isStrictPublisherVersion(target)) {
+  const exact = exactReleaseVersion(target);
+  if (exact === null) {
     return Promise.resolve({ ok: false, error: `Invalid target version: ${target}` });
   }
-  const parsed = parseSemver(target);
-  if (parsed === null || !SUPPORTED_MAJORS.includes(parsed.major)) {
+  const parsed = parseSemver(exact);
+  if (parsed === null || !getSupportedOpencodeMajors().includes(parsed.major)) {
     return Promise.resolve({
       ok: false,
       error: `opencode ${target} is not supported by this Madar build yet`,
@@ -661,7 +700,7 @@ export function installOpencodeVersion(target: string): Promise<UpdateResult> {
   return new Promise<UpdateResult>((resolve) => {
     execFile(
       'npm',
-      ['install', '-g', `opencode-ai@${target}`, '--no-fund', '--no-audit'],
+      ['install', '-g', `opencode-ai@${exact}`, '--no-fund', '--no-audit'],
       { timeout: 180_000 },
       async (err) => {
         try {
@@ -679,7 +718,7 @@ export function installOpencodeVersion(target: string): Promise<UpdateResult> {
             );
             return;
           }
-          waitForOpencodeBoot(target, pidBefore).then((bootedVersion) => {
+          waitForOpencodeBoot(exact, pidBefore).then((bootedVersion) => {
             if (bootedVersion === null) {
               resolve(
                 done({
@@ -690,7 +729,7 @@ export function installOpencodeVersion(target: string): Promise<UpdateResult> {
               );
               return;
             }
-            resolve(done({ ok: true, updatedTo: target, restarted: true }));
+            resolve(done({ ok: true, updatedTo: exact, restarted: true }));
           });
         } catch (e: any) {
           resolve(done({ ok: false, error: `restart failed: ${e.message}` }));
@@ -735,7 +774,7 @@ export function performOpencodeUpdate(): Promise<UpdateResult> {
  * it is equivalent to demanding a change from the pre-update pid.
  */
 export function rollbackOpencodeTo(currentVersion: string, oldPid?: number): Promise<UpdateResult> {
-  if (!isStrictPublisherVersion(currentVersion)) {
+  if (exactReleaseVersion(currentVersion) === null) {
     return Promise.resolve({ ok: false, error: `Invalid rollback version: ${currentVersion}` });
   }
   void oldPid;

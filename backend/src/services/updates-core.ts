@@ -149,6 +149,20 @@ export function parseCodeServerRelease(
 
 /* ── Checksum ────────────────────────────────────────────────────────── */
 
+const SHA256_DIGEST_RE = /^sha256:([0-9a-fA-F]{64})$/;
+
+/**
+ * Accept ONLY a full `sha256:` prefix followed by exactly 64 hex chars.
+ * `parseCodeServerRelease` stays permissive for legacy readers; installation
+ * preflights must use this normalizer so a short/truncated digest can never
+ * be mistaken for proof of integrity.
+ */
+export function normalizeReleaseDigest(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const m = SHA256_DIGEST_RE.exec(raw.trim());
+  return m ? `sha256:${m[1].toLowerCase()}` : null;
+}
+
 /**
  * Constant-time-ish hex comparison for SHA-256 digests.
  * `expected` null → false (no verification = no pass).
@@ -219,6 +233,26 @@ const BLOCKED_UPDATE_HOSTS = new Set([
   '100.100.100.200',
 ]);
 
+/** Defaults mirrored by the update services; the strict env validator uses
+ * them to warn whenever an operator points an update endpoint elsewhere. */
+export const DEFAULT_UPDATE_BASES: Record<string, string> = {
+  WSD_UPDATE_GITHUB_BASE: 'https://api.github.com',
+  WSD_UPDATE_DOWNLOAD_BASE: 'https://github.com/coder/code-server/releases',
+  WSD_UPDATE_NPM_REGISTRY: 'https://registry.npmjs.org',
+};
+
+/** Env knobs whose values must carry an explicit scheme. Only the npm registry
+ * is routed here for backward compatibility: the generic helper's bare-host
+ * upgrade behaviour is pinned by updates-core.test.ts with the GitHub knob. */
+const STRICT_ENV_NAMES = new Set(['WSD_UPDATE_NPM_REGISTRY']);
+
+const warnedCustomUpdateBases = new Set<string>();
+
+/** Test-only reset for the custom-base warning dedupe set. */
+export function resetUpdateBaseWarningsForTests(): void {
+  warnedCustomUpdateBases.clear();
+}
+
 /**
  * Wildcard-DNS naming services: a host like `169.254.169.254.nip.io`
  * resolves to the IP embedded in its subdomain, so the literal hostname
@@ -235,32 +269,21 @@ function isWildcardDnsHost(hostname: string): boolean {
   );
 }
 
-/**
- * Validate an update fetch base (env-configured mirror OR a download URL
- * extracted from a GitHub release response) before any fetch reaches it.
- *
- *  - Transport: `https:` is mandatory. Plain `http:` is only admitted under
- *    `WSD_TESTING=1` so the container test suites can point the components at
- *    a local mock server (host.docker.internal) — a production mirror that
- *    downgrades to plaintext is refused loudly, never silently accepted.
- *  - Host: the same cloud-metadata blocklist as provider endpoints
- *    (`169.254.x`, `metadata.google.internal`, …) — a hostile GitHub
- *    response must not be able to redirect the downloader at metadata.
- *
- * Returns the trimmed base URL. Throws a clear Error naming the env var so a
- * misconfigured mirror fails loudly instead of silently fetching over
- * plaintext or at a forbidden host.
- */
-export function assertAllowedUpdateBase(
+function assertAllowedUpdateUrl(
   raw: string,
   envName: string,
   allowInsecureHttp: boolean,
+  strictScheme: boolean,
 ): string {
   const base = (raw || '').trim().replace(/\/+$/, '');
   if (!base) throw new Error(`${envName} must not be empty`);
+  const hasExplicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(base);
+  if (strictScheme && !hasExplicitScheme) {
+    throw new Error(`${envName} must include an explicit https:// scheme`);
+  }
   let url: URL;
   try {
-    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(base) ? base : `https://${base}`);
+    url = new URL(hasExplicitScheme ? base : `https://${base}`);
   } catch {
     throw new Error(`${envName} is not a valid URL`);
   }
@@ -278,11 +301,85 @@ export function assertAllowedUpdateBase(
   ) {
     throw new Error(`${envName} cannot point at this host`);
   }
+  if (strictScheme && url.protocol === 'http:' && !isTestingLocalHost(hostname)) {
+    throw new Error(`${envName} may use http only for localhost/loopback under WSD_TESTING=1`);
+  }
   // Normalize back to a serialized URL: a bare host without a scheme is
   // upgraded to https here, so the caller never interpolates a scheme-less
   // value into a fetch. Trailing slash dropped for the callers' `${base}/…`
   // composition.
   return url.toString().replace(/\/+$/, '');
+}
+
+function isTestingLocalHost(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname === '::1' ||
+    hostname.startsWith('127.') ||
+    hostname === 'host.docker.internal'
+  );
+}
+
+function warnOnCustomUpdateBase(envName: string, normalized: string): void {
+  const expected = DEFAULT_UPDATE_BASES[envName];
+  if (!expected) return;
+  let expectedNormalized: string;
+  try {
+    expectedNormalized = new URL(expected).toString().replace(/\/+$/, '');
+  } catch {
+    return;
+  }
+  if (normalized === expectedNormalized) return;
+  const key = `${envName}:${normalized}`;
+  if (warnedCustomUpdateBases.has(key)) return;
+  warnedCustomUpdateBases.add(key);
+  // Never echo the value: mirrors can legitimately contain signed query args
+  // or credentials, and those must not reach the server log.
+  console.warn(`[updates] ${envName} differs from its default — using a custom update endpoint`);
+}
+
+/**
+ * Strict validator for the three WSD_UPDATE_* endpoint knobs. Unlike the
+ * generic release-URL guard, a bare host is refused (the scheme must be
+ * explicit), and plaintext http is confined to loopback test servers.
+ */
+export function assertAllowedUpdateEnvBase(
+  raw: string,
+  envName: string,
+  allowInsecureHttp: boolean,
+): string {
+  const normalized = assertAllowedUpdateUrl(raw, envName, allowInsecureHttp, true);
+  warnOnCustomUpdateBase(envName, normalized);
+  return normalized;
+}
+
+/**
+ * Validate an update fetch base (env-configured mirror OR a download URL
+ * extracted from a GitHub release response) before any fetch reaches it.
+ *
+ *  - Transport: `https:` is mandatory. Plain `http:` is only admitted under
+ *    `WSD_TESTING=1` so the container test suites can point the components at
+ *    a local mock server (host.docker.internal) — a production mirror that
+ *    downgrades to plaintext is refused loudly, never silently accepted.
+ *  - Host: the same cloud-metadata blocklist as provider endpoints
+ *    (`169.254.x`, `metadata.google.internal`, …) — a hostile GitHub
+ *    response must not be able to redirect the downloader at metadata.
+ *  - Env knobs routed as strict (currently the npm registry) additionally
+ *    require an explicit scheme and reject non-loopback plaintext hosts.
+ *
+ * Returns the trimmed base URL. Throws a clear Error naming the env var so a
+ * misconfigured mirror fails loudly instead of silently fetching over
+ * plaintext or at a forbidden host.
+ */
+export function assertAllowedUpdateBase(
+  raw: string,
+  envName: string,
+  allowInsecureHttp: boolean,
+): string {
+  if (STRICT_ENV_NAMES.has(envName)) {
+    return assertAllowedUpdateEnvBase(raw, envName, allowInsecureHttp);
+  }
+  return assertAllowedUpdateUrl(raw, envName, allowInsecureHttp, false);
 }
 
 /** True when the arch has a published .deb asset for code-server. */

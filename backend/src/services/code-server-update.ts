@@ -29,6 +29,9 @@ import {
   freeSpaceGate,
   assertSafeDebName,
   assertAllowedUpdateBase,
+  assertAllowedUpdateEnvBase,
+  normalizeReleaseDigest,
+  DEFAULT_UPDATE_BASES,
   applyStateMachine,
   freshApplyState,
   isStrictPublisherVersion,
@@ -145,8 +148,8 @@ export function isTesting(): boolean {
  * blocklist (never cloud-metadata / link-local).
  */
 export function githubBase(): string {
-  return assertAllowedUpdateBase(
-    process.env.WSD_UPDATE_GITHUB_BASE || 'https://api.github.com',
+  return assertAllowedUpdateEnvBase(
+    process.env.WSD_UPDATE_GITHUB_BASE || DEFAULT_UPDATE_BASES.WSD_UPDATE_GITHUB_BASE,
     'WSD_UPDATE_GITHUB_BASE',
     isTesting(),
   );
@@ -157,8 +160,8 @@ export function githubBase(): string {
  * Same transport + host safety as `githubBase()`.
  */
 export function downloadBase(): string {
-  return assertAllowedUpdateBase(
-    process.env.WSD_UPDATE_DOWNLOAD_BASE || 'https://github.com/coder/code-server/releases',
+  return assertAllowedUpdateEnvBase(
+    process.env.WSD_UPDATE_DOWNLOAD_BASE || DEFAULT_UPDATE_BASES.WSD_UPDATE_DOWNLOAD_BASE,
     'WSD_UPDATE_DOWNLOAD_BASE',
     isTesting(),
   );
@@ -235,7 +238,11 @@ export async function fetchLatestRelease(force = false): Promise<ReleaseInfo | n
             if (typeof asset?.size === 'number') size = asset.size;
           }
         }
-        return { ...base, ...(size !== undefined ? { debSizeBytes: size } : {}) };
+        return {
+          ...base,
+          digest: normalizeReleaseDigest(base.digest),
+          ...(size !== undefined ? { debSizeBytes: size } : {}),
+        };
       } catch {
         return null;
       }
@@ -249,22 +256,32 @@ export async function fetchLatestRelease(force = false): Promise<ReleaseInfo | n
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export interface DownloadDebOptions {
+  /** Only for pinned re-apply / rollback baselines that never had a release digest. */
+  allowStructuralFallback?: boolean;
+}
+
 /**
  * Stream a .deb to dest with a hard byte cap and incremental SHA-256.
- * With a digest the checksum is authoritative; without one the file is
- * validated structurally via `dpkg-deb --info` (a real deb parses). Both
- * failing → error and the partial file is removed.
+ * A complete `sha256:` digest is mandatory unless the caller explicitly opts
+ * into the structural fallback for a pinned baseline. A mismatch removes the
+ * partial file before the install step can ever see it.
  */
 export async function downloadDeb(
   url: string,
   dest: string,
   expectedSha: string | null,
   bytesCap: number,
+  opts: DownloadDebOptions = {},
 ): Promise<void> {
   // Defense in depth: every download URL (release asset, rollback baseline)
   // passes the same transport + host guard again before a single byte moves
   // — even a supply-chain-tainted release response cannot move the fetch.
   assertAllowedUpdateBase(url, 'update download URL', isTesting());
+  const digest = normalizeReleaseDigest(expectedSha);
+  if (!digest && opts.allowStructuralFallback !== true) {
+    throw new Error('A complete SHA-256 digest is required before downloading the release package');
+  }
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
   if (!res.ok || !res.body) {
@@ -288,9 +305,9 @@ export async function downloadDeb(
     fs.rmSync(dest, { force: true });
     throw err;
   }
-  if (expectedSha && expectedSha.length > 0) {
+  if (digest) {
     const hex = hash.digest('hex');
-    const expectedHex = expectedSha.startsWith('sha256:') ? expectedSha.slice('sha256:'.length) : expectedSha;
+    const expectedHex = digest.slice('sha256:'.length);
     if (!checksumMatches(hex, expectedHex)) {
       fs.rmSync(dest, { force: true });
       throw new Error('SHA-256 checksum mismatch — download rejected');
@@ -592,7 +609,7 @@ export async function installCodeServerVersion(
         return done(fail('Not enough free disk space for the update'));
       }
       log(`downloading ${version} (${urlForLog(url)})`);
-      await downloadDeb(url, debPath, null, maxBytes());
+      await downloadDeb(url, debPath, null, maxBytes(), { allowStructuralFallback: true });
     } else {
       log(`installing ${version} from the local deb cache`);
     }
@@ -750,16 +767,46 @@ function gateErrorMessage(reason: string | undefined): string {
 
 // ── Full apply ---------------------------------------------------
 
-export function applyCodeServerUpdate(): Promise<UpdateResult> {
+export interface ApplyHooks {
+  probeCurrentVersion?: (force?: boolean) => Promise<string | null>;
+  fetchLatestRelease?: (force?: boolean) => Promise<ReleaseInfo | null>;
+  downloadDeb?: (url: string, dest: string, expectedSha: string | null, bytesCap: number, opts?: DownloadDebOptions) => Promise<void>;
+  installDeb?: (debPath: string) => Promise<void>;
+  hardenIdeInstall?: () => Promise<{ ok: boolean; skipped?: boolean; error?: string }>;
+  restartCodeServer?: () => Promise<RestartResult>;
+  waitForBoot?: (targetVersion: string, oldPid?: number) => Promise<boolean>;
+  cacheInstalledDeb?: (version: string, fromPath: string) => void;
+  getCodeServerUpdateState?: () => CodeServerUpdateState;
+  persistCodeServerState?: (state: CodeServerUpdateState) => Promise<void>;
+  log?: (line: string) => void;
+  freeSpace?: (dir: string) => number | null;
+  isCachedDebValid?: (version: string) => Promise<boolean>;
+}
+
+export function applyCodeServerUpdate(hooks: ApplyHooks = {}): Promise<UpdateResult> {
   return new Promise<UpdateResult>((resolveOuter) => {
     if (updateInFlight) {
       resolveOuter({ ok: false, error: 'An update is already running' });
       return;
     }
     updateInFlight = true;
+    const readState = hooks.getCodeServerUpdateState ?? getCodeServerUpdateState;
+    const saveState = hooks.persistCodeServerState ?? persistCodeServerState;
+    const probe = hooks.probeCurrentVersion ?? probeCurrentVersion;
+    const latest = hooks.fetchLatestRelease ?? fetchLatestRelease;
+    const cachedDeb = hooks.isCachedDebValid ?? isCachedDebValid;
+    const download = hooks.downloadDeb ?? downloadDeb;
+    const install = hooks.installDeb ?? ((debPath: string) => execFileAsync('dpkg', ['-i', debPath], { timeout: DPKG_TIMEOUT_MS }).then(() => undefined));
+    const harden = hooks.hardenIdeInstall ?? hardenIdeInstall;
+    const restartHook = hooks.restartCodeServer ?? restartCodeServer;
+    const boot = hooks.waitForBoot ?? waitForBoot;
+    const cache = hooks.cacheInstalledDeb ?? cacheInstalledDeb;
+    const writeLog = hooks.log ?? ((line: string) => appendLog(line));
+    const log = (line: string) => writeLog(`[code-server] ${line}`);
+    const free = hooks.freeSpace ?? freeSpaceIn;
     const startedAt = new Date().toISOString();
     let state: CodeServerUpdateState = {
-      ...freshApplyState(getCodeServerUpdateState()),
+      ...freshApplyState(readState()),
       startedAt,
       updatedAt: startedAt,
     };
@@ -771,11 +818,11 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
       // A rollback fact (true/false) from a PREVIOUS failed run never leaks
       // into this one: the first non-rollback write of a fresh run drops it.
       if (patch.rolledBack === undefined) delete state.rolledBack;
-      await persistCodeServerState(state);
+      await saveState(state);
     };
     const step = async (event: ApplyEvent): Promise<ApplyState> => {
       state.applyState = applyStateMachine(state.applyState, event);
-      await persistCodeServerState(state);
+      await saveState(state);
       return state.applyState;
     };
     const done = (r: UpdateResult): void => {
@@ -798,7 +845,6 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
       }
       resolveOuter(r);
     };
-    const log = (line: string) => appendLog(`[code-server] ${line}`);
 
     /** Restore the previous deb and verify IT boots. Honest both ways: a
      * rollback we cannot verify (stale refused pid, dead supervisor) is a
@@ -815,15 +861,15 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         return { ok: false, error: 'no rollback baseline deb available (the baseline download failed and the persistent deb cache does not hold this version)' };
       }
       try {
-        await execFileAsync('dpkg', ['-i', baselineDeb], { timeout: DPKG_TIMEOUT_MS });
+        await install(baselineDeb);
         // The restored baseline is a pristine tree too, so it needs the same
         // re-apply — and here a failure means the rollback must NOT be reported
         // as successful, otherwise the caller would claim a recovered box while
         // the Copilot payload is back.
-        const harden = await hardenIdeInstall();
-        if (!harden.ok) return { ok: false, error: harden.error as string };
-        const rp = await restartCodeServer();
-        const rollbackOk = await waitForBoot(rollbackVersion, rp.ok ? rp.oldPid : oldPid);
+        const hardened = await harden();
+        if (!hardened.ok) return { ok: false, error: hardened.error as string };
+        const rp = await restartHook();
+        const rollbackOk = await boot(rollbackVersion, rp.ok ? rp.oldPid : oldPid);
         return rollbackOk ? { ok: true } : { ok: false, error: 'the rollback binary did not boot or restart was refused' };
       } catch (err: any) {
         return { ok: false, error: err.message };
@@ -834,7 +880,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
       try {
         await step('start'); // → downloading
 
-        const current = await probeCurrentVersion(true);
+        const current = await probe(true);
         if (!current) {
           await step('error');
           log(`failed: cannot determine current version (no rollback baseline)`);
@@ -845,11 +891,20 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         }
         await persist({ currentVersion: current });
 
-        const release = await fetchLatestRelease(true);
+        const release = await latest(true);
         if (!release) {
           await step('error');
           log(`failed: could not fetch the latest release`);
           return done({ ok: false, error: 'Could not fetch the latest code-server release' });
+        }
+        const releaseDigest = normalizeReleaseDigest(release.digest);
+        if (!releaseDigest) {
+          await step('error');
+          log(`preflight rejected: ${release.version} has no complete SHA-256 digest`);
+          return done({
+            ok: false,
+            error: 'The latest release does not publish a complete SHA-256 digest — refusing to install',
+          });
         }
         await persist({ targetVersion: release.version });
 
@@ -868,7 +923,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
 
         // Free-space preflight: new deb + rollback deb ≈ 2× the package.
         const neededBytes = (release.debSizeBytes ?? maxBytes()) * 2;
-        const freeBytes = freeSpaceIn(updatesDir());
+        const freeBytes = free(updatesDir());
         if (freeBytes !== null && !freeSpaceGate(freeBytes, neededBytes)) {
           await step('error');
           log(`preflight rejected: not enough free space`);
@@ -885,25 +940,26 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         // Only stage the rollback baseline when it is NOT already covered by
         // the persistent deb cache — the cache keeps the most recently applied
         // version, which for a follow-up update IS the running baseline.
-        if (await isCachedDebValid(current)) {
+        if (await cachedDeb(current)) {
           log(`rollback baseline ${current} already in the persistent deb cache`);
         } else {
           currentDeb = path.join(updatesDir(), currentDebName);
         }
 
         log(`downloading ${release.version} (${urlForLog(release.debUrl)})`);
-        await downloadDeb(release.debUrl, newDeb, release.digest, maxBytes());
+        await download(release.debUrl, newDeb, releaseDigest, maxBytes());
 
         // Baseline download is skipped entirely when the persistent deb cache
         // already holds the current version (attemptRollback falls back to it).
         if (currentDeb) {
           log(`downloading rollback baseline ${current} (${urlForLog(`${downloadBase()}/download/v${current}/${currentDebName}`)})`);
           try {
-            await downloadDeb(
+            await download(
               `${downloadBase()}/download/v${current}/${currentDebName}`,
               currentDeb,
               null,
               maxBytes(),
+              { allowStructuralFallback: true },
             );
           } catch (err: any) {
             // The update deb is fine but the rollback baseline is gone — proceed
@@ -921,7 +977,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
 
         log(`installing ${release.version}`);
         try {
-          await execFileAsync('dpkg', ['-i', newDeb], { timeout: DPKG_TIMEOUT_MS });
+          await install(newDeb);
         } catch (err: any) {
           await step('error');
           // dpkg usually rejects a broken package before touching the live one;
@@ -933,13 +989,13 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
           let restored = false;
           if (fs.existsSync(baselineDeb)) {
             try {
-              await execFileAsync('dpkg', ['-i', baselineDeb], { timeout: DPKG_TIMEOUT_MS });
+              await install(baselineDeb);
               // Advisory only: this is already a failure path with no baseline
               // guarantee, so a hardening failure here is logged rather than
               // escalating into a second (unresolvable) rollback.
-              const harden = await hardenIdeInstall();
-              if (!harden.ok) log(`defensive rollback: ${harden.error}`);
-              await restartCodeServer();
+              const defensiveHarden = await harden();
+              if (!defensiveHarden.ok) log(`defensive rollback: ${defensiveHarden.error}`);
+              await restartHook();
               log('defensive rollback to previous deb completed');
               restored = true;
             } catch (rbErr: any) {
@@ -965,11 +1021,11 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         // `rollback` from `verifying-boot`, so the three steps below are the
         // documented route there (the `restarted` step records that the deb is
         // installed, not that a restart happened).
-        const harden = await hardenIdeInstall();
-        if (!harden.ok) {
+        const hardened = await harden();
+        if (!hardened.ok) {
           await step('restarted'); // restarting → verifying-boot
           await step('boot-fail'); // → rollback
-          log(`post-install hardening failed: ${harden.error} — rolling back to ${current}`);
+          log(`post-install hardening failed: ${hardened.error} — rolling back to ${current}`);
           const rollback = await attemptRollback(current, undefined);
           if (rollback.ok) {
             await step('rollback-ok'); // → failed (update did not succeed)
@@ -988,9 +1044,9 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
             rolledBack: false,
           });
         }
-        if (harden.skipped) log('ide-hardening script absent — skipping the post-install re-apply');
+        if (hardened.skipped) log('ide-hardening script absent — skipping the post-install re-apply');
 
-        const restart = await restartCodeServer();
+        const restart = await restartHook();
         log(`restarting via $DATA_DIR/code-server.pid (pid=${restart.oldPid ?? (restart.reason === 'missing' ? 'no pid file' : 'refused')})`);
 
         // Missing pid: no supervised child exists at all — a container
@@ -1031,7 +1087,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         }
 
         await step('restarted'); // → verifying-boot
-        const bootOk = await waitForBoot(release.version, restart.oldPid);
+        const bootOk = await boot(release.version, restart.oldPid);
         if (!bootOk) {
           await step('boot-fail'); // → rollback
           log(`boot verification failed for ${release.version} — rolling back to ${current}`);
@@ -1062,7 +1118,7 @@ export function applyCodeServerUpdate(): Promise<UpdateResult> {
         // baseline deb is deliberately never cached. Failure paths reach the
         // finally below with the debs still present and get both removed.
         try {
-          cacheInstalledDeb(release.version, newDeb);
+          cache(release.version, newDeb);
         } catch (err: any) {
           log(`failed to cache the installed deb: ${err.message}`);
         }

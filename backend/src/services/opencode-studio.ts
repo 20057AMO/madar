@@ -5,7 +5,7 @@ import {
   opencodeConfigDir,
   probeOpencodeVersion,
   fetchLatestVersion,
-  SUPPORTED_MAJORS,
+  getSupportedOpencodeMajors,
 } from './opencode-api';
 import { isUpdateInProgress } from './component-updates';
 // HttpError lives in docker-manager (historical); importing it here creates
@@ -256,7 +256,7 @@ export async function getVersionInfo(): Promise<StudioVersionInfo> {
     latest: reg.latest,
     upToDate,
     channelUnlocked: reg.channelUnlocked,
-    supportedMajors: [...SUPPORTED_MAJORS],
+    supportedMajors: getSupportedOpencodeMajors(),
     updateRunning: isUpdateInProgress(),
   };
 }

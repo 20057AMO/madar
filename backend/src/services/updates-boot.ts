@@ -34,7 +34,7 @@
  *    to the 0600 update.log.
  */
 import { decideBootReapply, parseCliVersion } from './updates-core';
-import { probeOpencodeVersion, installOpencodeVersion, SUPPORTED_MAJORS } from './opencode-api';
+import { probeOpencodeVersion, installOpencodeVersion, getSupportedOpencodeMajors } from './opencode-api';
 import * as codeServer from './code-server-update';
 import {
   readOpencodeState,
@@ -96,7 +96,7 @@ async function reapplyOpencode(): Promise<void> {
       applyState: prev.applyState,
       persisted: prev.currentVersion ?? prev.targetVersion ?? null,
       running,
-      supportedMajors: SUPPORTED_MAJORS,
+      supportedMajors: getSupportedOpencodeMajors(),
     });
 
     // Every verdict re-reads the CURRENT state right before persisting: the
