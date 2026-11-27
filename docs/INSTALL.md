@@ -7,7 +7,7 @@
 - Docker Engine 24+ أو Docker Desktop (بمحرك WSL2 على ويندوز) مع `compose` plugin
 - أدوات سطر الأوامر: `git` و`docker` و`curl` و`awk` و`grep` و`cut` و`tr`
 - systemd حقيقي كعملية رقم 1 لتثبيت وحدة الإقلاع؛ على WSL2 فعّل systemd أو مرّر `--no-systemd` لتشغيل Madar الآن دون وحدة إقلاع
-- منافذ حرة: `3000` للوحة التحكم، و`4097` افتراضيًا للوكيل المصادَق الخاص بـVS Code وOpenCode (أو قيمة `WSD_EMBED_PROXY_PORT` من `.env`). لم تعد `8100`/`4096` منشورة. في التثبيت المحلي ينشر `docker-compose.yml` المنفذين على `0.0.0.0`؛ أما في الإنتاج فيربط `docker-compose.prod-tls.yml` المنفذين على `127.0.0.1`، ويكون nginx وحده المستمع العام على `80`/`443`/`4097` ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment))
+- منافذ حرة: `3000` للوحة التحكم، و`4097` افتراضيًا للوكيل المصادَق الخاص بـVS Code وOpenCode (أو قيمة `WSD_EMBED_PROXY_PORT` من `.env`). لم تعد `8100`/`4096` منشورة. يربط `docker-compose.yml` المنفذين على `127.0.0.1` افتراضيًا؛ اضبط `WSD_EMBEDDED_PUBLISH_HOST=0.0.0.0` فقط لشبكة محلية موثوقة أو خلف TLS أمام المنفذين. في الإنتاج يبقى الربط على `127.0.0.1` ويكون nginx وحده المستمع العام على `80`/`443`/`4097` ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment))
 - مفتاح Ollama Cloud مجاني من https://ollama.com/settings/keys — *اختياري*، يمكن أيضًا استخدام Ollama محلي أو أي مزوّد آخر من واجهة التطبيق
 - مفتاح OpenCode Zen مجاني من https://opencode.ai/auth (دخول GitHub، **بدون بطاقة ائتمان**) — *اختياري*، لنماذج Zen المجانية
 
@@ -53,7 +53,7 @@ bash scripts/uninstall.sh --remove-data # docker compose down -v بعد تأكي
 
 ينفّذ uninstall `docker compose down` (أو `down -v` بعد التأكيد) ثم يحاول إيقاف الوحدة وتعطيلها وإزالتها بأفضل جهد. مع `--remove-data` يطلب كتابة `yes` صراحة في أعلى السكربت قبل أي فحص systemd أو Compose أو حذف؛ وإن لم تتم الموافقة أو كانت غير تفاعلية، يلغي فورًا؛ لم يُحذف أي شيء، ولا تلمس الوحدة. عند النجاح يحذف `docker compose down -v` volumes `wsd-data` و`code-server-*` نهائيًا. لا يحذف السكربت مجلد `workspaces/` ولا نسخة المشروع أبدًا، ويطبع مسار مساحة العمل عند الانتهاء. الوحدة تُحذف فقط إن كان `WorkingDirectory` الخاص بها مساويًا لمسار التثبيت المطلوب؛ وإن كانت تشير إلى تثبيت آخر يرفض السكربت الإلغاء حمايةً للتثبيت الآخر.
 
-> سكربت التثبيت أعلاه يثبّت التركيب الأساسي المحلي/الداخلي: `docker-compose.yml` ينشر `3000` و`4097` على `0.0.0.0`، والسكربت لا يفعّل `WSD_TRUST_PROXY` ولا يفتح المنافذ الخام `8100`/`4096`. لا تستخدم هذا التركيب كخطة إنتاج. للنشر خارج جهازك اتبع [الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment): نسخة تطبيق واحدة، `docker-compose.prod-tls.yml` يربط المنفذين على `127.0.0.1`، وnginx هو المستمع العام مع TLS.
+> سكربت التثبيت أعلاه يثبّت التركيب الأساسي المحلي/الداخلي: `docker-compose.yml` يربط `3000` و`4097` على `127.0.0.1` افتراضيًا، والسكربت لا يفعّل `WSD_TRUSTED_PROXIES` ولا يفتح المنافذ الخام `8100`/`4096`. لا تستخدم هذا التركيب كخطة إنتاج. للنشر خارج جهازك اتبع [الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment): نسخة تطبيق واحدة، nginx/TLS أمام المنفذين، وربط التطبيق على `127.0.0.1` عبر `docker-compose.prod-tls.yml`.
 
 ## التثبيت اليدوي — Manual
 
@@ -74,11 +74,14 @@ nano .env   # أو أي محرر
 | المتغير | مطلوب؟ | الوصف |
 | --- | --- | --- |
 | `JWT_SECRET` | اختياري | سر توقيع رموز تسجيل الدخول. **اتركه فارغًا**: يولّد التطبيق سرًا عشوائيًا عند أول تشغيل ويحفظه في `data/jwt.secret` داخل volume البيانات (0600) — الجلسات غير قابلة للتزوير وتصمد أمام إعادة التشغيل، ولا يوجد أي سر افتراضي منشور. ولّد قيمة بنفسك فقط للتحكم/التدوير:<br>`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`<br>القيمة الفارغة أو المعروفة أو الأقصر من 32 حرفًا تُرفض (ولا تُصلَح). تغييرها لاحقًا يُنهي كل الجلسات الحالية |
+| `WSD_SETUP_TOKEN` | اختياري | رمز إنشاء الحساب الأول. إن لم تضبطه، يولّد التطبيق رمزًا عشوائيًا ويطبعه في `docker compose logs app`؛ يُحفظ تجزيؤه SHA-256 في `data/setup.token.sha256` (0600) ويُحذف بعد نجاح الإعداد. لا توجد قفزة loopback تتجاوز الرمز |
+| `WSD_TRUSTED_PROXIES` | اختياري | عناوين IP أو CIDRs أو الأسماء `loopback`/`linklocal`/`uniquelocal` المسموح لها بتعيين `X-Forwarded-For`. استخدمه فقط خلف وكيل عكسي تتحكم به؛ `/0` يُتجاهَل. ويُساوي `WSD_TRUST_PROXY=1` القيم `loopback,uniquelocal` توافقًا مع الإعداد القديم |
+| `WSD_ENC_KEY` | اختياري | مفتاح تشفير المزوّدين بالصيغة `v2:` (16–1024 حرفًا). إن لم يضبط، يولّد التطبيق مفتاحًا عشوائيًا في `data/enc.key` (0600). لا مشتق من `JWT_SECRET`. النسخ القديمة `enc1:` تُقرأ فقط بمفتاح `WSD_ENCRYPTION_KEY` أو سر التوقيع القديم، ثم تُعاد كتابتها `v2:` عند تحميل/إعادة كتابة مخزن المزوّدين |
 | `WSD_WORKSPACES_HOST_DIR` | اختياري | اتركه فارغًا: الخادم يشتقّ مصدر ربط حاوية التطبيق تلقائيًا من `/proc/self/mountinfo`، فلا يتقادم ولا ينكسر عند إعادة تسمية المجلد أو نقله. اضبطه فقط إذا تعذّر على mountinfo التعبير عن المسار (مشاركة UNC أو مسار توزيع WSL). مثال: `D:/madar/workspaces` أو `/home/me/madar/workspaces`. تظهر القيمة المشتقّة وحالة المسار في `GET /api/ide/status` تحت `workspace` |
 | `OLLAMA_API_KEY` | اختياري | مفتاح Ollama Cloud فقط. بدونها يعمل Ollama المحلي أو أي مزوّد آخر |
 | `OPENCODE_API_KEY` | اختياري | لتمكين صفحة OpenCode/Zen |
 | `WSD_CHAT_MODEL` | اختياري | النموذج الافتراضي للدردشة (افتراضي `qwen3:30b`) |
-| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | واجهة نشر **وكيل الأسطح المدمجة** في التركيب الأساسي (افتراضي `0.0.0.0`) — أي للاستخدام المحلي/الداخلي فقط. الصفحتان لم تعودا تُنشران خامّتين: `code-server` و`opencode` مربوطان على `127.0.0.1` داخل حاوية التطبيق (بلا عنوان على أي شبكة Docker، فلا تصلهما أي حاوية مشروع)، والوصول عبر الوكيل المصادَق على `WSD_EMBED_PROXY_PORT`. في الإنتاج لا تضبط هذا المتغير يدويًا: `docker-compose.prod-tls.yml` يربط المنفذين `3000` و`4097` على `127.0.0.1`، وnginx وحده المستمع العام ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment)) |
+| `WSD_EMBEDDED_PUBLISH_HOST` | اختياري | واجهة نشر اللوحة **ووكيل الأسطح المدمجة** في التركيب الأساسي (افتراضي `127.0.0.1`). اضبطها `0.0.0.0` فقط لشبكة محلية موثوقة أو خلف TLS أمام المنفذين، ولا تجمعها مع ثقة وكيل غير محمي. الصفحتان لم تعودا تُنشران خامّتين: `code-server` و`opencode` مربوطان على `127.0.0.1` داخل حاوية التطبيق (بلا عنوان على أي شبكة Docker، فلا تصلهما أي حاوية مشروع)، والوصول عبر الوكيل المصادَق على `WSD_EMBED_PROXY_PORT`. في الإنتاج لا تضبط هذا المتغير يدويًا: `docker-compose.prod-tls.yml` يربط المنفذين `3000` و`4097` على `127.0.0.1`، وnginx وحده المستمع العام ([الأمان في النشر](#الأمان-في-النشر--security-in-production-deployment)) |
 | `WSD_EMBED_PROXY_PORT` | اختياري | منفذ وكيل الأسطح المدمجة المصادَق (افتراضي `4097`). هو **الطريق الوحيد** إلى VS Code وOpenCode، ويتطلّب جلسة Madar برتبة محرّر فأعلى |
 | `OLLAMA_LOCAL_HOST` | اختياري | عنوان Ollama المحلي (افتراضي `http://host.docker.internal:11434`) |
 | `WSD_OPENCODE_PORT` | اختياري | منفذ opencode **داخل** الحاوية (افتراضي `4096`) — مربوط على loopback وغير منشور؛ لا تفتحه يدويًا |
@@ -103,7 +106,7 @@ docker compose up -d --build
 
 - اللوحة: `http://localhost:3000`
 
-في أول زيارة ستظهر شاشة **إنشاء الحساب** (اسم مستخدم + كلمة مرور). هذا الحساب الوحيد في النظام — وكلمة المرور نفسها هي التي تحمي إدارة المزوّدين والعمليات الحساسة (مع تأكيد هويته عند كل عملية حساسة).
+في أول زيارة ستظهر شاشة **إنشاء الحساب** (اسم مستخدم + كلمة مرور + رمز الإعداد). الرمز هو `WSD_SETUP_TOKEN` أو الرمز العشوائي المطبوع في `docker compose logs app`؛ يُرسل في الحقل `setupToken` أو الترويسة `x-setup-token`. بعد نجاح الإعداد تُحذف تجزئة الرمز وتُرجع المحاولات اللاحقة `409`، وتُنشأ الحسابات الإضافية من صفحة **الفريق** بواسطة مدير. كلمة مرور كل حساب هي التي تحمي إدارة المزوّدين والعمليات الحساسة لذلك الحساب (مع تأكيد الهوية عند كل عملية حساسة).
 
 بعدها أضف مزوّدًا واحدًا على الأقل من صفحة **Providers**، ثم أنشئ أول مشروع من صفحة **Projects**.
 
@@ -144,11 +147,18 @@ public                 nginx (host)                     app container (loopback 
 
 ### لماذا هذا التركيب — Audit evidence
 
-- **HIGH**: `docker-compose.yml` الأساسي ينشر `3000` و`4097` على `0.0.0.0`. مع `WSD_TRUST_PROXY=1` على تركيب غير محمي يستطيع أي عميل على الشبكة تزوير `X-Forwarded-For` لتجاوز محدّدات المصادقة/الفتح/2FA. لذلك `WSD_TRUST_PROXY=1` **فقط** في `docker-compose.prod-tls.yml`، وبعد أن يصبح nginx المستمع العام الوحيد. لا تضبطه في `.env` للتركيب الأساسي.
-- **MEDIUM**: كوكي `madar_embed` يحصل على `Secure` فقط عندما يرى TLS على سطح `:4097`. القاعدة في `embedCookieSecure()` (`backend/src/services/embed-core.ts`): يُضاف `Secure` عندما تكون الوصلة TLS، أو عندما يكون `WSD_TRUST_PROXY=1` **و**وصلوكيل الموثوق بـ `X-Forwarded-Proto: https`. لا يُجعل غير مشروط لأن المتصفح **يُسقط بصمت** كوكي `Secure` وصل عبر `http://`، فيفشل VS Code و opencode لكل مستخدم بلا رسالة خطأ. والعكس: `X-Forwarded-Proto` لا يُقرأ بدون `WSD_TRUST_PROXY=1`، فلا يستطيع عميل تحصين الكوكي أو تعطيله بترويسة مزوّرة.
+- **HIGH**: `docker-compose.yml` الأساسي ينشر `3000` و`4097` على `127.0.0.1`. لا تضبط `WSD_EMBEDDED_PUBLISH_HOST=0.0.0.0` إلا خلف TLS/عكس موثوق. مع ثقة وكيل على تركيب غير محمي يستطيع أي عميل على الشبكة تزوير `X-Forwarded-For` لتجاوز محدّدات المصادقة/الفتح/2FA. لذلك `WSD_TRUSTED_PROXIES=loopback,uniquelocal` **فقط** في `docker-compose.prod-tls.yml`، وبعد أن يصبح nginx المستمع العام الوحيد. لا تضبط `WSD_TRUSTED_PROXIES` أو `WSD_TRUST_PROXY` في `.env` للتركيب الأساسي؛ المتغير الثاني اسم مهمل للتوافق مع الإصدارات القديمة.
+- **MEDIUM**: كوكي `madar_embed` يحصل على `Secure` فقط عندما يرى TLS على سطح `:4097`. القاعدة في `embedCookieSecure()` (`backend/src/services/embed-core.ts`): يُضاف `Secure` عندما تكون الوصلة TLS، أو عندما يسمّي `WSD_TRUSTED_PROXIES` الوكيل الموثوق **و**وصل بـ `X-Forwarded-Proto: https`. لا يُجعل غير مشروط لأن المتصفح **يُسقط بصمت** كوكي `Secure` وصل عبر `http://`، فيفشل VS Code و opencode لكل مستخدم بلا رسالة خطأ. والعكس: `X-Forwarded-Proto` لا يُقرأ بدون ثقة وكيل صريحة، فلا يستطيع عميل تحصين الكوكي أو تعطيله بترويسة مزوّرة.
 - **LOW/INFO**: JWT يسافر في سلسلة استعلام مقابس WebSocket (`?token=`). لذلك سجلات وصول nginx يجب أن تستخدم `$uri` **وليس** `$request_uri`، وإلا كُتب الرمز في ملف السجل. صيغة `$uri` تحمي **سجل الوصول فقط**؛ أما `error.log` الافتراضي فقد يسجّل سطر الطلب مع `?token=` عند أخطاء upstream، فخفّفه بـ `error_log /var/log/nginx/error.log crit;` (أو ما يعادله) وأبقِ قراءة السجلات مقيَّدة (التفاصيل في [استكشاف الأخطاء](#استكشاف-الأخطاء)).
 
 `HttpOnly` + `SameSite=Strict` + بوابة `editor+` + عمر 12 ساعة + إعادة قراءة الدور الحيّ عند كل طلب (فحذف الحساب أو تخفيضه يُسقط الكوكي فورًا) تُحدّ من الضرر لو سُرِّبت قيمة، لكنها **لا تحمي قناة صريحة**: من يقرأ الحزمة يقرأ الكوكي ويستخدمه فورًا. التحكم هو TLS.
+
+### مراجع الأمان
+
+- اقرأ [SECURITY.md](../SECURITY.md) للإصدارات المدعومة، وطريقة الإبلاغ عن الثغرات، ونموذج التهديد: مقبس Docker، تصميم النسخة الواحدة، ومتطلب TLS.
+- اقرأ [Agent safety](AGENT-SAFETY.md) لفهم صلاحيات الوكلاء الافتراضية، وتحذير حقن الأوامر من محتوى غير موثوق، وسبب منع مفاتيح المزوّدين من بيئة حاويات المشاريع.
+- proxy المقبس اختياري: شغّل `docker compose -f docker-compose.yml -f docker-compose.socket-proxy.yml up -d --build` لتمرير `DOCKER_HOST=tcp://docker-proxy:2375` بدل ربط `/var/run/docker.sock` مباشرة. يفعّل `POST=1` و`EXEC=1` (الطرفية تحتاج `exec`)، فهو تقليل ضرر لا عزل كامل؛ راجع تعليقات `docker-compose.socket-proxy.yml` قبل استخدامه.
+- مفاتيح التشفير منفصلة عن التوقيع: `JWT_SECRET` يوقّع الجلسات، و`WSD_ENC_KEY` أو `data/enc.key` يشفر مفاتيح المزوّدين بالصيغة `v2:`. لا تشتق الصيغة الحالية المفتاح من JWT.
 
 ### خطوات النشر الإنتاجي
 
@@ -184,7 +194,7 @@ bash scripts/check-prod-binding.sh --check-running   # يفحص أيضًا ال�
 # 7) جدار النار: اسمح بالمضيف بـ 80 و443 و4097 فقط، ولا تسمح بـ 3000 مباشرة
 ```
 
-`docker-compose.prod-tls.yml` يربط `3000` و`4097` على `127.0.0.1`، ويضبط `WSD_TRUST_PROXY=1` و`WSD_EMBED_PROXY_PORT=4097` و`WSD_EMBEDDED_PUBLISH_HOST=127.0.0.1`، ويضيف `restart: unless-stopped` وحدًّا لحجم سجل الحاوية وفحص صحة. حارسة الربط `scripts/check-prod-binding.sh` تقرأ التركيب الفعّال (`docker compose config`) وتتحقق أن المنفذين مرتبطان على `127.0.0.1` وأن `WSD_TRUST_PROXY=1`؛ أي انحراف يُخرجها بـ exit 1 مع سطر يوضّح السبب.
+`docker-compose.prod-tls.yml` يربط `3000` و`4097` على `127.0.0.1`، ويضبط `WSD_TRUSTED_PROXIES=loopback,uniquelocal` و`WSD_EMBED_PROXY_PORT=4097` و`WSD_EMBEDDED_PUBLISH_HOST=127.0.0.1`، ويضيف `restart: unless-stopped` وحدًّا لحجم سجل الحاوية وفحص صحة. حارسة الربط `scripts/check-prod-binding.sh` تقرأ التركيب الفعّال (`docker compose config`) وتتحقق أن المنفذين مرتبطان على `127.0.0.1` وأن `WSD_TRUSTED_PROXIES` مضبوط بقيمة غير فارغة ولا ينتهي بـ `/0`؛ أي انحراف يُخرجها بـ exit 1 مع سطر يوضّح السبب. الوارد `WSD_TRUST_PROXY=1|true` مقبول من الحارسة للتوافق مع الإصدارات القديمة فقط حين لا يوجد `WSD_TRUSTED_PROXIES`، مع سطر تنبيه بالإهمال.
 
 ### عقد إعداد nginx المطلوب
 
@@ -201,7 +211,7 @@ bash scripts/check-prod-binding.sh --check-running   # يفحص أيضًا ال�
 ### ملاحظات اختبار نزيهة
 
 - السكربت الأساسي `scripts/install.sh` يثبّت التركيب المحلي فقط؛ التحويل إلى الإنتاج يتم بالخطوات أعلاه على نسخة واحدة.
-- اختبارات `*-core.test.ts` (الوحدات الصرفة) تعمل داخل حاوية `WSD_TESTING=0` الحالية. المجموعة الكاملة المتسلسلة (`node --test --test-concurrency=1 "tests/**/*.test.ts"`) تحتاج حاوية suite منفصلة بـ `WSD_TESTING=1`؛ لا تدّعِ أنها نجحت في حاوية الإنتاج.
+- اختبارات `*-core.test.ts` (الوحدات الصرفة) تعمل داخل حاوية `WSD_TESTING=0` الحالية. شغّل المجموعة الكاملة المتسلسلة من `backend/` بـ `npm test`، وهي تُترجم إلى `node --test --test-concurrency=1 "tests/**/*.test.ts"`؛ تحتاج حاوية suite منفصلة بـ `WSD_TESTING=1` وخادمًا يعمل على المنفذ `3000`؛ لا تدّعِ أنها نجحت في حاوية الإنتاج.
 - في هذه البيئة تعذّر تشغيل `scripts/check-prod-binding.sh` بنجاح لأن `bash` هنا من WSL بلا تكامل Docker (`The command 'docker' could not be found in this WSL 2 distro`). تحققت من منطق السكريت ثابتًا: عند نجاح `docker compose config` وتحقق الربط يطبع `ok: ...` ويخرج بـ 0؛ لم ينفّذ فعليًا هنا.
 
 ## طريقة الاستخدام
@@ -238,17 +248,17 @@ bash scripts/check-prod-binding.sh --check-running   # يفحص أيضًا ال�
 | opencode لا يعمل | افتح `/#/opencode` من اللوحة (عبر الوكيل المصادَق على `4097`) وافحص `docker compose logs app`؛ أضف `OPENCODE_API_KEY` إن لم يكن مضبوطًا |
 | الدردشة تخطئ | افتح **Providers** واضغط فحص الاتصال للمزوّد — الرسالة تميز بين خطأ مفتاح وحصة ومنفذ |
 | إنتاج: اللوحة تُفتح على `http://host:3000` مباشرة | تركيب الإنتاج لم يُطبَّق. شغّل `docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --remove-orphans` ثم `bash scripts/check-prod-binding.sh` (يجب exit 0)، وافتح اللوحة عبر `https://<DOMAIN>` فقط |
-| إنتاج: iframe لـ VS Code/opencode ميت والكوكي بلا `Secure` | nginx لم يمرّر `X-Forwarded-Proto: https` أو `WSD_TRUST_PROXY` لم يُضبط في التراكب الإنتاجي. تحقق أن `sudo nginx -t` سليم، وأن `docker-compose.prod-tls.yml` مطبَّق، وأعد فتح الصفحة؛ الكوكي القديم بلا `Secure` لا يُحصَّن بأثر رجعي — سجّل دخولًا جديدًا |
-| إنتاج: 429 عشوائية على تسجيل الدخول/الفتح/2FA | `WSD_TRUST_PROXY=1` مفعّل أمام وكيل غير موثوق، فيرى المحدّد عنوان الوكيل بدل العميل. تأكد أن nginx هو المستمع العام الوحيد وأن `:3000`/`:4097` مرتبطان على `127.0.0.1` (`check-prod-binding.sh`) |
+| إنتاج: iframe لـ VS Code/opencode ميت والكوكي بلا `Secure` | nginx لم يمرّر `X-Forwarded-Proto: https` أو `WSD_TRUSTED_PROXIES` لم يُضبط في التراكب الإنتاجي. تحقق أن `sudo nginx -t` سليم، وأن `docker-compose.prod-tls.yml` مطبَّق، وأعد فتح الصفحة؛ الكوكي القديم بلا `Secure` لا يُحصَّن بأثر رجعي — سجّل دخولًا جديدًا |
+| إنتاج: 429 عشوائية على تسجيل الدخول/الفتح/2FA | ثقة وكيل مفعّلة أمام وكيل غير موثوق، فيرى المحدّد عنوان الوكيل بدل العميل. تأكد أن nginx هو المستمع العام الوحيد وأن `:3000`/`:4097` مرتبطان على `127.0.0.1` (`check-prod-binding.sh`)، وأن `WSD_TRUSTED_PROXIES` يسمّي nginx/hops المقبولة فقط |
 | استيراد لقطة project يرجع 413 | رفع nginx (`client_max_body_size`) أقل من 256m. اضبطه إلى `256m` كما في `deploy/nginx/madar.conf`؛ حد استيراد التطبيق نفسه 200 ميغابايت، و`256m` يترك هامشًا لبيانات multipart وترويسات الرفع |
 | JWT يظهر في سجل nginx | تحقّق أن `log_format` في `/etc/nginx/conf.d/madar.conf` يستخدم `$uri` (لا `$request_uri`) كما في `deploy/nginx/madar.conf:6`؛ إن ظهر رمز في السجل فأعد `sudo nginx -t && sudo systemctl reload nginx` ثم طهّر السجل القديم. **ملاحظة LOW:** صيغة `$uri` تحمي **سجل الوصول فقط**؛ أما `error.log` الافتراضي فقد يدوّن سطر الطلب كاملًا بما فيه `?token=<JWT>` عند أخطاء الـ upstream أو إعادة تشغيل التطبيق. التخفيف: اضبط صريحًا `error_log /var/log/nginx/error.log crit;` (أو ما يعادله)، وتجنّب شحن `error.log` كاملًا إلى أنظمة خارجية، وأبقِ الوصول لقراءة السجلات مقيَّدًا |
 | تجديد الشهادة يفشل أو انتهت الشهادة | تحقق من `sudo systemctl status certbot-renew.timer` وسجلات systemd المتعلقة بـ certbot (`sudo journalctl -u 'certbot*' -n 100`)، وأن `/var/www/certbot` قابل للكتابة وأن المنفذ `80` مفتوح لتحدي ACME. أعد `sudo env MADAR_DOMAIN=<DOMAIN> MADAR_EMAIL=<EMAIL> MADAR_WEBROOT=/var/www/certbot MADAR_NGINX_CONF=/etc/nginx/conf.d/madar.conf bash deploy/certbot/obtain.sh` عند الحاجة (استبدل العنصرين النائبين `<DOMAIN>` و`<EMAIL>` بقيمك الحقيقية؛ السكربت يفرض root)، وتذكّر أن وحدة التجديد تستدعي `renew.sh` عبر `/bin/sh` لا تنفيذًا مباشرًا |
-| iframe ميت بعد تحديث الشهادة | أعد تحميل الصفحة؛ إن استمر، تحقق أن nginx أعاد قراءة الشهادة (`sudo systemctl reload nginx`) وأن `WSD_TRUST_PROXY=1` لا يزال ساريًا في الحاوية |
-| نُسيت كلمة المرور | احذف volume البيانات لإعادة ضبط كل شيء: `docker compose down -v` (**يمسح** الحساب والمزوّدين والجلسات — ملفات المشاريع تبقى) |
+| iframe ميت بعد تحديث الشهادة | أعد تحميل الصفحة؛ إن استمر، تحقق أن nginx أعاد قراءة الشهادة (`sudo systemctl reload nginx`) وأن `WSD_TRUSTED_PROXIES` لا يزال ساريًا في الحاوية |
+| نُسيت كلمة المرور | **DESTRUCTIVE — قبل أي `down -v`:** احفظ أي بيانات تريدها؛ الأمر يحذف volume `wsd-data` (الحسابات والجلسات ومفاتيح المزوّدين). ملفات المشاريع في `./workspaces` تبقى لأنها bind mount. استخدم `bash scripts/uninstall.sh --remove-data` عندما تريد حذف البيانات؛ السكربت يطلب تأكيدًا صريحًا. لا تستخدم `docker compose down -v` مباشرة إلا إذا قبلت فقدان هذه البيانات نهائيًا |
 
 ## إيقاف
 
 ```bash
 docker compose down        # إيقاف مع الاحتفاظ بالبيانات
-docker compose down -v     # إيقاف مع حذف بيانات الإعدادات والجلسات
+docker compose down -v     # DESTRUCTIVE: يحذف wsd-data (الحسابات/الجلسات/مفاتيح المزوّدين)؛Workspaces تبقى; استخدم uninstall.sh --remove-data للتأكيد
 ```

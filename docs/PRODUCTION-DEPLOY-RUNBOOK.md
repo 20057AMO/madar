@@ -13,7 +13,7 @@
 - [ ] مضيف Linux بصلاحية root، مع `ip` و`install` و`nginx` و`certbot` و`systemctl` وDocker/Compose.
 - [ ] nginx هو المستمع العام الوحيد: `:80` لتحدي ACME ثم تحويل إلى HTTPS، `:443` إلى `127.0.0.1:3000`، `:4097` إلى `127.0.0.1:4097`.
 - [ ] نسخة تطبيق واحدة فقط — بلا replicas ولا HA ولا جلسات لاصقة؛ السبب (مخازن JSON بأقفال داخل العملية، `docker.sock` للكتابة، ربط `workspaces`، حالة WS/طرفية/شات مرتبطة بالحاوية) في [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment). المنفذان `8100`/`4096` غير منشورَين.
-- [ ] لا تضبط `WSD_TRUST_PROXY` في `.env`؛ التراكب `docker-compose.prod-tls.yml` يضبطه وحده بعد تأمين المنافذ.
+- [ ] لا تضبط `WSD_TRUSTED_PROXIES` أو `WSD_TRUST_PROXY` في `.env`؛ التراكب `docker-compose.prod-tls.yml` يضبط `WSD_TRUSTED_PROXIES` وحده بعد تأمين المنافذ. المتغير `WSD_TRUST_PROXY` مهمل.
 - [ ] `.git/config` يحوي `filemode = false`؛ استدعِ سكربتات `deploy/certbot/` عبر `bash`/`/bin/sh` لا بالتنفيذ المباشر.
 
 ## 2) التنفيذ
@@ -46,7 +46,7 @@ sudo bash scripts/install.sh --prod-tls --dir <INSTALL_DIR> --domain <DOMAIN> --
 
 ### الربط والمنافذ
 
-- [ ] `bash scripts/check-prod-binding.sh --dir <INSTALL_DIR> --check-running` يخرج بـ exit 0 ورسالة `ok: app ports 3000 and 4097 are bound to 127.0.0.1 and WSD_TRUST_PROXY=1`. إن طبع `skip: container wsd-pro is not running; runtime binding not checked` فالحاوية غير شغّالة؛ شغّلها ثم أعد الفحص.
+- [ ] `bash scripts/check-prod-binding.sh --dir <INSTALL_DIR> --check-running` يخرج بـ exit 0 ورسالة `ok: app ports 3000 and 4097 are bound to 127.0.0.1 and WSD_TRUSTED_PROXIES is configured`. إن طبع `skip: container wsd-pro is not running; runtime binding not checked` فالحاوية غير شغّالة؛ شغّلها ثم أعد الفحص.
 - [ ] لا يوجد ربط عام على `0.0.0.0:3000` أو `0.0.0.0:4097` في التركيب الفعّال؛ ولم تُفتح `8100`/`4096` يدويًا.
 
 ### TLS على 443 و4097
@@ -78,7 +78,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-- [ ] إن مات الإطار بعد التجديد: أعد تحميل الصفحة؛ إن استمر، تحقق من `sudo systemctl reload nginx` ومن بقاء `WSD_TRUST_PROXY=1`، ثم سجّل دخولًا جديدًا — الكوكي القديم بلا `Secure` لا يُحصَّن بأثر رجعي.
+- [ ] إن مات الإطار بعد التجديد: أعد تحميل الصفحة؛ إن استمر، تحقق من `sudo systemctl reload nginx` ومن بقاء `WSD_TRUSTED_PROXIES=loopback,uniquelocal` في التراكب الإنتاجي، ثم سجّل دخولًا جديدًا — الكوكي القديم بلا `Secure` لا يُحصَّن بأثر رجعي.
 
 ## 5) استكشاف مختصر
 
@@ -87,8 +87,8 @@ sudo systemctl reload nginx
 | العَرَض | أول فحص |
 | --- | --- |
 | اللوحة تُفتح على `http://<PUBLIC_IPv4>:3000` | التركيب الإنتاجي لم يُطبَّق؛ أعد `docker compose -f docker-compose.yml -f docker-compose.prod-tls.yml up -d --remove-orphans` ثم حارسة الربط |
-| iframe ميت أو كوكي بلا `Secure` | `X-Forwarded-Proto: https` في nginx + `WSD_TRUST_PROXY=1` في التراكب؛ سجّل دخولًا جديدًا |
-| 429 عشوائية على تسجيل الدخول/الفتح/2FA | وكيل غير موثوق أمام `WSD_TRUST_PROXY=1`؛ راجع حارسة الربط |
+| iframe ميت أو كوكي بلا `Secure` | `X-Forwarded-Proto: https` في nginx + `WSD_TRUSTED_PROXIES=loopback,uniquelocal` في التراكب؛ سجّل دخولًا جديدًا |
+| 429 عشوائية على تسجيل الدخول/الفتح/2FA | وكيل غير موثوق أمام `WSD_TRUSTED_PROXIES`؛ راجع حارسة الربط |
 | 413 عند استيراد لقطة مشروع | `client_max_body_size 256m` في إعداد nginx |
 | JWT يظهر في سجل nginx | استخدم `$uri` لا `$request_uri` في `log_format`؛ لكن `$uri` يحمي **سجل الوصول فقط** — راجع أيضًا `error.log` الافتراضي عند أخطاء upstream واضبط `error_log ... crit;` مع تقييد الوصول للسجلات، والتفاصيل في [INSTALL.md](INSTALL.md#استكشاف-الأخطاء) |
 | تجديد الشهادة فاشل | حالة المؤقت + `journalctl` + `:80` + مجلد ACME |

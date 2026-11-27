@@ -248,14 +248,14 @@ not match.
 - Locked management endpoints return `403 {error:'providers_locked'}`; `GET /api/providers/options` + `/templates` stay open; LLM chat/agent usage is server-side and never blocked
 
 ### 5.4 At-rest encryption (secret box)
-- Provider API keys sealed with AES-256-GCM: `enc1:<iv>:<tag>:<ct>:<last4>`
-- Key = scrypt(`WSD_ENCRYPTION_KEY` → fallback the **resolved** signing secret), salt persisted once in `data/crypto.salt` (0600)
-- Plaintext keys are sealed automatically on load; masking uses `<last4>` — never decrypts; backup exports strip keys entirely
+- Provider API keys sealed with AES-256-GCM: current `v2:<iv>:<tag>:<ct>:<last4>`; legacy `enc1:` is read-only migration
+- Current key comes from `WSD_ENC_KEY` (16–1024 chars) or a generated random 32-byte key in `data/enc.key` (0600), never derived from the JWT secret; a fresh 12-byte IV is used per seal and the GCM tag is verified
+- Legacy `enc1:` uses scrypt(`WSD_ENCRYPTION_KEY` → fallback the resolved signing secret) with `data/crypto.salt` (0600); it is rewritten to `v2:` on the next provider-store load/rewrite. Masking uses `<last4>` — never decrypts; backup exports strip keys entirely
 
 ### 5.5 Hardening
 - **No default signing secret**: `JWT_SECRET` is resolved once by `services/jwt-secret.ts` — a strong env value wins, otherwise a random `randomBytes(32)` secret is generated once and persisted at `data/jwt.secret` (0600, inside the data volume). A blank, known-weak (the retired in-repo literals) or under-32-character value is **refused, never repaired**, and every sign/verify call site reads that one memoized value, so a signer/verifier split is impossible
 - Rate limiting: global budget (240/min, env-tunable), dedicated brute-force scopes — `auth` 10/min (login/setup/password verification), `unlock` 15/min + progressive cooldown (5 failures → 15-min ban), `totp` 8/min
-- `WSD_TRUST_PROXY=1` opts into one reverse-proxy hop (default OFF) — it governs both per-IP limiter trust (`req.ip`) and whether the `madar_embed` cookie is minted `Secure` from `X-Forwarded-Proto`
+- `WSD_TRUSTED_PROXIES` accepts a comma-separated allowlist of IPs/CIDRs plus `loopback`/`linklocal`/`uniquelocal` (default OFF; `/0` ignored) — it governs both per-IP limiter trust (`req.ip`) and whether the `madar_embed` cookie is minted `Secure` from `X-Forwarded-Proto`. `WSD_TRUST_PROXY=1|true` remains an alias for `loopback,uniquelocal`; do not enable it with the base compose
 - SSRF guard: http(s) only, cloud-metadata ranges refused; local LAN/loopback allowed (local Ollama)
 - Path-traversal protection on all file routes; upload sanitization; `../`-rejection in tar parsing and archive paths; **symlinks never followed** on archive restore
 - CORS opt-in via `WSD_CORS_ORIGINS` allowlist (none set = no ACAO headers)
@@ -274,7 +274,7 @@ Import-free modules keep heavy logic testable offline with `node --test` (no Doc
 | `janitor-core.ts` | workspace janitor |
 | `snapshots-schedule.ts` | scheduled snapshot sweeper |
 | `alerts-core.ts` (`classifyCrash`) | crash detector |
-| `activity-core.ts` | activity feed (33-event vocabulary) |
+| `activity-core.ts` | activity feed (38-event vocabulary) |
 | `archive-core.ts` | trash bin file rules |
 | `serve-core.ts` | static site serving rules |
 | `storage-core.ts` | disk-walk metrics |
@@ -319,7 +319,7 @@ backend/tests/
 
 ```bash
 # Backend suites (server must be up on port 3000)
-cd backend && node --test --test-concurrency=1 "tests/**/*.test.ts"
+cd backend && npm test
 
 # UI E2E (Python + Playwright)
 python backend/tests/e2e/limits_ui.py
@@ -381,10 +381,10 @@ public                 nginx (host)                     app container (loopback 
 
 - `:3000` carries the authenticated dashboard/API and the JWT sent from `localStorage`.
 - `:4097` is the **only** route to code-server and opencode. The raw `8100`/`4096` publishes are gone; both upstreams bind to `127.0.0.1` inside the app container and have no address on any Docker network.
-- `WSD_TRUST_PROXY=1` belongs **only** in the production override. The base compose publishes `3000`/`4097` on `0.0.0.0`, so enabling it there would let any LAN client spoof `X-Forwarded-For` past rate limiters.
+- `WSD_TRUSTED_PROXIES` belongs **only** in the production override. The base compose publishes `3000`/`4097` on `127.0.0.1` (`WSD_EMBEDDED_PUBLISH_HOST`, default `127.0.0.1`), so do not combine a `0.0.0.0` publish with proxy trust; a startup warning fires when trust is enabled while the publish host is `0.0.0.0`.
 - Serve the two surfaces by **port, not path prefix**: `madar_embed` is host-scoped (cookies ignore ports), and opencode serves absolute `/assets/…` URLs so it owns the origin root.
-- TLS is required. On cleartext, one on-path attacker reads both the dashboard JWT and the `madar_embed` cookie. The cookie is issued `Secure` only on a trusted TLS link (`WSD_TRUST_PROXY=1` plus `X-Forwarded-Proto: https`), because an unconditional `Secure` flag would be silently dropped by browsers on the documented plain-HTTP LAN install.
+- TLS is required. On cleartext, one on-path attacker reads both the dashboard JWT and the `madar_embed` cookie. The cookie is issued `Secure` only on a trusted TLS link (`WSD_TRUSTED_PROXIES` matches the proxy hop plus `X-Forwarded-Proto: https`), because an unconditional `Secure` flag would be silently dropped by browsers on a plain-HTTP LAN install.
 - nginx access logs must use `$uri`, never `$request_uri`: WebSocket connections carry the JWT in `?token=`, and `$request_uri` would write it to disk. Set `client_max_body_size 256m`: the app caps snapshot import at 200 MB and `256m` leaves room for multipart data and upload headers; see [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment) for the full nginx contract and deployment sequence.
 - `bash scripts/check-prod-binding.sh` must exit 0 after startup; `--check-running` also inspects the running `wsd-pro` container.
 
-Full deployment steps and devops-owned file names are in [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment).
+Full deployment steps and devops-owned file names are in [INSTALL.md](INSTALL.md#الأمان-في-النشر--security-in-production-deployment). See also [SECURITY.md](../SECURITY.md) for the threat model and [Agent safety](AGENT-SAFETY.md) for tool-use permission defaults and provider-key isolation.
