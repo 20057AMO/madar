@@ -24,7 +24,7 @@ interface AuthState {
   cancel2fa: () => void;
   /** True between a password-verified login and the authenticator-code step. */
   pending2fa: boolean;
-  setup: (username: string, password: string) => Promise<void>;
+  setup: (username: string, password: string, setupToken: string) => Promise<void>;
   logout: () => void;
   /** Re-fetch the current user (profile edits, etc.) and update the context. */
   refreshUser: () => Promise<void>;
@@ -138,14 +138,14 @@ export function AuthProvider({ children }: { children: ComponentChildren }) {
 
   const cancel2fa = useCallback(() => setPending2faToken(null), []);
 
-  const doSetup = useCallback(async (username: string, password: string) => {
+  const doSetup = useCallback(async (username: string, password: string, setupToken: string) => {
     const res = await fetch('/api/auth/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, setupToken }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Setup failed');
+    if (!res.ok) throw new Error(data.message || data.error || 'Setup failed');
     localStorage.setItem('wsd.token', data.token);
     setToken(data.token);
     setUser({ id: data.id, username: data.username, role: data.role || 'admin', createdAt: '' });

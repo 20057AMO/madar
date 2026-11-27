@@ -262,8 +262,26 @@ check_unit_collision() {
   fi
 }
 
+verify_systemd_install_dir() {
+  local path="$INSTALL_DIR" stat_out uid mode
+  while :; do
+    if ! stat_out="$(stat -c '%u %a' "$path" 2>/dev/null)"; then
+      die "تعذّر فحص ملكية/صلاحيات المسار $path."
+    fi
+    read -r uid mode <<< "$stat_out"
+    if [[ "$uid" != "0" ]] || (( (8#$mode & 8#022) != 0 )); then
+      printf 'المسار غير آمن لوحدة systemd التي تعمل كـroot: %s (uid=%s, mode=%s)\n' "$path" "$uid" "$mode" >&2
+      printf 'أصلحها ثم أعد التشغيل: sudo chown -R root:root %q && sudo chmod -R go-w %q\n' "$path" "$path" >&2
+      die "رفض تثبيت/تفعيل وحدة systemd بسبب مسار تثبيت غير آمن."
+    fi
+    [[ "$path" == "/" ]] && break
+    path="$(dirname "$path")"
+  done
+}
+
 if (( SYSTEMD )); then
   [[ -f "$UNIT_TEMPLATE" ]] || die "قالب الوحدة $UNIT_TEMPLATE غير موجود في $INSTALL_DIR."
+  verify_systemd_install_dir
   check_unit_collision
 fi
 
@@ -297,13 +315,10 @@ env_port() {
   printf '%s' "${val:-4097}"
 }
 
-env_trust_proxy() {
-  local file="$1" raw val
-  [[ -f "$file" ]] || { printf ''; return; }
-  raw="$(grep -m1 -E '^[[:space:]]*WSD_TRUST_PROXY=' "$file" | cut -d= -f2- || true)"
-  val="${raw%%#*}"
-  val="$(printf '%s' "$val" | tr -d " \t\r\n'\"")"
-  printf '%s' "$val"
+env_has_trusted_proxy_assignment() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  grep -Eq '^[[:space:]]*(export[[:space:]]+)?(WSD_TRUSTED_PROXIES|WSD_TRUST_PROXY)[[:space:]]*=' "$file"
 }
 
 if [[ -L .env || ( -e .env && ! -f .env ) ]]; then
@@ -320,9 +335,8 @@ fi
 EMBED_PORT="$(env_port "$PWD/.env")"
 [[ "$EMBED_PORT" =~ ^[0-9]+$ ]] && (( EMBED_PORT >= 1 && EMBED_PORT <= 65535 )) || die "قيمة WSD_EMBED_PROXY_PORT في .env غير صالحة؛ استخدم رقم منفذ بين 1 و 65535."
 
-if (( PROD_TLS )); then
-  trust_value="$(env_trust_proxy "$PWD/.env")"
-  [[ -z "$trust_value" || "$trust_value" == 0 || "$trust_value" == false ]] || die "لا تضبط WSD_TRUST_PROXY في .env؛ التراكب الإنتاجي يضبطه وحده بعد تأمين المنافذ."
+if (( PROD_TLS )) && env_has_trusted_proxy_assignment "$PWD/.env"; then
+  die 'لا تضبط WSD_TRUSTED_PROXIES أو WSD_TRUST_PROXY في .env؛ التراكب الإنتاجي يضبط WSD_TRUSTED_PROXIES وحده بعد تأمين المنافذ. المتغير WSD_TRUST_PROXY مهمل.'
 fi
 
 if stack_running; then
@@ -510,7 +524,7 @@ if (( SYSTEMD )); then
       info "تم تثبيت وتفعيل وحدة systemd: madar.service"
     fi
   else
-    warn "الوحدة تعمل بصلاحيات root؛ تأكد أن ملكية $INSTALL_DIR لـ root وأن صلاحياتها تمنع تعديل المستخدمين العاديين لملفات المشروع، فأي تعديل يمكن أن يُنفَّذ كـroot عند الإقلاع. لا تضف ملفات env أو أسرارًا إلى الوحدة."
+    warn "الوحدة تعمل بصلاحيات root؛ تم التحقق أن $INSTALL_DIR وكل مسار أساسي مملوكان لـroot وغير قابلين للكتابة من المجموعة/الآخرين. لا تضف ملفات env أو أسرارًا إلى الوحدة."
     info "لتفعيل التشغيل التلقائي عند الإقلاع، نفّذ الأمر التالي:"
     printf 'sudo install -m 0644 %q %q && sudo systemctl daemon-reload && sudo systemctl enable --now madar.service\n' "$unit_tmp" "$SYSTEMD_UNIT"
     warn "الملف $unit_tmp يحتوي على مسار التثبيت فقط، بلا أي أسرار أو EnvironmentFile."
@@ -529,5 +543,5 @@ if (( PROD_TLS )); then
 else
   info "اللوحة: http://localhost:3000 — أنشئ الحساب الأول عند الزيارة الأولى."
   info "VS Code و OpenCode يُفتحان من داخل اللوحة عبر الوكيل المصادَق على المنفذ $EMBED_PORT."
-  info "تنبيه أمني: المنفذان 3000 و$EMBED_PORT يُنشران على 0.0.0.0. في أي نشر يتجاوز جهازك المحلي، استخدم --prod-tls أو أنهِ TLS أمامهما معًا قبل مشاركة العنوان مع الفريق."
+  info "تنبيه أمني: المنفذان 3000 و$EMBED_PORT يُنشران على 127.0.0.1 افتراضيًا. إذا ضبطت WSD_EMBEDDED_PUBLISH_HOST=0.0.0.0 فاستخدم --prod-tls أو أنهِ TLS أمامهما معًا قبل مشاركة العنوان مع الفريق."
 fi

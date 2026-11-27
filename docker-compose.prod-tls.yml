@@ -4,7 +4,12 @@ services:
       - "127.0.0.1:3000:3000"
       - "127.0.0.1:4097:4097"
     environment:
-      WSD_TRUST_PROXY: "1"
+      # TLS terminates in front of the app on the Docker bridge: inside the
+      # container the peer is the bridge gateway (e.g. 172.x.x.1), not 127.0.0.1.
+      # loopback covers local probes; uniquelocal covers the bridge gateway.
+      # Inspect the bridge gateway from the host with:
+      #   docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+      WSD_TRUSTED_PROXIES: "loopback,uniquelocal"
       WSD_EMBED_PROXY_PORT: "4097"
       WSD_EMBEDDED_PUBLISH_HOST: "127.0.0.1"
     restart: unless-stopped

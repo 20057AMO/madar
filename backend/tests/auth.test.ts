@@ -1,15 +1,21 @@
-import { test, describe, before } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
-import { API_URL, JWT_SECRET, signTestToken, authHeaders, req, reqAuth, initTestAuth, uniqueId, type Res } from './helpers.ts';
+import type { Res } from './helpers.ts';
+import type { TestServer } from './test-server-helper.ts';
 import { currentTotp } from '../src/services/totp.ts';
+
+let h: typeof import('./helpers.ts');
+let apiUrl = '';
+let jwtSecret = '';
+let server: TestServer | undefined;
 
 // The 10/min-per-IP auth limiter is shared with every other suite (and can
 // still be draining from a previous run's window). Back off on exact
 // Retry-After instead of letting a 429 flake an otherwise-correct test.
 async function postWithBackoff(path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
   for (let attempt = 0; ; attempt += 1) {
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await fetch(`${apiUrl}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body),
@@ -21,10 +27,23 @@ async function postWithBackoff(path: string, body: unknown, headers: Record<stri
 }
 
 describe('Auth & access control', () => {
-  before(async () => { await initTestAuth(); });
+  before(async () => {
+    if (process.env.WSD_TEST_IN_PROCESS === '1') {
+      const { startTestServer } = await import('./test-server-helper.ts');
+      server = await startTestServer();
+    }
+    h = await import('./helpers.ts');
+    apiUrl = h.API_URL;
+    jwtSecret = h.JWT_SECRET;
+    await h.initTestAuth();
+  });
+
+  after(async () => {
+    if (server) await server.stop();
+  });
 
   test('GET /auth/status is public and reports hasUser', async () => {
-    const res = await req('GET', '/auth/status');
+    const res = await h.req('GET', '/auth/status');
     assert.strictEqual(res.status, 200);
     const data = await res.json();
     assert.strictEqual(typeof data.hasUser, 'boolean');
@@ -32,7 +51,7 @@ describe('Auth & access control', () => {
 
   test('protected endpoints reject requests without a token', async () => {
     for (const path of ['/projects', '/providers', '/agents', '/server/info']) {
-      const res = await req('GET', path);
+      const res = await h.req('GET', path);
       assert.strictEqual(res.status, 401, `expected 401 for ${path}, got ${res.status}`);
     }
   });
@@ -44,25 +63,25 @@ describe('Auth & access control', () => {
 
   test('tokens signed with the wrong secret are rejected', async () => {
     const forged = jwt.sign({ id: 'attacker', username: 'attacker' }, 'completely-wrong-secret', { expiresIn: '1h' });
-    const res = await fetch(`${API_URL}/projects`, { headers: { Authorization: `Bearer ${forged}` } });
+    const res = await fetch(`${apiUrl}/projects`, { headers: { Authorization: `Bearer ${forged}` } });
     assert.strictEqual(res.status, 401);
   });
 
   test('tampered token signatures are rejected', async () => {
-    const valid = signTestToken();
+    const valid = h.signTestToken();
     const tampered = valid.slice(0, -3) + (valid.endsWith('aaa') ? 'bbb' : 'aaa');
-    const res = await fetch(`${API_URL}/projects`, { headers: { Authorization: `Bearer ${tampered}` } });
+    const res = await fetch(`${apiUrl}/projects`, { headers: { Authorization: `Bearer ${tampered}` } });
     assert.strictEqual(res.status, 401);
   });
 
   test('expired tokens are rejected', async () => {
-    const expired = jwt.sign({ id: 'test-user', username: 'test' }, JWT_SECRET, { expiresIn: '-10s' });
-    const res = await fetch(`${API_URL}/projects`, { headers: { Authorization: `Bearer ${expired}` } });
+    const expired = jwt.sign({ id: 'test-user', username: 'test' }, jwtSecret, { expiresIn: '-10s' });
+    const res = await fetch(`${apiUrl}/projects`, { headers: { Authorization: `Bearer ${expired}` } });
     assert.strictEqual(res.status, 401);
   });
 
   test('a correctly signed token grants access', async () => {
-    const res = await reqAuth('GET', '/projects');
+    const res = await h.reqAuth('GET', '/projects');
     assert.strictEqual(res.status, 200);
     const data = await res.json();
     assert.ok(Array.isArray(data.projects));
@@ -71,7 +90,7 @@ describe('Auth & access control', () => {
   test('audit log endpoint returns entries array (newest first)', async () => {
     // generate one real event so the log is non-deterministically empty-safe
     await postWithBackoff('/auth/login', { username: 'no-such-user-xyz', password: 'x' });
-    const res = await reqAuth('GET', '/auth/audit');
+    const res = await h.reqAuth('GET', '/auth/audit');
     assert.strictEqual(res.status, 200);
     const data = await res.json();
     assert.ok(Array.isArray(data.entries));
@@ -84,7 +103,7 @@ describe('Auth & access control', () => {
   });
 
   test('setup refuses to run when a user already exists', async () => {
-    const statusRes = await req('GET', '/auth/status');
+    const statusRes = await h.req('GET', '/auth/status');
     const { hasUser } = await statusRes.json();
     if (!hasUser) return; // nothing to verify on a fresh install
     const res = await postWithBackoff('/auth/setup', { username: 'hijacker', password: 'pass1234' });
@@ -103,18 +122,18 @@ describe('Auth & access control', () => {
     // isolated server (same convention as totp.test.ts). On any server where
     // the FIRST admin has 2FA, the editor-direct-login assertion below is
     // itself the cross-taint regression guard.
-    const suffix = uniqueId('lg').replace(/-/g, '');
+    const suffix = h.uniqueId('lg').replace(/-/g, '');
     const editorUser = `login-ed-${suffix}`;
     const viewerUser = `login-vw-${suffix}`;
     const pw = 'Pass-1234-x';
-    const doTotpJourney = !!process.env.WSD_TEST_ACCOUNT_PASSWORD;
+    const doTotpJourney = !!process.env.WSD_TEST_ACCOUNT_PASSWORD || !!server;
     const loginUser = (u: string) => postWithBackoff('/auth/login', { username: u, password: pw });
 
     const created: string[] = [];
-    const adminCtl = { 'Content-Type': 'application/json', ...authHeaders() };
+    const adminCtl = { 'Content-Type': 'application/json', ...h.authHeaders() };
 
     const createUser = (username: string, role: string): Promise<Res> =>
-      req('POST', '/users', { username, password: pw, role }, adminCtl);
+      h.req('POST', '/users', { username, password: pw, role }, adminCtl);
 
     try {
       const editorCreate = await createUser(editorUser, 'editor');
@@ -126,7 +145,7 @@ describe('Auth & access control', () => {
       created.push(editorAcc.id, viewerAcc.id);
 
       // ── Editor (no TOTP) → its OWN session, even when the first admin has 2FA.
-      const adminId = (jwt.decode(authHeaders().Authorization.replace('Bearer ', '')) as jwt.JwtPayload)?.id;
+      const adminId = (jwt.decode(h.authHeaders().Authorization.replace('Bearer ', '')) as jwt.JwtPayload)?.id;
       const e = await loginUser(editorUser);
       assert.strictEqual(e.status, 200);
       const eData = await e.json();
@@ -134,7 +153,7 @@ describe('Auth & access control', () => {
       assert.strictEqual(eData.pendingToken, undefined, 'direct login must not leak a pending token');
       assert.strictEqual(eData.id, editorAcc.id, 'login must sign the editor, not the first admin');
       assert.strictEqual(eData.role, 'editor');
-      const eTok = jwt.verify(eData.token, JWT_SECRET) as jwt.JwtPayload;
+      const eTok = jwt.verify(eData.token, jwtSecret) as jwt.JwtPayload;
       assert.strictEqual(eTok.id, editorAcc.id, 'JWT id must be the editor');
       assert.strictEqual(eTok.role, 'editor');
       assert.strictEqual(eTok.username, editorUser, 'JWT username must be the editor');
@@ -143,11 +162,11 @@ describe('Auth & access control', () => {
       assert.notStrictEqual(eTok.id, adminId, 'the session must not be the first admin');
 
       // Editor identity is enforced by requireAdmin (real user, not the admin).
-      const denied = await req('POST', '/users', { username: `x-${suffix}`, password: pw }, { Authorization: `Bearer ${eData.token}` });
+      const denied = await h.req('POST', '/users', { username: `x-${suffix}`, password: pw }, { Authorization: `Bearer ${eData.token}` });
       assert.strictEqual(denied.status, 403, 'editor token must be 403 on admin-only routes');
 
       // ...while the editor's own session is valid (reads its project list).
-      const readProjects = await fetch(`${API_URL}/projects`, { headers: { Authorization: `Bearer ${eData.token}` } });
+      const readProjects = await fetch(`${apiUrl}/projects`, { headers: { Authorization: `Bearer ${eData.token}` } });
       assert.strictEqual(readProjects.status, 200);
 
       // ── Viewer login → viewer identity; blocking on writes.
@@ -156,10 +175,10 @@ describe('Auth & access control', () => {
       const vData = await v.json();
       assert.strictEqual(vData.id, viewerAcc.id);
       assert.strictEqual(vData.role, 'viewer');
-      assert.strictEqual((jwt.verify(vData.token, JWT_SECRET) as jwt.JwtPayload).id, viewerAcc.id);
+      assert.strictEqual((jwt.verify(vData.token, jwtSecret) as jwt.JwtPayload).id, viewerAcc.id);
       // Viewer is blocked from editor-gated endpoints (requireRole('editor')) — project creation
       // itself is open to any authed user, so the import route (editor-only) is the clean probe.
-      const vDenied = await req('POST', '/projects/import', {}, { Authorization: `Bearer ${vData.token}` });
+      const vDenied = await h.req('POST', '/projects/import', {}, { Authorization: `Bearer ${vData.token}` });
       assert.strictEqual(vDenied.status, 403, 'viewer token must be 403 on an editor-gated route');
 
       // ── Per-user 2FA (isolated server only): TOTP belongs to the editor alone.
@@ -196,13 +215,13 @@ describe('Auth & access control', () => {
         const verified = await verify.json();
         assert.strictEqual(verified.id, editorAcc.id, 'verify must sign the editor, not the first admin');
         assert.strictEqual(verified.role, 'editor');
-        assert.strictEqual((jwt.verify(verified.token, JWT_SECRET) as jwt.JwtPayload).id, editorAcc.id);
+        assert.strictEqual((jwt.verify(verified.token, jwtSecret) as jwt.JwtPayload).id, editorAcc.id);
       } else {
         t.skip('WSD_TEST_ACCOUNT_PASSWORD not set — deep per-user 2FA journey skipped (identity matrix still runs)');
       }
     } finally {
       // Deleting the users (each carrying its own TOTP record once removed) is the cleanup.
-      for (const id of created) await reqAuth('DELETE', `/users/${id}`);
+      for (const id of created) await h.reqAuth('DELETE', `/users/${id}`);
     }
   });
 
@@ -210,7 +229,7 @@ describe('Auth & access control', () => {
     const user = process.env.WSD_TEST_USER;
     const pass = process.env.WSD_TEST_PASS;
     if (!user || !pass) return t.skip('WSD_TEST_USER / WSD_TEST_PASS not set');
-    const res = await fetch(`${API_URL}/auth/login`, {
+    const res = await fetch(`${apiUrl}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: user, password: pass }),

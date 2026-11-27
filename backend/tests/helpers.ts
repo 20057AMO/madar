@@ -80,7 +80,11 @@ async function ensureSession(): Promise<void> {
       const setupRes = await fetch(`${API_URL}/auth/setup`, {
         method: 'POST',
         headers: JSON_HEADERS,
-        body: JSON.stringify({ username: 'test-admin', password: 'test-password-123' }),
+        body: JSON.stringify({
+          username: 'test-admin',
+          password: 'test-password-123',
+          ...(process.env.WSD_TEST_SETUP_TOKEN ? { setupToken: process.env.WSD_TEST_SETUP_TOKEN } : {}),
+        }),
       });
       const setupData = await setupRes.json() as any;
       if (setupData.id) {

@@ -139,7 +139,6 @@ import {
   deleteSession,
 } from './services/chat-sessions';
 import {
-  setup,
   login,
   signLoginSession,
   changePassword,
@@ -172,6 +171,13 @@ import {
   verifyPending2faToken,
   getUserByUsername,
 } from './services/user-store';
+import { initSetupToken, performSetup } from './services/setup-token';
+import {
+  configureTrustedProxy,
+  isTrustedProxyPeer,
+  trustedProxyExposureWarning,
+  trustedProxyWarning,
+} from './services/proxy-trust-core';
 import { otpauthUri } from './services/totp';
 import { buildBackup, restoreFromBackup } from './services/settings-export';
 import { publicProject, publicProjects } from './services/docker-manager';
@@ -220,17 +226,19 @@ if (jwtSecretState.source === 'env') {
   line('  node -e "console.log(require(\'crypto\').randomBytes(32)');
   line('    .toString(\'hex\'))"');
   line('');
-  line('Changing it later signs everyone out (they log in again)');
-  line('and without WSD_ENCRYPTION_KEY re-opens sealed keys.');
+  line('Changing it later signs everyone out; v2 provider keys');
+  line('use data/enc.key or WSD_ENC_KEY and stay sealed.');
+  line('Legacy enc1 keys need the old WSD_ENCRYPTION_KEY/JWT');
+  line('derivation, then re-seal to v2 on the next provider save.');
   console.warn('└──────────────────────────────────────────────────────────────┘');
 }
 
+initSetupToken();
+
 const app = express();
-// Trust exactly one reverse-proxy hop ONLY when explicitly enabled — with
-// the port published directly, a hardcoded trust would let clients spoof
-// X-Forwarded-For and defeat every per-IP limiter and the unlock cooldown.
-if (process.env.WSD_TRUST_PROXY === '1' || process.env.WSD_TRUST_PROXY === 'true') {
-  app.set('trust proxy', 1);
+const trustedProxies = configureTrustedProxy(app, process.env);
+for (const warning of [trustedProxyWarning(process.env), trustedProxyExposureWarning(process.env)]) {
+  if (warning) console.warn(`[madar] ${warning}`);
 }
 app.disable('x-powered-by');
 const PORT = Number(process.env.PORT) || 3000;
@@ -292,8 +300,9 @@ const WORKSPACE_REFRESH_MAX = rateCeil('WSD_RATE_WORKSPACE_REFRESH_MAX', RESOLVE
 const WORKSPACE_STATUS_MAX = rateCeil('WSD_RATE_WORKSPACE_STATUS_MAX', 60, 600);
 
 // Per-user write limiter — keyed on the authenticated user id (falling back to
-// the shared IP when no user is present). For NAT-shared deployments a single
-// runaway agent can't starve every other user behind the same public IP.
+// req.ip when no user is present). For NAT-shared deployments a single runaway
+// agent can't starve every other user behind the same public IP. The socket
+// address is never used as a limiter key.
 const userWriteLimiter = (req: any, res: any, next: any) => {
   const retryAfter = checkUserWrite(req?.user?.id, req?.ip, RATE_WINDOW, RATE_USER_WRITE_MAX);
   if (retryAfter > 0) {
@@ -305,22 +314,22 @@ const userWriteLimiter = (req: any, res: any, next: any) => {
 
 /**
  * Should the embed cookie carry `Secure` for THIS request? True when the
- * connection itself is TLS, or when the operator opted into trusting one proxy
- * hop that reported https. Off on the documented plain-HTTP LAN, where a
- * `Secure` cookie would be dropped by the browser and the IDE would silently
- * fail to load. The rule itself lives in embed-core so it is unit-tested.
+ * connection itself is TLS, or when a configured trusted proxy reported https.
+ * Off on the documented plain-HTTP LAN, where a `Secure` cookie would be dropped
+ * by the browser and the IDE would silently fail to load. The rule itself lives
+ * in embed-core so it is unit-tested.
  */
 function embedRequestIsSecure(req: any): boolean {
   return embedCookieSecure({
     encrypted: req?.socket?.encrypted === true,
     forwardedProto: String(req?.headers?.['x-forwarded-proto'] || ''),
-    trustProxy: process.env.WSD_TRUST_PROXY === '1' || process.env.WSD_TRUST_PROXY === 'true',
+    trustProxy: isTrustedProxyPeer(req?.socket?.remoteAddress, trustedProxies),
   });
 }
 
 function rateLimit(scope: string, windowMs: number, max: number) {
   return (req: any, res: any, next: any) => {
-    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    const ip = String(req.ip ?? 'unknown');
     const now = Date.now();
     const key = `${scope}:${ip}`;
     const entry = rateBuckets.get(key);
@@ -378,7 +387,7 @@ function workspaceImageAuth(req: any, res: any, next: any) {
 }
 
 const workspaceRefreshLimiter = (req: any, res: any, next: any) => {
-  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const ip = String(req.ip ?? 'unknown');
   const key = `workspace-refresh:${ip}`;
   const now = Date.now();
   const entry = rateBuckets.get(key);
@@ -395,7 +404,7 @@ const workspaceRefreshLimiter = (req: any, res: any, next: any) => {
 };
 
 const workspaceStatusLimiter = (req: any, res: any, next: any) => {
-  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const ip = String(req.ip ?? 'unknown');
   const key = `workspace-status:${ip}`;
   const now = Date.now();
   const entry = rateBuckets.get(key);
@@ -481,15 +490,17 @@ app.get('/api/auth/status', (req: any, res) => {
 });
 
 app.post('/api/auth/setup', authLimiter, async (req, res) => {
-  try {
-    const { username, password } = req.body || {};
-    if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
-    const result = await setup(String(username), String(password));
-    recordAudit('setup', true, req.ip, result.id);
-    res.status(201).json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  const result = await performSetup({
+    username: req.body?.username,
+    password: req.body?.password,
+    bodyToken: req.body?.setupToken ?? req.body?.token,
+    headerToken: req.headers['x-setup-token'],
+  });
+  if (!result.ok) {
+    return res.status(result.status).json({ error: result.error, message: result.message });
   }
+  recordAudit('setup', true, req.ip, result.user.id);
+  res.status(201).json(result.user);
 });
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
@@ -678,7 +689,7 @@ app.get('/api/providers-lock', (_req, res) => {
 // Unlock verifies a password — brute-force guard (dedicated unlock limiter +
 // progressive cooldown) + audit trail apply here.
 app.post('/api/providers/unlock', unlockLimiter, async (req: any, res) => {
-  const ip = String(req.ip || 'unknown');
+  const ip = String(req.ip ?? 'unknown');
   const cd = unlockCooldownRemainingSec(ip);
   if (cd > 0) {
     res.set('Retry-After', String(cd));

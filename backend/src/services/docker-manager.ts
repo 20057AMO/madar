@@ -497,6 +497,47 @@ async function ensureImage(image: string): Promise<void> {
   });
 }
 
+const PROJECT_PIDS_LIMIT_DEFAULT = 512;
+const PROJECT_PIDS_LIMIT_MIN = 64;
+const PROJECT_PIDS_LIMIT_MAX = 4096;
+
+export function resolveProjectPidsLimit(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === '') return PROJECT_PIDS_LIMIT_DEFAULT;
+  const text = typeof raw === 'string' ? raw.trim() : String(raw);
+  const value = /^\d+$/.test(text) ? Number(text) : NaN;
+  if (!Number.isSafeInteger(value) || value < PROJECT_PIDS_LIMIT_MIN || value > PROJECT_PIDS_LIMIT_MAX) {
+    console.warn('[security] invalid WSD_PROJECT_PIDS_LIMIT, using default', PROJECT_PIDS_LIMIT_DEFAULT);
+    return PROJECT_PIDS_LIMIT_DEFAULT;
+  }
+  return value;
+}
+
+export function buildProjectHostConfig(opts: {
+  bindSource: string;
+  portBindings: Record<string, unknown>;
+  limits?: ProjectLimits;
+}) {
+  return {
+    Binds: [`${opts.bindSource}:/workspace`],
+    PortBindings: opts.portBindings,
+    Privileged: false,
+    SecurityOpt: ['no-new-privileges:true'],
+    PidsLimit: resolveProjectPidsLimit(process.env.WSD_PROJECT_PIDS_LIMIT),
+    // Resource limits – omitted if undefined (unlimited).
+    ...(opts.limits?.memory ? { Memory: parseMemory(opts.limits.memory)!.bytes } : {}),
+    ...(opts.limits?.cpu ? { NanoCpus: parseCpu(opts.limits.cpu)!.nano } : {}),
+    // Without MemorySwap Docker silently defaults swap to 2× RAM, which
+    // would undermine the memory cap. MemorySwap is the memory+swap TOTAL,
+    // so passing the exact memory limit disables swap: the container is
+    // OOM-killed at the cap instead of thrashing host swap. NB -1 would mean
+    // UNLIMITED swap — that is the opposite of what a "limit" promises.
+    ...(opts.limits?.memory
+      ? { MemorySwap: parseMemory(opts.limits.memory)!.bytes }
+      : {}),
+    RestartPolicy: { Name: 'unless-stopped' },
+  };
+}
+
 /**
  * Create a project: provision workspace dir + launch container.
  */
@@ -639,22 +680,11 @@ export async function createProject(spec: ProjectSpec, userId?: string): Promise
           'DEBIAN_FRONTEND=noninteractive',
         ],
         ExposedPorts: exposedPorts,
-        HostConfig: {
-          Binds: [`${bindSource}:/workspace`],
-          PortBindings: portBindings,
-          // Resource limits – omitted if undefined (unlimited).
-          ...(effectiveLimits?.memory ? { Memory: parseMemory(effectiveLimits.memory)!.bytes } : {}),
-          ...(effectiveLimits?.cpu ? { NanoCpus: parseCpu(effectiveLimits.cpu)!.nano } : {}),
-          // Without MemorySwap Docker silently defaults swap to 2× RAM, which
-          // would undermine the memory cap. MemorySwap is the memory+swap TOTAL,
-          // so passing the exact memory limit disables swap: the container is
-          // OOM-killed at the cap instead of thrashing host swap. NB -1 would mean
-          // UNLIMITED swap — that is the opposite of what a "limit" promises.
-          ...(effectiveLimits?.memory
-            ? { MemorySwap: parseMemory(effectiveLimits.memory)!.bytes }
-            : {}),
-          RestartPolicy: { Name: 'unless-stopped' },
-        },
+        HostConfig: buildProjectHostConfig({
+          bindSource,
+          portBindings,
+          limits: effectiveLimits,
+        }),
         Labels: {
           'wsd.project': slug,
           'wsd.name': clean.name,

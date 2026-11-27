@@ -9,6 +9,7 @@ export function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -91,12 +92,17 @@ export function Login() {
       return;
     }
 
+    if (isSetup && !setupToken.trim()) {
+      setError(t2('رمز الإعداد مطلوب.', 'Setup token is required.'));
+      return;
+    }
+
     setError('');
     setLoading(true);
 
     try {
       if (isSetup) {
-        await setup(username.trim(), password);
+        await setup(username.trim(), password, setupToken.trim());
       } else {
         await login(username.trim(), password);
         // requires2fa → pending2fa flips true and this component renders the code step
@@ -160,6 +166,25 @@ export function Login() {
                 value={confirm}
                 onInput={(e: any) => setConfirm(e.target.value)}
               />
+
+              <label class="field-label" for="login-setup-token">{t2('رمز الإعداد', 'Setup token')}</label>
+              <input
+                id="login-setup-token"
+                class="modern-input"
+                type="password"
+                dir="ltr"
+                placeholder={t2('الصق رمز الإعداد', 'Paste setup token')}
+                autoComplete="off"
+                spellcheck={false}
+                required
+                aria-describedby="login-setup-token-hint"
+                value={setupToken}
+                onInput={(e: any) => setSetupToken(e.target.value)}
+              />
+              <div id="login-setup-token-hint" class="field-hint">
+                {t2('ستجده في سجلات الحاوية: ', 'Find it in the container logs: ')}
+                <code>docker compose logs app</code>
+              </div>
             </>
           )}
 

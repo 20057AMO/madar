@@ -31,11 +31,12 @@ services:
       # stale value, because both are unauthenticated root code-execution
       # surfaces and a 0.0.0.0 bind is exactly the hole this closes.
       WSD_EMBED_PROXY_PORT: ${WSD_EMBED_PROXY_PORT:-4097}
-      # Interface the AUTHENTICATED proxy is published on. It now mirrors the
-      # dashboard's own exposure: teammates reach Madar on 3000 from the LAN,
-      # so the IDE/opencode proxy is reachable there too — behind a session
-      # check, not open. Narrow to 127.0.0.1 to keep them host-local only.
-      WSD_EMBEDDED_PUBLISH_HOST: ${WSD_EMBEDDED_PUBLISH_HOST:-0.0.0.0}
+      # Interface the AUTHENTICATED dashboard and proxy are published on.
+      # Default to loopback; 0.0.0.0 is for a trusted LAN only (or for use
+      # behind TLS terminating in front of BOTH ports). The process inside the
+      # container still listens on 0.0.0.0 — Docker port mapping needs that;
+      # only the host-side binding changes here.
+      WSD_EMBEDDED_PUBLISH_HOST: ${WSD_EMBEDDED_PUBLISH_HOST:-127.0.0.1}
       WSD_CHAT_MODEL: ${WSD_CHAT_MODEL:-qwen3:30b}
       WSD_DATA_DIR: /app/data
       # JWT signing secret. Set JWT_SECRET in .env (see .env.example) to take
@@ -67,6 +68,9 @@ services:
       WSD_UPDATE_NPM_REGISTRY: ${WSD_UPDATE_NPM_REGISTRY:-}
       WSD_UPDATES_MAX_BYTES: ${WSD_UPDATES_MAX_BYTES:-419430400}
       WSD_UPDATE_BOOT_TIMEOUT_MS: ${WSD_UPDATE_BOOT_TIMEOUT_MS:-90000}
+      # opencode update channel: the integration layer is verified against major
+      # 1; a positive integer overrides it, junk/missing falls back to 1.
+      WSD_UPDATE_OPENCODE_MAJOR: ${WSD_UPDATE_OPENCODE_MAJOR:-1}
       # Empty defaults on purpose: rateCeil treats a blank value as unset and falls
       # through to the WSD_TESTING-aware budgets (prod: check 6 / apply 2 per min;
       # WSD_TESTING=1: check 60 / apply 20). A positive .env value still wins.
@@ -87,16 +91,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      # Dashboard stays published on every interface: it is the authenticated
-      # surface, and the only published route to the embedded surfaces is the
-      # proxy beside it.
-      - "3000:3000"
+      # Both authenticated surfaces bind to loopback by default. Set
+      # WSD_EMBEDDED_PUBLISH_HOST=0.0.0.0 ONLY on a trusted LAN or behind TLS
+      # in front of both ports; the in-container listener stays 0.0.0.0 so
+      # Docker's host-side mapping works.
+      - "${WSD_EMBEDDED_PUBLISH_HOST:-127.0.0.1}:3000:3000"
       # Embedded surfaces: ONLY the authenticated Madar proxy is published. The
       # raw 8100 (code-server) and 4096 (opencode) publishes are REMOVED — they
       # served unauthenticated root code execution to every container on the
       # docker bridge. Those upstreams are now loopback-bound in-container and
       # reachable only through here.
-      - "${WSD_EMBEDDED_PUBLISH_HOST:-0.0.0.0}:${WSD_EMBED_PROXY_PORT:-4097}:${WSD_EMBED_PROXY_PORT:-4097}"
+      - "${WSD_EMBEDDED_PUBLISH_HOST:-127.0.0.1}:${WSD_EMBED_PROXY_PORT:-4097}:${WSD_EMBED_PROXY_PORT:-4097}"
     depends_on:
       - workspace
 

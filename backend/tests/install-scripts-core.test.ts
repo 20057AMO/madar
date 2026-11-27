@@ -13,6 +13,9 @@ const UNINSTALL = path.join(ROOT, 'scripts', 'uninstall.sh');
 const UNIT_TEMPLATE = path.join(ROOT, 'packaging', 'systemd', 'madar.service');
 const README = path.join(ROOT, 'README.md');
 const INSTALL_DOC = path.join(ROOT, 'docs', 'INSTALL.md');
+const RUNBOOK = path.join(ROOT, 'docs', 'PRODUCTION-DEPLOY-RUNBOOK.md');
+const ROOT_ENV_EXAMPLE = path.join(ROOT, '.env.example');
+const BACKEND_ENV_EXAMPLE = path.join(ROOT, 'backend', '.env.example');
 const PROD_OVERLAY = path.join(ROOT, 'docker-compose.prod-tls.yml');
 const NGINX_CONF = path.join(ROOT, 'deploy', 'nginx', 'madar.conf');
 const PROD_BINDING = path.join(ROOT, 'scripts', 'check-prod-binding.sh');
@@ -344,7 +347,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
       assert.strictEqual(working[1], `"${toBashPath(repo)}"`);
       assert.match(working[1].replace(/^"|"$/g, ''), /^\//, `WorkingDirectory is not an absolute POSIX path: ${working[1]}`);
       assert.ok(!unit.includes('@MADAR_DIR@'), 'the template placeholder survived rendering');
-      assert.doesNotMatch(unit, /JWT_SECRET|WSD_TRUST_PROXY|8100|4096|secret|password/i);
+      assert.doesNotMatch(unit, /JWT_SECRET|WSD_TRUSTED_PROXIES|WSD_TRUST_PROXY|8100|4096|secret|password/i);
       assert.match(unit, /^ExecStart=\/usr\/bin\/docker compose up -d$/m);
       assert.match(unit, /^ExecStop=\/usr\/bin\/docker compose down$/m);
       assert.ok(!unit.includes('--build'), 'the oneshot unit must not rebuild on every boot');
@@ -376,10 +379,11 @@ describe('Madar install/uninstall scripts (offline)', () => {
       assert.match(fs.readFileSync(envFile, 'utf8'), /MADAR_TEST_SENTINEL=keep-me/);
 
       assert.doesNotMatch(INSTALL_SRC, /(?:^|[^\w.])JWT_SECRET\s*=/);
-      assert.match(INSTALL_SRC, /env_trust_proxy\(\)[\s\S]*?grep -m1 -E '\^\[\[:space:\]\]\*WSD_TRUST_PROXY='/);
-      assert.match(INSTALL_SRC, /trust_value="\$\(env_trust_proxy "\$PWD\/\.env"\)"/);
-      assert.match(INSTALL_SRC, /لا تضبط WSD_TRUST_PROXY في \.env/);
-      assert.doesNotMatch(INSTALL_SRC, /^[[:space:]]*(?:export[[:space:]]+)?WSD_TRUST_PROXY[[:space:]]*=/m);
+      assert.match(INSTALL_SRC, /env_has_trusted_proxy_assignment\(\)\s*\{\s*local file="\$1"/);
+      assert.ok(INSTALL_SRC.includes("grep -Eq '^[[:space:]]*(export[[:space:]]+)?(WSD_TRUSTED_PROXIES|WSD_TRUST_PROXY)[[:space:]]*=' \"$file\""));
+      assert.match(INSTALL_SRC, /if \(\( PROD_TLS \)\) && env_has_trusted_proxy_assignment "\$PWD\/\.env"; then/);
+      assert.match(INSTALL_SRC, /لا تضبط WSD_TRUSTED_PROXIES أو WSD_TRUST_PROXY في \.env/);
+      assert.doesNotMatch(INSTALL_SRC, /^[[:space:]]*(?:export[[:space:]]+)?(?:WSD_TRUSTED_PROXIES|WSD_TRUST_PROXY)[[:space:]]*=/m);
     });
   });
 
@@ -445,7 +449,7 @@ describe('Madar install/uninstall scripts (offline)', () => {
     assert.doesNotMatch(UNIT_SRC, /^Restart=/m);
     assert.doesNotMatch(UNIT_SRC, /^RestartSec=/m);
     assert.match(UNIT_SRC, /^NoNewPrivileges=true$/m);
-    assert.doesNotMatch(UNIT_SRC, /EnvironmentFile|JWT_SECRET|WSD_TRUST_PROXY|8100|4096/i);
+    assert.doesNotMatch(UNIT_SRC, /EnvironmentFile|JWT_SECRET|WSD_TRUSTED_PROXIES|WSD_TRUST_PROXY|8100|4096/i);
   });
 
   test('canonical origin spellings are all accepted without echoing the raw remote', (t) => {
@@ -657,13 +661,14 @@ describe('Madar install/uninstall scripts (offline)', () => {
     assert.doesNotMatch(INSTALL_SRC, /trap 'rm -f "\$unit_tmp"' EXIT/);
   });
 
-  test('prod overlay pins the app to loopback and trusts exactly one proxy hop', () => {
+  test('prod overlay pins the app to loopback and trusts explicit proxy sources', () => {
     assert.match(PROD_OVERLAY_SRC, /ports:\s*!override/);
     for (const bind of ['"127.0.0.1:3000:3000"', '"127.0.0.1:4097:4097"']) {
       assert.ok(PROD_OVERLAY_SRC.includes(bind), `prod overlay lost the loopback bind ${bind}`);
     }
     assert.doesNotMatch(PROD_OVERLAY_SRC, /"0\.0\.0\.0:/);
-    assert.match(PROD_OVERLAY_SRC, /WSD_TRUST_PROXY:\s*"1"/);
+    assert.match(PROD_OVERLAY_SRC, /WSD_TRUSTED_PROXIES:\s*"loopback,uniquelocal"/);
+    assert.doesNotMatch(PROD_OVERLAY_SRC, /WSD_TRUST_PROXY:/);
     assert.match(PROD_OVERLAY_SRC, /WSD_EMBED_PROXY_PORT:\s*"4097"/);
     assert.match(PROD_OVERLAY_SRC, /WSD_EMBEDDED_PUBLISH_HOST:\s*"127\.0\.0\.1"/);
     assert.match(PROD_OVERLAY_SRC, /restart:\s*unless-stopped/);
@@ -682,15 +687,88 @@ describe('Madar install/uninstall scripts (offline)', () => {
     assert.match(NGINX_CONF_SRC, /proxy_set_header Upgrade \$http_upgrade;/);
   });
 
-  test('prod binding guard rejects every drift from loopback-only binds and WSD_TRUST_PROXY=1', () => {
+  test('prod binding guard rejects every drift from loopback-only binds and missing or wildcard trust', () => {
     for (const guard of [
       'BAD_HOST', 'INCOMPLETE_BINDING', 'TARGET_MISMATCH', 'UNEXPECTED_PORT',
-      'BINDING_COUNT', 'PORT_SET', 'WSD_TRUST_PROXY', 'RUNTIME_BINDING_COUNT', 'RUNTIME_PORT_SET',
+      'BINDING_COUNT', 'PORT_SET', 'WSD_TRUSTED_PROXIES', 'WILDCARD_TRUSTED_PROXY',
+      'RUNTIME_BINDING_COUNT', 'RUNTIME_PORT_SET',
     ]) {
       assert.ok(PROD_BINDING_SRC.includes(guard), `binding guard lost the ${guard} check`);
     }
-    assert.match(PROD_BINDING_SRC, /ok: app ports 3000 and 4097 are bound to 127\.0\.0\.1 and WSD_TRUST_PROXY=1/);
+    assert.match(PROD_BINDING_SRC, /in_env && \/WSD_TRUSTED_PROXIES:\//);
+    assert.match(PROD_BINDING_SRC, /in_env && \/WSD_TRUST_PROXY:\//);
+    assert.match(PROD_BINDING_SRC, /if \(has_trusted\) \{[\s\S]*?WSD_TRUSTED_PROXIES empty/);
+    assert.match(PROD_BINDING_SRC, /legacy == "1" \|\| legacy == "true"/);
+    assert.match(PROD_BINDING_SRC, /DEPRECATED WSD_TRUST_PROXY=%s; use WSD_TRUSTED_PROXIES in the prod overlay/);
+    assert.match(PROD_BINDING_SRC, /function valueAfterColon\(s\)[\s\S]*?return unquote\(v\)/);
+    assert.match(PROD_BINDING_SRC, /in_ports && \/host_ip:\/ \{ host = valueAfterColon\(\$0\) \}/);
+    assert.match(PROD_BINDING_SRC, /tolower\(trusted\) ~ \/\\\/0\$\//);
+    assert.match(PROD_BINDING_SRC, /ok: app ports 3000 and 4097 are bound to 127\.0\.0\.1 and WSD_TRUSTED_PROXIES is configured/);
     assert.match(PROD_BINDING_SRC, /exit 1/);
+  });
+
+  test('binding guard accepts explicit trust and the legacy alias but rejects wildcard or missing trust', (t) => {
+    const program = /printf '%s\\n' "\$cfg" \| awk '\n([\s\S]*?)\n'\); then/.exec(PROD_BINDING_SRC)?.[1];
+    assert.ok(program, 'could not extract the binding guard awk program');
+    if (spawnSync('awk', ['--version'], { stdio: 'ignore' }).error) {
+      t.skip('awk is not available on this host');
+      return;
+    }
+    const composeConfig = (envLines: string[]) => [
+      'services:',
+      '  app:',
+      '    environment:',
+      ...envLines.map((line) => `      ${line}`),
+      '    ports:',
+      '      - host_ip: "127.0.0.1"',
+      '        published: "3000"',
+      '        target: "3000"',
+      '      - host_ip: "127.0.0.1"',
+      '        published: "4097"',
+      '        target: "4097"',
+      '',
+    ].join('\n');
+    const runGuard = (envLines: string[]) => {
+      let result: ReturnType<typeof spawnSync> | undefined;
+      withTemp((tmp) => {
+        const cfgFile = path.join(tmp, 'compose-config.yml');
+        fs.writeFileSync(cfgFile, composeConfig(envLines));
+        result = spawnSync('awk', [program, toBashPath(cfgFile)], { encoding: 'utf8', timeout: 10_000 });
+      });
+      return result!;
+    };
+
+    const explicit = runGuard(['WSD_TRUSTED_PROXIES: "loopback,uniquelocal"', 'WSD_EMBED_PROXY_PORT: "4097"']);
+    assert.strictEqual(explicit.status, 0, explicit.stderr || explicit.stdout);
+    assert.strictEqual(explicit.stdout.trim(), '');
+
+    const canonicalWins = runGuard([
+      'WSD_TRUSTED_PROXIES: "loopback"',
+      'WSD_TRUST_PROXY: "1"',
+      'WSD_EMBED_PROXY_PORT: "4097"',
+    ]);
+    assert.strictEqual(canonicalWins.status, 0, canonicalWins.stderr || canonicalWins.stdout);
+    assert.strictEqual(canonicalWins.stdout.trim(), '');
+
+    const emptyCanonical = runGuard([
+      'WSD_TRUSTED_PROXIES: ""',
+      'WSD_TRUST_PROXY: "1"',
+      'WSD_EMBED_PROXY_PORT: "4097"',
+    ]);
+    assert.strictEqual(emptyCanonical.status, 1);
+    assert.match(emptyCanonical.stdout, /WSD_TRUSTED_PROXIES empty/);
+
+    const wildcard = runGuard(['WSD_TRUSTED_PROXIES: "0.0.0.0/0"', 'WSD_EMBED_PROXY_PORT: "4097"']);
+    assert.strictEqual(wildcard.status, 1);
+    assert.match(wildcard.stdout, /WILDCARD_TRUSTED_PROXY/);
+
+    const legacy = runGuard(['WSD_TRUST_PROXY: "1"', 'WSD_EMBED_PROXY_PORT: "4097"']);
+    assert.strictEqual(legacy.status, 0, legacy.stderr || legacy.stdout);
+    assert.match(legacy.stdout, /DEPRECATED WSD_TRUST_PROXY=1; use WSD_TRUSTED_PROXIES in the prod overlay/);
+
+    const missing = runGuard(['WSD_EMBED_PROXY_PORT: "4097"']);
+    assert.strictEqual(missing.status, 1);
+    assert.match(missing.stdout, /WSD_TRUSTED_PROXIES missing/);
   });
 
   test('certbot renewal unit runs through /bin/sh and the timer is persistent', () => {
@@ -827,7 +905,10 @@ describe('Madar install/uninstall scripts (offline)', () => {
       { label: 'out-of-range octet LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '1.2.3.256'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
       { label: 'three-octet LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '10.0.0'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
       { label: 'five-octet LAN IP', args: ['--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '1.2.3.4.5'], error: /تعذّر تحديد عنوان IPv4 عام صالح/ },
-      { label: 'trusted proxy in .env', args: valid, envFile: 'WSD_TRUST_PROXY=1\n', error: /لا تضبط WSD_TRUST_PROXY في \.env/ },
+      { label: 'explicit trusted proxies in .env', args: valid, envFile: 'WSD_TRUSTED_PROXIES=loopback\n', error: /لا تضبط WSD_TRUSTED_PROXIES أو WSD_TRUST_PROXY في \.env/ },
+      { label: 'empty trusted proxies in .env', args: valid, envFile: 'WSD_TRUSTED_PROXIES=\n', error: /لا تضبط WSD_TRUSTED_PROXIES أو WSD_TRUST_PROXY في \.env/ },
+      { label: 'legacy trusted proxy alias in .env', args: valid, envFile: 'WSD_TRUST_PROXY=1\n', error: /لا تضبط WSD_TRUSTED_PROXIES أو WSD_TRUST_PROXY في \.env/ },
+      { label: 'disabled legacy trusted proxy alias in .env', args: valid, envFile: 'WSD_TRUST_PROXY=0\n', error: /لا تضبط WSD_TRUSTED_PROXIES أو WSD_TRUST_PROXY في \.env/ },
       { label: 'non-root', args: valid, root: false, error: /يحتاج صلاحيات root/ },
       { label: '--no-systemd', args: [...valid, '--no-systemd'], error: /الوضع --prod-tls يحتاج systemd/ },
     ];
@@ -848,6 +929,31 @@ describe('Madar install/uninstall scripts (offline)', () => {
         assert.ok(!fs.existsSync(path.join(repo, '.prod-binding-checked')), `${c.label}: the binding guard ran`);
       });
     }
+  });
+
+  test('prod-TLS install ignores commented trust assignments in .env', (t) => {
+    if (!bashAvailable()) {
+      t.skip('bash is not available on this host');
+      return;
+    }
+    withTemp((tmp) => {
+      const repo = makeRepo(tmp);
+      const envFile = path.join(repo, '.env');
+      const envBody = '# WSD_TRUSTED_PROXIES=loopback\n# WSD_TRUST_PROXY=1\nMADAR_TEST_SENTINEL=keep-me\n';
+      fs.writeFileSync(envFile, envBody);
+      const log = path.join(tmp, 'stub.log');
+      fs.writeFileSync(log, '');
+      const result = runStubbed(
+        INSTALL,
+        ['--dir', toBashPath(repo), '--prod-tls', '--domain', 'madar.example.test', '--email', 'admin@madar.example.test', '--lan-ip', '203.0.113.10'],
+        tmp,
+        log,
+        { root: true, env: prodEnv(tmp) },
+      );
+      assert.strictEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      assert.doesNotMatch(result.stderr, /لا تضبط WSD_TRUSTED_PROXIES أو WSD_TRUST_PROXY في \.env/);
+      assert.strictEqual(fs.readFileSync(envFile, 'utf8'), envBody, 'a successful install rewrote .env');
+    });
   });
 
   test('auto-detected private RFC1918 address is rejected before provisioning', (t) => {
@@ -1001,7 +1107,8 @@ describe('Madar install/uninstall scripts (offline)', () => {
       /--domain/,
       /--email/,
       /--lan-ip/,
-      /WSD_TRUST_PROXY=1/,
+      /WSD_TRUSTED_PROXIES=loopback,uniquelocal/,
+      /WSD_TRUST_PROXY=1\|true/,
       /client_max_body_size 256m/,
       /\$uri/,
       /check-prod-binding\.sh/,
@@ -1020,6 +1127,20 @@ describe('Madar install/uninstall scripts (offline)', () => {
     assert.match(doc, /NoNewPrivileges=true/);
     assert.match(doc, /لم يُحذف أي شيء/);
     assert.match(doc, /سحب `--ff-only` ثم إعادة بناء وفحص صحة وتحديث وحدة systemd/);
+  });
+
+  test('env examples and production runbook use the canonical trust variable', () => {
+    const sources = [
+      ['root .env.example', fs.readFileSync(ROOT_ENV_EXAMPLE, 'utf8')],
+      ['backend .env.example', fs.readFileSync(BACKEND_ENV_EXAMPLE, 'utf8')],
+      ['production runbook', fs.readFileSync(RUNBOOK, 'utf8')],
+    ] as const;
+    for (const [label, source] of sources) {
+      assert.match(source, /WSD_TRUSTED_PROXIES/, `${label} must mention WSD_TRUSTED_PROXIES`);
+      assert.doesNotMatch(source, /^[[:space:]]*(?:export[[:space:]]+)?(?:WSD_TRUSTED_PROXIES|WSD_TRUST_PROXY)[[:space:]]*=/m, `${label} must not set a trust variable`);
+    }
+    assert.match(sources[1][1], /WSD_TRUST_PROXY=1\|true/);
+    assert.match(sources[2][1], /ok: app ports 3000 and 4097 are bound to 127\.0\.0\.1 and WSD_TRUSTED_PROXIES is configured/);
   });
 });
 
