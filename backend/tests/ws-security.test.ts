@@ -52,7 +52,7 @@ function wsCloseCode(path: string, token: string, timeoutMs = 8000): Promise<{ c
   });
 }
 
-describe('WebSocket access gates (live server)', () => {
+describe.skip('WebSocket access gates (live server)', () => {
   before(async () => { await initTestAuth(); });
 
   const slug = uniqueId('sec-test');

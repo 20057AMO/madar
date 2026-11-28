@@ -2,6 +2,8 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import { uniqueId, req, reqAuth, initTestAuth, liveUser, cleanupLiveUsers } from './helpers.ts';
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1';
+
 describe('Providers / Agents / Chat sessions CRUD', () => {
   before(async () => { await initTestAuth(); });
 
@@ -154,7 +156,7 @@ describe('Providers / Agents / Chat sessions CRUD', () => {
 // (ws-chat: read=viewer, write=editor). Every row here proves the HTTP gate
 // matches that contract — and that the canonical fold happens BEFORE the gate,
 // so a near-miss slug cannot walk the legacy no-meta fallback into access.
-describe('Chat context & sessions · project access gate (F1)', () => {
+describe('Chat context & sessions · project access gate (F1)', { skip: DOCKER_SKIP }, () => {
   before(async () => { await initTestAuth(); });
 
   const createdSlugs: string[] = [];

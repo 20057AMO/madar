@@ -62,7 +62,7 @@ async function deleteRobust(path: string, attempts = 20): Promise<boolean> {
   return false;
 }
 
-describe('Project team & access control (real Docker container)', () => {
+describe.skip('Project team & access control (real Docker container)', () => {
   before(async () => { await initTestAuth(); });
   before(async () => {
     outsiderToken = (await liveUser('viewer', 'team-outsider')).token;

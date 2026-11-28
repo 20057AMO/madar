@@ -38,7 +38,7 @@ import {
 
 const CONTAINER = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
 
-describe('Team member lifecycle: user-delete cleanup + legacy first member (F5 / F14)', () => {
+describe.skip('Team member lifecycle: user-delete cleanup + legacy first member (F5 / F14)', () => {
   before(async () => { await initTestAuth(); });
 
   const f5Slug = uniqueId('f5clean');

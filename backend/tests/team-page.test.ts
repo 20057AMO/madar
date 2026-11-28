@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
 import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, JSON_HEADERS, testIdentity } from './helpers.ts';
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1';
+
 /**
  * Team page & permissions round:
  *  - GET /api/users/with-memberships — full-team roster with per-user project
@@ -73,8 +75,8 @@ describe('Team page & permissions (real Docker container)', () => {
     if (created) {
       await deleteRobust(`/projects/${slug}`);
     }
-    await deleteRobust(`/users/${viewerId}`);
-    await deleteRobust(`/users/${editorId}`);
+    if (viewerId) await deleteRobust(`/users/${viewerId}`);
+    if (editorId) await deleteRobust(`/users/${editorId}`);
   });
 
   test('with-memberships requires a session (401)', async () => {
@@ -82,7 +84,7 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.strictEqual(res.status, 401);
   });
 
-  test('create project + editor/viewer users + memberships', async () => {
+  test('create project + editor/viewer users + memberships', { skip: DOCKER_SKIP }, async () => {
     const prj = await reqAuth('POST', '/projects', { name: 'Team Page Test', slug, description: 'temp' });
     assert.strictEqual(prj.status, 201, `create project: ${prj.status}`);
     created = true;
@@ -103,7 +105,7 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.strictEqual(r2.status, 200, `add viewer: ${r2.status}`);
   });
 
-  test('with-memberships is admin-only — viewers and editors get 403', async () => {
+  test('with-memberships is admin-only — viewers and editors get 403', { skip: DOCKER_SKIP }, async () => {
     const viewer = await req('GET', '/users/with-memberships', undefined, runAs(viewerToken).headers);
     assert.strictEqual(viewer.status, 403, 'viewer with-memberships: must be 403');
     const editor = await req('GET', '/users/with-memberships', undefined, runAs(editorToken).headers);
@@ -127,12 +129,12 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.strictEqual(viewerMembership.role, 'viewer');
   });
 
-  test('roster is read-only for viewers — no admin write surface leaks', async () => {
+  test('roster is read-only for viewers — no admin write surface leaks', { skip: DOCKER_SKIP }, async () => {
     const res = await req('PATCH', `/users/${viewerId}/role`, { role: 'admin' }, runAs(viewerToken).headers);
     assert.strictEqual(res.status, 403, 'viewer cannot change roles');
   });
 
-  test('admin cannot demote their own role (400 — lockout guard)', async () => {
+  test('admin cannot demote their own role (400 — lockout guard)', { skip: DOCKER_SKIP }, async () => {
     await new Promise(r => setTimeout(r, 2000));
     // The path MUST carry the CALLER's own id — the guard compares it against the
     // authenticated subject. It used to hardcode the literal 'test-user' (the id
@@ -147,7 +149,7 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.match(String(body.error || ''), /own role/i);
   });
 
-  test('role change requires the admin account password (missing 400, wrong 401)', async () => {
+  test('role change requires the admin account password (missing 400, wrong 401)', { skip: DOCKER_SKIP }, async () => {
     const missing = await requestWithBackoff('PATCH', `/users/${viewerId}/role`, { role: 'editor' }, { ...authHeaders(), 'Content-Type': 'application/json' });
     assert.strictEqual(missing.status, 400, 'role change without password must be 400');
 
@@ -162,7 +164,7 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.strictEqual(viewerRow.role, 'viewer');
   });
 
-  test('role change succeeds after sudo verification (real admin login; self-skips)', async (t) => {
+  test('role change succeeds after sudo verification (real admin login; self-skips)', { skip: DOCKER_SKIP }, async (t) => {
     // The sudo check validates the ACTING admin's own password, so we need a
     // real session — forged tokens resolve to an unknown user id. Mirror the
     // shared helpers: the suite container's first admin is created via setup
@@ -207,7 +209,7 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.strictEqual(rev.status, 200);
   });
 
-  test('project activity is attributed (stopped/started carry the acting user)', async () => {
+  test('project activity is attributed (stopped/started carry the acting user)', { skip: DOCKER_SKIP }, async () => {
     const stop = await req('POST', `/projects/${slug}/stop`, undefined, runAs(editorToken).headers);
     assert.strictEqual(stop.status, 200);
 
@@ -228,7 +230,7 @@ describe('Team page & permissions (real Docker container)', () => {
     assert.ok(createdEntry, 'created action recorded');
   });
 
-  test('membership governance is audited (member-added)', async () => {
+  test('membership governance is audited (member-added)', { skip: DOCKER_SKIP }, async () => {
     const auditRes = await reqAuth('GET', '/auth/audit');
     assert.strictEqual(auditRes.status, 200);
     const entries: any[] = (await auditRes.json()).entries;
@@ -238,7 +240,7 @@ describe('Team page & permissions (real Docker container)', () => {
     );
   });
 
-  test('ownership transfer is a sudo op and lands in the roster + audit (real login; self-skips)', async (t) => {
+  test('ownership transfer is a sudo op and lands in the roster + audit (real login; self-skips)', { skip: DOCKER_SKIP }, async (t) => {
     const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
     const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
     const loginData = await loginRes.json();
@@ -268,7 +270,7 @@ describe('Team page & permissions (real Docker container)', () => {
     );
   });
 
-  test('delegated project permissions and admin password reset (real login; self-skips)', async (t) => {
+  test('delegated project permissions and admin password reset (real login; self-skips)', { skip: DOCKER_SKIP }, async (t) => {
     const pw = process.env.WSD_TEST_ACCOUNT_PASSWORD || 'test-password-123';
     const loginRes = await req('POST', '/auth/login', { username: 'test-admin', password: pw });
     const loginData = await loginRes.json();

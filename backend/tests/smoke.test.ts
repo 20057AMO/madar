@@ -2,6 +2,8 @@ import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
 import { uniqueId, reqAuth, req, initTestAuth } from './helpers.ts';
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1';
+
 describe('Madar API Smoke Tests', () => {
   before(async () => { await initTestAuth(); });
 
@@ -50,7 +52,7 @@ describe('Madar API Smoke Tests', () => {
     assert.strictEqual(typeof data.port, 'number');
   });
 
-  test('POST /projects - should create a new test project', async () => {
+  test('POST /projects - should create a new test project', { skip: DOCKER_SKIP }, async () => {
     const res = await reqAuth('POST', '/projects', {
       name: 'Smoke Test Project',
       slug: testProjectSlug,
@@ -62,14 +64,14 @@ describe('Madar API Smoke Tests', () => {
     assert.strictEqual(data.project.status, 'running');
   });
 
-  test('GET /projects/:slug - should fetch the created project', async () => {
+  test('GET /projects/:slug - should fetch the created project', { skip: DOCKER_SKIP }, async () => {
     const res = await reqAuth('GET', `/projects/${testProjectSlug}`);
     assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
     const data = await res.json();
     assert.strictEqual(data.project.slug, testProjectSlug);
   });
 
-  test('DELETE /projects/:slug - should clean up the test project', async () => {
+  test('DELETE /projects/:slug - should clean up the test project', { skip: DOCKER_SKIP }, async () => {
     const res = await reqAuth('DELETE', `/projects/${testProjectSlug}`);
     assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
     const data = await res.json();

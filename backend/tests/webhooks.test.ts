@@ -21,6 +21,8 @@ import http from 'node:http';
 import { createHmac } from 'node:crypto';
 import { uniqueId, req, reqAuth, initTestAuth, authHeaders, liveUser, cleanupLiveUsers } from './helpers.ts';
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1';
+
 /** One captured delivery. */
 interface Capture {
   event: string;
@@ -159,7 +161,7 @@ describe('Webhooks & notifications', () => {
     assert.ok(!('secret' in found));
   });
 
-  test('created project fires an HMAC-signed "created" delivery', async () => {
+  test('created project fires an HMAC-signed "created" delivery', { skip: DOCKER_SKIP }, async () => {
     const slug = uniqueId('wh-created');
     createdSlugs.push(slug);
     const c = await reqAuth('POST', '/projects', { name: 'Webhook Created', slug, ports: [P1_PORT] });
@@ -172,7 +174,7 @@ describe('Webhooks & notifications', () => {
     assert.ok((cap.headers['user-agent'] as string)?.startsWith('Madar/'));
   });
 
-  test('snapshot capture-now fires a "snapshot-saved" delivery', async () => {
+  test('snapshot capture-now fires a "snapshot-saved" delivery', { skip: DOCKER_SKIP }, async () => {
     const slug = uniqueId('wh-snap');
     createdSlugs.push(slug);
     const c = await reqAuth('POST', '/projects', { name: 'Webhook Snap', slug, ports: [P2_PORT] });
@@ -188,7 +190,7 @@ describe('Webhooks & notifications', () => {
     assert.ok(verifySignature(cap, 's3cret-hmac-1'));
   });
 
-  test('stop then delete the project fire "stopped" and "deleted"', async () => {
+  test('stop then delete the project fire "stopped" and "deleted"', { skip: DOCKER_SKIP }, async () => {
     const slug = uniqueId('wh-stop');
     createdSlugs.push(slug);
     const c = await reqAuth('POST', '/projects', { name: 'Webhook Stop', slug });
@@ -204,7 +206,7 @@ describe('Webhooks & notifications', () => {
     await waitForEvent((p) => p.event === 'deleted' && p.slug === slug);
   });
 
-  test('event filtering: a crash-only webhook never receives lifecycle traffic', async () => {
+  test('event filtering: a crash-only webhook never receives lifecycle traffic', { skip: DOCKER_SKIP }, async () => {
     const r = await reqAuth('POST', '/webhooks', {
       name: 'Crash-only',
       url: hookUrl('/crash-only'),
@@ -245,7 +247,7 @@ describe('Webhooks & notifications', () => {
     await reqAuth('PUT', `/webhooks/${webhookId}`, { enabled: true, name: 'Suite hook', events: ['created', 'stopped', 'deleted', 'snapshot-saved', 'crash'] });
   });
 
-  test('manual Test endpoint: saved id and raw url modes, both hit the receiver', async () => {
+  test('manual Test endpoint: saved id and raw url modes, both hit the receiver', { skip: DOCKER_SKIP }, async () => {
     const t1 = await reqAuth('POST', '/webhooks/test', { id: webhookId });
     assert.strictEqual(t1.status, 200);
     const r1 = await t1.json();

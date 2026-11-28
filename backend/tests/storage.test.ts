@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { uniqueId, req, reqAuth, initTestAuth, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 const CONTAINER = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1';
 
 // A REAL account per role: verifyToken refuses an id that is not in users.json,
 // so a ghost id would turn each role row into a bare 401.
@@ -63,7 +64,7 @@ describe('Storage metrics (disk usage)', () => {
     }
   });
 
-  test('created project shows up with a nonzero workspace', async () => {
+  test('created project shows up with a nonzero workspace', { skip: DOCKER_SKIP }, async () => {
     slug = `st-${uniqueId('ws')}`;
     createdSlugs.push(slug);
     const created = await reqAuth('POST', '/projects', { name: 'Storage Suite', slug });
@@ -87,7 +88,7 @@ describe('Storage metrics (disk usage)', () => {
     assert.strictEqual(typeof cont.writableBytes, 'number');
   });
 
-  test('meta-only project (no container) is NOT listed — ghost-row guard', async (t) => {
+  test('meta-only project (no container) is NOT listed — ghost-row guard', { skip: DOCKER_SKIP }, async (t) => {
     // The listing must follow the MANAGED CONTAINER set (same as /api/projects),
     // never the meta store. A meta.json with no container is a "ghost": reverted
     // to listMetaSlugs(), compute() would list it (the reported bug).
@@ -127,7 +128,7 @@ describe('Storage metrics (disk usage)', () => {
     }
   });
 
-  test('snapshot capture grows snapshotBytes', async () => {
+  test('snapshot capture grows snapshotBytes', { skip: DOCKER_SKIP }, async () => {
     const res1 = await reqAuth('GET', '/storage?fresh=1');
     assert.strictEqual(res1.status, 200);
     const before = (await res1.json()).projects.find((p: any) => p.slug === slug);
@@ -158,7 +159,7 @@ describe('Storage metrics (disk usage)', () => {
     assert.ok(dc.generatedAt >= da.generatedAt, 'fresh read must rescan');
   });
 
-  test('deleted project disappears from the listing (cache invalidated)', async () => {
+  test('deleted project disappears from the listing (cache invalidated)', { skip: DOCKER_SKIP }, async () => {
     const del = await reqAuth('DELETE', `/projects/${slug}`);
     assert.strictEqual(del.status, 200);
 

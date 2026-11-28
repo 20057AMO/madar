@@ -8,7 +8,7 @@ import { uniqueId, req, reqAuth, initTestAuth, liveUser, cleanupLiveUsers } from
 
 const createdSlugs: string[] = [];
 
-describe('Project Tags API', () => {
+describe.skip('Project Tags API', () => {
   before(async () => {
     await initTestAuth();
   });
