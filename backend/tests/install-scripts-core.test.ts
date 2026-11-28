@@ -165,6 +165,7 @@ type StubOpts = {
   root?: boolean;
   detectedIp?: string;
   env?: Record<string, string>;
+  statOutput?: string;
 };
 
 function stubPrelude(tmp: string, log: string, opts: StubOpts): string {
@@ -180,6 +181,7 @@ function stubPrelude(tmp: string, log: string, opts: StubOpts): string {
     `STUB_STACK_RUNNING=${opts.stackRunning === false ? '0' : '1'}`,
     `STUB_BUSY_PORT=${bashQuote(opts.busyPort ?? '')}`,
     `STUB_DETECTED_IP=${bashQuote(opts.detectedIp ?? '')}`,
+    `STUB_STAT_OUTPUT=${bashQuote(opts.statOutput ?? '0 755')}`,
     `MADAR_SYSTEMD_PID1_DIR=${bashQuote(toBashPath(path.join(tmp, 'systemd-pid1')))}`,
     `MADAR_SYSTEMD_UNIT=${bashQuote(toBashPath(path.join(tmp, 'systemd-unit', 'madar.service')))}`,
     envLines,
@@ -201,6 +203,10 @@ function stubPrelude(tmp: string, log: string, opts: StubOpts): string {
     "curl() { stublog \"curl $*\"; printf '%s\\n' '{\"status\":\"ok\"}'; }",
     'systemctl() { stublog "systemctl $*"; }',
     `id() { stublog "id $*"; printf '%s\\n' '${uid}'; }`,
+    'stat() {',
+    '  stublog "stat $*"',
+    '  printf \'%s\\n\' "$STUB_STAT_OUTPUT"',
+    '}',
     'ip() {',
     '  stublog "ip $*"',
     '  if [[ -n "$STUB_DETECTED_IP" ]]; then',
@@ -352,6 +358,34 @@ describe('Madar install/uninstall scripts (offline)', () => {
       assert.match(unit, /^ExecStop=\/usr\/bin\/docker compose down$/m);
       assert.ok(!unit.includes('--build'), 'the oneshot unit must not rebuild on every boot');
     });
+  });
+
+  test('an unsafe systemd install directory is refused before compose or unit rendering', (t) => {
+    if (!bashAvailable()) {
+      t.skip('bash is not available on this host');
+      return;
+    }
+    const cases = [
+      { label: 'non-root owner', statOutput: '1000 755', detail: /uid=1000, mode=755/ },
+      { label: 'group-writable mode', statOutput: '0 777', detail: /uid=0, mode=777/ },
+    ];
+    for (const c of cases) {
+      withTemp((tmp) => {
+        const repo = makeRepo(tmp);
+        const log = path.join(tmp, 'stub.log');
+        fs.writeFileSync(log, '');
+        const result = runStubbed(INSTALL, ['--dir', toBashPath(repo)], tmp, log, { statOutput: c.statOutput });
+        assert.strictEqual(result.status, 1, `${c.label}: ${result.stdout}`);
+        assert.match(result.stderr, /المسار غير آمن لوحدة systemd التي تعمل كـroot/, c.label);
+        assert.match(result.stderr, c.detail, c.label);
+        assert.match(result.stderr, /رفض تثبيت\/تفعيل وحدة systemd بسبب مسار تثبيت غير آمن\./, c.label);
+        const calls = logLines(log);
+        assert.ok(calls.some((line) => line.startsWith('stat -c %u %a ')), `${c.label}: the directory guard was never reached`);
+        assert.ok(!hasComposeUp(calls), `${c.label}: compose ran despite the unsafe directory`);
+        assert.ok(!fs.existsSync(path.join(tmp, 'madar.service.stubbed.service')), `${c.label}: a unit was rendered`);
+        assert.ok(!fs.existsSync(path.join(repo, '.env')), `${c.label}: .env was created`);
+      });
+    }
   });
 
   test('repeat installs preserve .env byte-for-byte and the script never assigns JWT_SECRET', (t) => {
