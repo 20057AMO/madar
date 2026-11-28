@@ -34,7 +34,7 @@ jobs:
           for f in scripts/*.sh; do bash -n "$f"; done
 
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Private/organization installs that require a Gitleaks license must
