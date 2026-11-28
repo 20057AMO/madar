@@ -2,7 +2,7 @@
 # Dashboard (3000) + shared code-server IDE (8100) + opencode web (4096) + qwen3:30b chat (Ollama Cloud).
 
 # ---- Stage 1: build frontend ----
-FROM node:22-bookworm AS frontend-build
+FROM node:26-bookworm AS frontend-build
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --no-fund --no-audit
@@ -10,7 +10,7 @@ COPY frontend ./
 RUN npm run build
 
 # ---- Stage 2: build backend ----
-FROM node:22-bookworm AS backend-build
+FROM node:26-bookworm AS backend-build
 WORKDIR /src
 COPY backend/package.json backend/package-lock.json* ./
 RUN npm ci --no-fund --no-audit
@@ -18,7 +18,7 @@ COPY backend ./
 RUN npm run build
 
 # ---- Stage 3: runtime ----
-FROM node:22-bookworm
+FROM node:26-bookworm
 
 # Docker CLI (to manage project containers through the mounted socket)
 RUN apt-get update \
