@@ -64,6 +64,8 @@ import jwt from 'jsonwebtoken';
 import { execFileSync } from 'node:child_process';
 import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, API_URL, JSON_HEADERS, liveUser, cleanupLiveUsers } from './helpers.ts';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 const WRITE_AGENT = 'backend-developer'; // baked roster: permission.edit allow
 const READONLY_AGENT = 'code-reviewer'; // baked roster: permission.edit deny
 
@@ -148,7 +150,7 @@ function contOpencode(pid: string): void {
   }
 }
 
-describe('Opencode agent delegation (real Docker container)', () => {
+describe('Opencode agent delegation (real Docker container)', { skip: HEAVY_SKIP }, () => {
   const slugA = uniqueId('zde-a'); // editor member + viewer member â€” write-agent launch, history, 409
   const slugB = uniqueId('zde-b'); // viewer member only — readonly launch by a SYSTEM editor (the role bar, not membership)
   const slugC = uniqueId('zde-c'); // no members â€” concurrency-cap target (global editor), idle-state probe

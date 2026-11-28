@@ -5,6 +5,8 @@ import jwt from 'jsonwebtoken';
 import { execFileSync } from 'node:child_process';
 import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 /**
  * Project resource limits (CPU / memory):
  *  - PUT /api/projects/:slug/limits persists a validated set into meta
@@ -65,7 +67,7 @@ async function putLimits(slug: string, body: unknown): Promise<any> {
   return { status: r.status, json: await r.json() };
 }
 
-describe('Project resource limits (CPU/memory)', () => {
+describe('Project resource limits (CPU/memory)', { skip: HEAVY_SKIP }, () => {
   let p1 = '';
   let p2 = '';
   let viewerUser: any;

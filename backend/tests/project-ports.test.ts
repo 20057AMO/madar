@@ -5,6 +5,8 @@ import jwt from 'jsonwebtoken';
 import { execSync } from 'child_process';
 import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 /**
  * Project published-ports editing: PUT /api/projects/:slug/ports persists a
  * validated, conflict-checked port set into meta (applied on the next explicit
@@ -69,7 +71,7 @@ async function exportGzip(slug: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer());
 }
 
-describe('Project published-ports editing', () => {
+describe('Project published-ports editing', { skip: HEAVY_SKIP }, () => {
   let p1 = '';
   let p2 = '';
   let p3 = '';

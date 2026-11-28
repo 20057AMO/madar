@@ -43,13 +43,15 @@ const TMP = '/tmp/madar-ide-hardening-test';
 const SETTINGS = '/root/.local/share/code-server/User/settings.json';
 const DEAD_SETTINGS = '/root/.config/code-server/User/settings.json';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 /**
  * The installed Todo Tree manifest, resolved by GLOB rather than a pinned
  * version: the VSIX is digest-pinned upstream but its version moves, and a
  * hardcoded `...todo-tree-0.0.215/` would turn every bump into a false failure
  * (or, worse, a stale skip). Empty when the extension is absent.
  */
-const TODO_TREE_PKG = sh(
+const TODO_TREE_PKG = HEAVY_SKIP ? '' : sh(
   `ls -d /root/.local/share/code-server/extensions/gruntfuggly.todo-tree-* 2>/dev/null | head -1`,
 ).stdout.trim();
 
@@ -113,12 +115,12 @@ function hardenExit(out: Outcome): number {
   return m ? Number(m[1]) : -1;
 }
 
-const READY = inContainer(['test', '-x', SCRIPT]).code === 0;
-const SHIPPED_TREE = inContainer(['test', '-d', EXT_DIR]).code === 0;
+const READY = HEAVY_SKIP ? false : inContainer(['test', '-x', SCRIPT]).code === 0;
+const SHIPPED_TREE = HEAVY_SKIP ? false : inContainer(['test', '-d', EXT_DIR]).code === 0;
 
 // ── The live install (read-only) ────────────────────────────────────────────
 
-describe('IDE hardening — the shipped install', { skip: READY ? false : `${SCRIPT} is not installed in ${CONTAINER}` }, () => {
+describe('IDE hardening — the shipped install', { skip: HEAVY_SKIP || (READY ? false : `${SCRIPT} is not installed in ${CONTAINER}`) }, () => {
   test('the running image passes verify', () => {
     const out = harden('verify', CS_ROOT, '/opt/madar/ide-builtin');
     assert.strictEqual(
@@ -434,7 +436,7 @@ describe('IDE hardening — the shipped install', { skip: READY ? false : `${SCR
   });
 });
 
-describe('IDE hardening — boot sync stamp guard', { skip: inContainer(['test', '-f', '/app/entrypoint.sh']).code === 0 ? false : '/app/entrypoint.sh is missing' }, () => {
+describe('IDE hardening — boot sync stamp guard', { skip: HEAVY_SKIP || (inContainer(['test', '-f', '/app/entrypoint.sh']).code === 0 ? false : '/app/entrypoint.sh is missing') }, () => {
   test('a failed extension install or verify keeps the previous ide-sync stamp', () => {
     const src = sh(`sed -n '/^ide_sync_managed_files()/,/^}/p' /app/entrypoint.sh`);
     assert.strictEqual(src.code, 0, src.stderr);
@@ -519,7 +521,7 @@ const ROOT = `${TMP}/cs`;
 const SAVED = `${TMP}/saved`;
 const GH = `${ROOT}/lib/vscode/node_modules/@github`;
 
-describe('IDE hardening — enforcement (synthetic tree)', { skip: READY && SHIPPED_TREE ? false : 'needs the script and a shipped tree in the container' }, () => {
+describe('IDE hardening — enforcement (synthetic tree)', { skip: HEAVY_SKIP || (READY && SHIPPED_TREE ? false : 'needs the script and a shipped tree in the container') }, () => {
   before(() => {
     const out = sh(BUILD, 120_000);
     assert.strictEqual(out.code, 0, `could not build the synthetic tree: ${out.stderr}`);

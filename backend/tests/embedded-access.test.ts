@@ -77,6 +77,8 @@ import {
 import { EMBEDDED_PROBE_TIMEOUT_MS } from '../src/services/embedded-status-probe.ts';
 import { HOST_PATH_REDACTED } from '../src/services/workspaces-mount-core.ts';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 // ── Container / filesystem helpers (the repo's docker-exec convention) ──────
 
 const CONTAINER = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
@@ -451,7 +453,7 @@ let sessionCountBeforeRefusal: number | null = null;
 
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live container)', () => {
+describe('Embedded surfaces — IDE / opencode status + opencode/open gate (live container)', { skip: HEAVY_SKIP }, () => {
   before(async () => {
     auditWindowStart = Date.now();
     await initTestAuth();

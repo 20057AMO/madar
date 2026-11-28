@@ -6,6 +6,8 @@ import net from 'net';
 import { execFileSync } from 'child_process';
 import { uniqueId, reqAuth, initTestAuth } from './helpers.ts';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 const CONTAINER = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
 const PORTS_IN_USE = 'One or more requested ports are already in use by another project or service.';
 
@@ -66,7 +68,7 @@ function cleanupTestProject(slug: string): void {
   } catch { /* best effort */ }
 }
 
-describe('Project lifecycle (real Docker container)', () => {
+describe('Project lifecycle (real Docker container)', { skip: HEAVY_SKIP }, () => {
   before(async () => { await initTestAuth(); });
 
   const slug = uniqueId('lc-test');
@@ -187,7 +189,7 @@ describe('Project lifecycle (real Docker container)', () => {
 
 });
 
-describe('Project lifecycle rollback (real Docker container)', () => {
+describe('Project lifecycle rollback (real Docker container)', { skip: HEAVY_SKIP }, () => {
   before(async () => { await initTestAuth(); });
 
   const rollbackSlug = uniqueId('lc-rollback');
@@ -268,7 +270,7 @@ describe('Project lifecycle rollback (real Docker container)', () => {
   });
 });
 
-describe('Project duplicate (real Docker container)', () => {
+describe('Project duplicate (real Docker container)', { skip: HEAVY_SKIP }, () => {
   const srcSlug = uniqueId('dup-src');
   const copySlug = uniqueId('dup-copy');
   let srcCreated = false;

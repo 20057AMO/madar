@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import { execSync, execFileSync } from 'node:child_process';
 import { uniqueId, req, reqAuth, initTestAuth, JWT_SECRET, authHeaders, liveUser, cleanupLiveUsers } from './helpers.ts';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 /**
  * Project static-site serve (`python3 -m http.server <port> -d /workspace`
  * inside the project container):
@@ -85,7 +87,7 @@ async function hostGet(port: number, retries = 8): Promise<{ status: number; bod
   return last;
 }
 
-describe('Project static-site serve (python3 http.server)', () => {
+describe('Project static-site serve (python3 http.server)', { skip: HEAVY_SKIP }, () => {
   let p1 = '';
   let p2 = '';
   let marker = '';

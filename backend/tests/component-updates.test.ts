@@ -77,6 +77,8 @@ import jwt from 'jsonwebtoken';
 
 import { API_URL, JWT_SECRET, authHeaders, initTestAuth, liveUser, cleanupLiveUsers, req, reqAuth, uniqueId } from './helpers.ts';
 
+const HEAVY_SKIP = process.env.WSD_TEST_DOCKER_HEAVY === '1' && process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER_HEAVY=1 + WSD_TEST_DOCKER=1';
+
 const CONTAINER = 'wsd-pro';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MOCK_PORTS = Array.from({ length: 11 }, (_, i) => 8987 + i);
@@ -671,7 +673,7 @@ async function liveCodeServerVersion(): Promise<string> {
 
 // ── the suite ───────────────────────────────────────────────────────────────
 
-describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', () => {
+describe('Unified component updates (Real Docker, mock GitHub/npm/deb)', { skip: HEAVY_SKIP }, () => {
   before(async () => {
     // node:test has NO default timeout on hooks: a stuck docker recreate (slow
     // disk, hung compose pull, container that never becomes healthy) would hang
