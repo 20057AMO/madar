@@ -17,12 +17,10 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import WebSocket from 'ws';
-import { uniqueId, initTestAuth, signTestToken, reqAuth, API_URL } from './helpers.ts';
+import { uniqueId, initTestAuth, signTestToken, reqAuth, API_URL, WS_URL } from './helpers.ts';
 
 // ── Constants ──────────────────────────────────────────────────
-const WS_BASE = (process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api')
-  .replace('/api', '')
-  .replace(/^http/, 'ws');
+const WS_BASE = WS_URL;
 const CHAT_BASE = '/chat-team';
 const IS_TESTING = process.env.WSD_TESTING === '1';
 // Adaptive pacing: under production limits, slow down to stay under 240/min.
