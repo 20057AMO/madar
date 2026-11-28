@@ -1,14 +1,12 @@
-import { test, describe, before, after } from 'node:test';
+import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
 import jwt from 'jsonwebtoken';
 import type { Res } from './helpers.ts';
-import type { TestServer } from './test-server-helper.ts';
 import { currentTotp } from '../src/services/totp.ts';
 
 let h: typeof import('./helpers.ts');
 let apiUrl = '';
 let jwtSecret = '';
-let server: TestServer | undefined;
 
 // The 10/min-per-IP auth limiter is shared with every other suite (and can
 // still be draining from a previous run's window). Back off on exact
@@ -28,18 +26,10 @@ async function postWithBackoff(path: string, body: unknown, headers: Record<stri
 
 describe('Auth & access control', () => {
   before(async () => {
-    if (process.env.WSD_TEST_IN_PROCESS === '1') {
-      const { startTestServer } = await import('./test-server-helper.ts');
-      server = await startTestServer();
-    }
     h = await import('./helpers.ts');
     apiUrl = h.API_URL;
     jwtSecret = h.JWT_SECRET;
     await h.initTestAuth();
-  });
-
-  after(async () => {
-    if (server) await server.stop();
   });
 
   test('GET /auth/status is public and reports hasUser', async () => {
@@ -126,7 +116,7 @@ describe('Auth & access control', () => {
     const editorUser = `login-ed-${suffix}`;
     const viewerUser = `login-vw-${suffix}`;
     const pw = 'Pass-1234-x';
-    const doTotpJourney = !!process.env.WSD_TEST_ACCOUNT_PASSWORD || !!server;
+    const doTotpJourney = !!process.env.WSD_TEST_ACCOUNT_PASSWORD;
     const loginUser = (u: string) => postWithBackoff('/auth/login', { username: u, password: pw });
 
     const created: string[] = [];

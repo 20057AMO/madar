@@ -4,58 +4,35 @@
  * relative imports must include the explicit `.ts` extension.
  */
 import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import { execFileSync } from 'child_process';
-import dotenv from 'dotenv';
-import { classifyJwtSecret } from '../src/services/jwt-secret-core.ts';
+import { classifyJwtSecret, describeJwtSecretRejection } from '../src/services/jwt-secret-core.ts';
 
-// Load secrets: repo-root .env first, then backend/.env (no override).
-// Tests run with cwd = backend/, so the root .env is one level up.
-const rootEnv = path.resolve(process.cwd(), '..', '.env');
-if (fs.existsSync(rootEnv)) dotenv.config({ path: rootEnv });
-dotenv.config();
-
-export const API_URL = process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api';
-
-/**
- * The signing secret the server actually uses, resolved the same way the
- * server does — there is no in-repo default to fall back on any more, so a
- * helper that invented one would only produce 401s:
- *   1. JWT_SECRET in the environment (CI, and the documented repo-root `.env`
- *      contract, both of which the server sees too).
- *   2. The secret the container generated and persisted at /app/data/jwt.secret
- *      — read through the local docker daemon, which is already a prerequisite
- *      for every live suite. Override the container with WSD_TEST_CONTAINER.
- *   3. A random per-process value plus a loud warning, so a missing step fails
- *      visibly instead of quietly signing with a public literal.
- */
-function resolveServerJwtSecret(): string {
-  const configured = (process.env.JWT_SECRET || '').trim();
-  if (classifyJwtSecret(configured) === null) return configured;
-
-  const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
-  try {
-    const fromContainer = execFileSync('docker', ['exec', container, 'cat', '/app/data/jwt.secret'], {
-      encoding: 'utf8',
-      timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (classifyJwtSecret(fromContainer) === null) return fromContainer;
-  } catch { /* no docker / no container / no persisted secret */ }
-
-  const random = `suite-only-${crypto.randomBytes(16).toString('hex')}`;
-  console.warn(
-    `[helpers] Could not resolve the server JWT signing secret: JWT_SECRET is not set in this ` +
-    `environment and 'docker exec ${container} cat /app/data/jwt.secret' did not answer. ` +
-    `Forged tokens will be REFUSED by the server — set JWT_SECRET (same value the server uses) ` +
-    `or point WSD_TEST_CONTAINER at the running app container.`,
-  );
-  return random;
+function requireHarnessUrl(name: string): string {
+  const value = (process.env[name] ?? '').trim();
+  if (!value) {
+    throw new Error(
+      `[helpers] ${name} is missing or blank. Run \`npm test\` from backend/ so the isolated harness ` +
+      `starts its own server; do not point tests at a manually started server.`,
+    );
+  }
+  return value;
 }
 
-export const JWT_SECRET = resolveServerJwtSecret();
+export const API_URL = requireHarnessUrl('WSD_TEST_API_URL');
+export const WS_URL = requireHarnessUrl('WSD_TEST_WS_URL').replace(/\/+$/, '');
+
+function requireHarnessJwtSecret(): string {
+  const configured = (process.env.JWT_SECRET ?? '').trim();
+  const rejection = classifyJwtSecret(configured);
+  if (rejection !== null) {
+    throw new Error(
+      `[helpers] JWT_SECRET from the test harness is ${describeJwtSecretRejection(rejection)}. ` +
+      `Run \`npm test\` from backend/ so the harness supplies a strong signing secret.`,
+    );
+  }
+  return configured;
+}
+
+export const JWT_SECRET = requireHarnessJwtSecret();
 
 export const JSON_HEADERS: Record<string, string> = { 'Content-Type': 'application/json' };
 
@@ -108,7 +85,7 @@ async function ensureSession(): Promise<void> {
         // The auth scope is 10 password verifications/min/IP and stays at that
         // value even under WSD_TESTING=1, so a suite that starts inside a window
         // another suite just opened gets 429. Honour Retry-After and try again
-        // rather than silently falling through to the container fallback.
+        // rather than silently falling through to an unresolved identity.
         let loginRes: Response | null = null;
         let loginData: any = null;
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -131,10 +108,9 @@ async function ensureSession(): Promise<void> {
           break;
         }
       }
-      if (!_userId) resolveIdentityFromContainer();
     }
   } catch {
-    // Server might not be running yet; keep the unresolved placeholders.
+    // The harness server may be unreachable; signTestToken() reports the unresolved identity.
   }
   _initialized = true;
 }
@@ -151,8 +127,9 @@ export function signTestToken(expiresIn = '24h'): string {
   if (!_userId) {
     throw new Error(
       '[helpers] No real user id was resolved, so no session can be signed. initTestAuth() must run ' +
-      'with the API reachable (http://127.0.0.1:3000/api) and either WSD_TEST_USER/WSD_TEST_PASS or ' +
-      'a working test-admin password. Forging a token for an invented id no longer authenticates.',
+      `against the harness server at ${API_URL} (WSD_TEST_API_URL), with either WSD_TEST_USER/WSD_TEST_PASS ` +
+      'or a working test-admin password. Run `npm test` from backend/ to start that server. ' +
+      'Forging a token for an invented id no longer authenticates.',
     );
   }
   return jwt.sign(
@@ -171,51 +148,6 @@ export function testUserId(): string | null {
 export function testIdentity(): { id: string; username: string; role: string; tv: number } | null {
   if (!_userId) return null;
   return { id: _userId, username: _username, role: _userRole, tv: _tv };
-}
-
-/**
- * Last-resort identity resolution for a dev box with no test credentials: read
- * the FIRST account (id / username / role only — never the password hash) out
- * of the running container's users.json through the local docker daemon, the
- * same way resolveServerJwtSecret() reads data/jwt.secret. A REAL id is what
- * the server now requires; inventing one no longer authenticates.
- */
-function resolveIdentityFromContainer(): boolean {
-  const container = process.env.WSD_TEST_CONTAINER || 'wsd-pro';
-  // Retry with a growing budget: `docker exec` is not free, and in the documented
-  // one-process full run it shares the daemon with suites that are creating and
-  // destroying containers. A single 5s timeout here used to be enough to make the
-  // whole identity unresolved, which then threw from EVERY signTestToken() call in
-  // the next suite — a cascade that looked like dozens of unrelated failures.
-  const attempts = [
-    { timeout: 15_000 },
-    { timeout: 30_000 },
-    { timeout: 30_000 },
-  ];
-  for (const { timeout } of attempts) {
-    try {
-      const raw = execFileSync('docker', ['exec', container, 'cat', '/app/data/users.json'], {
-        encoding: 'utf8',
-        timeout,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const parsed = JSON.parse(raw) as { users?: Array<{ id?: string; username?: string; role?: string; tokenVersion?: number }> };
-      const first = parsed.users?.find((u) => u?.id);
-      if (!first?.id) return false;
-      _userId = first.id;
-      _username = String(first.username || '');
-      _userRole = String(first.role || 'admin');
-      _tv = Number(first.tokenVersion || 0);
-      console.warn(
-        `[helpers] No test credentials resolved a session; adopted the first account (${_username}) from ` +
-        `'docker exec ${container} cat /app/data/users.json'. Set WSD_TEST_USER/WSD_TEST_PASS to avoid this.`,
-      );
-      return true;
-    } catch {
-      // Retry: a busy daemon answers slower, it does not refuse.
-    }
-  }
-  return false;
 }
 
 /**
