@@ -1,93 +1,96 @@
 # دليل اختبارات الخلفية — Backend Tests Guide
 
-كل الاختبارات تعمل بمشغّل Node الأصلي (`node --test`) مع تفريغ أنواع TypeScript — لا حاجة لـ ts-node ولا vitest. النص المختصر في `backend/package.json`:
+`cd backend && npm test` يستخدم مشغّلًا معزولًا (`backend/tests/run-npm-test.mjs`)؛ لا يفترض خادمًا يعمل على `3000`. المشغّل يبني السيرفر مرة، يشغّل نسخة واحدة بـ `PORT=0` و`HOST=127.0.0.1`، يقرأ المنفذ الفعلي من `[Madar] TEST_API_PORT=...`، ينتظر `/api/health`، ثم يشغّل السوتات تسلسليًا عبر `node --test --test-concurrency=1`. بعد الانتهاء يوقف الخادم ويمسح مجلداته المؤقتة.
 
 ```bash
-# كل السوتات، تسلسليًا (مطلوب — السوتات تتشارك خادمًا واحدًا وميزانيات معدل)
-cd backend && npm test          # node --test --test-concurrency=1 "tests/**/*.test.ts"
+# Default: all suites; Docker suites skip unless you opt in
+cd backend && npm test
 
-# سوتة واحدة فقط (الأسرع أثناء التطوير)
-cd backend && node --test --test-concurrency=1 tests/project-canvas.test.ts
+# Single suite — pass the path through npm
+cd backend && npm test -- tests/project-canvas.test.ts
 ```
+
+لا تضبط `WSD_TEST_API_URL` أو `WSD_TEST_WS_URL` أو `JWT_SECRET` يدويًا لهذا التشغيل؛ المشغّل يولّدها لكل تشغيل. أي سوتة تستورد `./helpers.ts` يجب أن تمر عبر `npm test`.
 
 ---
 
 ## فئات السوتات — Suite categories
 
-| الفئة | كيف تتعرّف عليها | المتطلبات |
+| الفئة | كيف تتعرّف عليها | الافتراضي |
 |---|---|---|
-| **وحدات نقية** (Pure units) | تنتهي بـ `-core.test.ts` أو لا تستورد `./helpers.ts` (مثل `chat-format`, `crypto`, `janitor`, `ws-gate`, `security-scrub`, `opencode-rollback`, `chat-team-bot`) | لا شيء — تعمل في أي مكان، أقل من ثوانٍ |
-| **HTTP ضد خادم حي** | تستورد `./helpers.ts` (`auth`, `projects.lifecycle`, `project-notes`, `team-access`, …) | خادم Madar يعمل على `API_URL` + `JWT_SECRET` مطابق |
-| **HTTP + حاويات Docker حقيقية** | فئة HTTP السابقة، لكنها تنشئ مشاريع فعلية فتدور حاويات عمل (`project-limits`, `project-ports`, `project-serve`, `project-reviews`, `opencode-delegate`, `opencode-purge`, `chat-team-api`, `archive-api`, `webhooks`, `stress`, …) | Docker يعمل + مساحة قرص كافية |
-| **ذاتية القيادة** (Self-driving) | `component-updates.test.ts` فقط | Docker + Compose — انظر القسم الخاص أدناه |
-| **E2E بالمتصفح** | `e2e/*.py` (Playwright بـ Python) | خادم يعمل على `127.0.0.1:3000` + `playwright` و Chromium |
-
-القاعدة العامة: أي سوتة تستورد `helpers.ts` تحتاج خادمًا حيًا — اختبار واحد بدون خادم سيُخفق بالاتصال وليس بالمنطق.
+| وحدات نقية | تنتهي بـ `-core.test.ts` أو لا تستورد `./helpers.ts` | تعمل ضمن المشغّل بدون Docker |
+| HTTP معزول | تستورد `./helpers.ts` | المشغّل يوفر URL/WS وسر التوقيع وبيانات مؤقتة |
+| Docker خفيف | الشرط `process.env.WSD_TEST_DOCKER === '1'` | يُتخطّى افتراضيًا؛ يحتاج Docker وله صلاحية إنشاء حاويات مشاريع |
+| Docker ثقيل | الشرط `WSD_TEST_DOCKER_HEAVY === '1'` مع `WSD_TEST_DOCKER === '1'` | يُتخطّى افتراضيًا؛ قد يغيّر حالة `wsd-pro` الحقيقية |
+| E2E متصفح | `e2e/*.py` | خارج `npm test`؛ خادم منفصل على `127.0.0.1:3000` |
 
 ---
 
 ## متغيرات البيئة — Environment variables
 
-يُحمَّل `.env` من جذر المستودع ثم `backend/.env` (بدون تجاوز). الأهم:
-
-| المتغير | الافتراضي | ملاحظات |
+| المتغير | الافتراضي | التأثير |
 |---|---|---|
-| `WSD_TEST_API_URL` | `http://127.0.0.1:3000/api` | **اتركه فارغًا** إلا إذا كان خادمك حقًا على منفذ آخر. تنبيه `component-updates`: الحاوية تُنشر دائمًا على منفذ 3000 عبر compose، لذا توجيه هذا المتغير إلى منفذ معزول (مثل 3100) يجعل `pollHealth` يفحص المنفذ الخطأ ويُخفق التهيئة رغم أن الحاوية سليمة |
-| `JWT_SECRET` | — | يجب أن يطابق سر الخادم الحي (من `.env` الجذر). يُستخدم لتوقيع رموز اختبارية بدل كلمات المرور الحقيقية |
-| `WSD_TEST_ACCOUNT_PASSWORD` | `test-password-123` | كلمة مرور أول مدير موجود، للسوتات التي تسجّل دخولًا فعليًا |
-| `WSD_TESTING` | *(يضبطها الاختبار داخل الحاوية)* | `component-updates` يعيد إنشاء الحاوية بـ `WSD_TESTING=1` لرفع ميزانيات المعدل، ثم يستعيدها إلى `0` في `after()` |
+| `WSD_TEST_DOCKER` | `0` | ضعه `1` لتشغيل سوتات Docker الخفيفة؛ مطلوب أيضًا للسوتات الثقيلة |
+| `WSD_TEST_DOCKER_HEAVY` | `0` | مع `WSD_TEST_DOCKER=1` يشغّل السوتات الثقيلة |
+| `WSD_TEST_ACCOUNT_PASSWORD` | `test-password-123` | كلمة مرور حساب الاختبار للسوتات التي تسجّل دخولًا فعليًا؛ بعضها يتخطّى نفسها إن لم تُضبط صراحةً |
+| `WSD_TEST_USER` / `WSD_TEST_PASS` | غير مضبوطين | زوج تسجيل دخول حقيقي اختياري لهذه السوتات |
+| `WSD_TEST_HARNESS_DEBUG` | غير مضبوط | `1` يطبع ملخص البيئة المحلّولة (بدون قيم الأسرار) |
+
+يدير المشغّل أيضًا `PORT`, `HOST`, `JWT_SECRET`, `WSD_TEST_API_URL`, `WSD_TEST_WS_URL`, `WSD_TESTING`, `WSD_DATA_DIR`, `WSD_PROJECTS_DIR`, `WSD_EMBED_PROXY_PORT` و`OPENCODE_CONFIG_DIR`؛ يستعيد قيمك الأصلية بعد التشغيل.
 
 ---
 
-## component-updates.test.ts — السوتة ذاتية القيادة
+## بوابات Docker — Opt-in gates
 
-السوتة الوحيدة التي **تُعيد تشكيل بيئتك**: قبل أي تشغيل تأكّد أن الحاوية `wsd-pro` موجودة و Docker Desktop يعمل.
+```bash
+# خفيف: ينشئ حاويات مشاريع فعلية
+cd backend && WSD_TEST_DOCKER=1 npm test -- tests/project-notes.test.ts
+
+# ثقيل: قد يعيد إنشاء wsd-pro ويغيّر حالته — استخدمه على بيئة قابلة للاستهلاك فقط
+cd backend && WSD_TEST_DOCKER=1 WSD_TEST_DOCKER_HEAVY=1 npm test -- tests/ide-hardening.test.ts
+```
+
+السوتات الثقيلة حاليًا: `component-updates`, `embedded-access`, `ide-hardening`, `opencode-delegate`, `project-limits`, `project-ports`, `project-serve`, `projects.lifecycle`. لا تُضمن ضمن التشغيل الافتراضي.
+
+### component-updates.test.ts — Docker-heavy
+
+هذه السوتة تستهدف الحاوية `wsd-pro` نفسها. قبل أي تشغيل تأكد أن Docker Desktop يعمل والحاوية موجودة.
 
 ما تفعله:
 
-1. ترفع خادم Mock على `0.0.0.0:8987..8997` (يحاكي GitHub Releases + npm registry).
-2. تعيد إنشاء الحاوية عبر `docker compose up -d` بمتغيرات `WSD_UPDATE_*` موجهة للموك + `WSD_TESTING=1`.
-3. تُنشئ حساب مدير مؤقتًا وتوقّع JWT بسر المستودع.
-4. تُنسخ احتياطيًا نسخة code-server الأساسية **بالداخل** (`tar` داخل الحاوية) — لأن `docker cp` لا ينقل symlinks على Windows.
-5. تبني حزم `code-server` مزيفة بـ `dpkg-deb` داخل الحاوية وتختبر الترقية/الفشل/الاسترجاع/البوابة.
-6. في `after()` تُعيد كل شيء: code-server الأساسي، البيئة الافتراضية، حذف المدير المؤقت، وتتحقق من صحة `/api/updates` النهائية.
+1. ترفع خادم Mock على `0.0.0.0:8987..8997` لـ GitHub Releases وnpm registry وتنزيل `.deb`.
+2. تعيد إنشاء حاوية `app` عبر `docker compose up -d --no-deps app` مع متغيرات `WSD_UPDATE_*` موجهة للموك.
+3. تُنشئ حساب مدير مؤقتًا وتوقّع JWT بسر المشغّل، ثم تختبر الترقية والفشل والاسترجاع والبوابة.
+4. تُنسخ احتياطيًا نسخة code-server الأساسية داخل الحاوية (`tar`) لأن `docker cp` لا ينقل symlinks على Windows.
+5. في `after()` تستعيد النسخة وإعداد compose السابق وتحذف المدير المؤقت.
 
-- **المدة المتوقعة:** 5–10 دقائق (يغلبها النسخ الاحتياطي 429 MB وإعادة إنشاء الحاوية مرتين).
-- **بقية السوتات لا تمس `wsd-pro`** — تتعامل مع حاويات المشاريع فقط.
-- إذا خفق `before()` فسيُظهر السبب الجذري مباشرة، وإذا خفقت خطوة استعادة في `after()` فستُبلغ `(root cause: …)` بدل خطأ `no fs backup` المضلل القديم.
-
-### متطلبات دقيقة
-
-- Docker Desktop (WSL2 backend على Windows) مع `docker compose` v2.
-- منفذ 3000 حرًا ومرتبطًا بالحاوية (إعداد compose الافتراضي) ومنفذ 4097 لوكيل VS Code/OpenCode المصادَق؛ لا توجد منافذ خام 8100/4096، والأسطح المدمجة تُوصَل عبر الوكيل فقط.
-- ملف `.env` في جذر المستودع يحوي `JWT_SECRET` و `WSD_WORKSPACES_HOST_DIR` — نفس متطلبات تشغيل الخادم.
-- الوصول من الحاوية إلى `host.docker.internal` (يوفره `extra_hosts` في compose). فشل شبكي عابر هنا يظهر مرة كل فترة — أعد المحاولة مرة واحدة قبل البحث عن مشكلة حقيقية.
+هذه السوتة تغيّر حالة حقيقية؛ إذا انقطعت قبل `after()` تحقّق يدويًا من سلامة الحاوية وإعداداتها. بقية السوتات الثقيلة قد تلمس `wsd-pro` أيضًا حسب بوابتها.
 
 ---
 
 ## ملاحظات Windows (Git Bash)
 
-- شغّل السوتات **تسلسليًا دائمًا** (`--test-concurrency=1` مضبوط في `npm test`) — عدة سوتات تتشارك خادمًا واحدًا وميزانيات معدل، والتوازي يسبب 429s كاذبة.
-- إذا بدت `before()` معلّقة: لها مؤقت ميزانية (10 دقائق) يُفشلها مع السبب الجذري بدل التعليق إلى الأبد — لا حاجة لقتل العملية يدويًا.
-- لا تستخدم `docker cp` لنقل أشجار فيها symlinks من الحاوية إلى Windows — هذا سبب اعتماد النسخ الاحتياطي على `tar` داخل الحاوية.
-- بعد أي تشغيل متقطع (Ctrl+C خلال `component-updates`)، تأكد يدويًا أن الحاوية سليمة: `docker exec wsd-pro code-server --version` يجب أن يُظهر إصدار الصورة الأساسي، و `WSD_TESTING` داخل الحاوية يجب أن يكون `0`.
+- شغّل السوتات تسلسليًا دائمًا؛ `npm test` يضبط `--test-concurrency=1` لأن السوتات تتشارك خادمًا واحدًا وميزانيات معدل.
+- إذا بدت `before()` في سوتة ثقيلة معلّقة: لها مؤقت ميزانية يُفشلها مع السبب الجذري بدل التعليق إلى الأبد.
+- لا تستخدم `docker cp` لنقل أشجار فيها symlinks من الحاوية إلى Windows.
+- بعد أي تشغيل متقطع لسوتة ثقيلة، تحقّق من `wsd-pro` يدويًا؛ المشغّل ينظّف خادمه وبياناته المؤقتة فقط.
 
 ---
 
 ## e2e/ — اختبارات المتصفح (Python)
 
-ثلاثة سكربتات Playwright (`limits_ui.py`, `chat_responsive_ui.py`, `reviews_ui.py`) ضد خادم يعمل على `127.0.0.1:3000`. تسجّل جلسة مدير برمز JWT موقّع بـ `JWT_SECRET` من المستودع (نفس خدعة `helpers.ts`) فلا تحتاج كلمة مرور حقيقية:
+سكربتات Playwright (`limits_ui.py`, `chat_responsive_ui.py`, `reviews_ui.py`) تعمل ضد خادم منفصل على `127.0.0.1:3000`؛ ليست جزءًا من `npm test`. تسجّل جلسة مدير برمز JWT موقّع بـ `JWT_SECRET` من البيئة أو `.env` الجذر، لذا يجب أن يطابق سر الخادم الهدف.
 
 ```bash
 cd backend/tests && python e2e/limits_ui.py
 ```
 
-المطلوب: Python 3 مع حزمة `playwright` ومتصفح Chromium مثبتان (`pip install playwright && playwright install chromium`).
+المطلوب: Python 3 مع `playwright` وChromium (`pip install playwright && playwright install chromium`). يمكن توجيه السكربتات إلى عنوان آخر عبر `WSD_E2E_BASE`.
 
 ---
 
 ## الاصطلاحات — Conventions
 
-- كل سوتة تنظّف ما تُنشئه في `after()` (مشاريع، مستخدمون مؤقتون، حالة الحاوية) — لا تعتمد على بقايا تشغيل سابق ولا تتركها.
-- اللاحقة `-core` = وحدات نقية تُختبر منطق الخدمة بدون I/O؛ نسختها `-api`/الكاملة تختبر نفس المنطق عبر HTTP الحقيقي.
-- الاختبارات تستخدم أسماء فريدة (`uniqueId`) كي تعمل على خادم ببيانات حقيقية دون تصادم.
+- السوتات التي تنشئ مستخدمين أو مشاريع تنظّفهم في `after()`؛ المشغّل ينظّف خادمه وبياناته المؤقتة في `finally` وعند الإشارات.
+- اللاحقة `-core` = وحدات نقية تُختبر منطق الخدمة بدون I/O؛ نسختها `-api`/الكاملة تختبر نفس المنطق عبر HTTP المعزول.
+- السوتات تستخدم `uniqueId` كي لا تتصادم أثناء التشغيل التسلسلي داخل بيانات الاختبار المؤقتة.

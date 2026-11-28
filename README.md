@@ -258,13 +258,18 @@ code-server مدمج في واجهة الويب، وOpenCode Web UI، كلاهم
 docker compose build app && docker compose up -d app
 ```
 
-### الاختبارات
+### الاختبارات — Tests
+`cd backend && npm test` يستخدم مشغّلًا معزولًا: يبدأ خادمًا على منفذ عشوائي (`127.0.0.1`) ببيانات وأسرار مؤقتة، ثم يشغّل السوتات تسلسليًا. لا تحتاج لتشغيل خادم على `3000` ولا لضبط `JWT_SECRET` أو `WSD_TEST_API_URL` يدويًا.
+
 ```bash
-# تشغيل كامل الاختبارات (الخادم يجب أن يعمل على المنفذ 3000)
+# التشغيل الافتراضي: كل السوتات غير المرتبطة بـ Docker
 cd backend && npm test
+
+# سوتة واحدة
+cd backend && npm test -- tests/project-canvas.test.ts
 ```
 
-الاختبارات تعمل بشكل تسلسلي — التشغيل المتزامن قد يُثيّر rate limiter. الحزمة الكاملة تحتاج بيئة `WSD_TESTING=1`؛ حاوية التطوير الافتراضية تستخدم `WSD_TESTING=0` وقد تُنتج `429` في اختبارات إنشاء المشاريع. داخلها شغّل اختبارات `*-core.test.ts` فقط.
+سوتات Docker الخفيفة تحتاج `WSD_TEST_DOCKER=1`، والثقيلة تحتاج `WSD_TEST_DOCKER=1 WSD_TEST_DOCKER_HEAVY=1` وقد تغيّر حالة `wsd-pro` الحقيقية. سكربتات E2E بـ Python تعمل منفصلة ضد خادم على `127.0.0.1:3000` وليست جزءًا من `npm test`. التفاصيل والفئات الكاملة في [backend/tests/README.md](backend/tests/README.md).
 
 ### أوامر مفيدة
 ```bash
