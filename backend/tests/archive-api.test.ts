@@ -167,9 +167,11 @@ async function createProjectRetry(
   return last;
 }
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
 // ── Suite ────────────────────────────────────────────────────────
 
-describe('Trash Bin API (archive) — real Docker', () => {
+describe('Trash Bin API (archive) — real Docker', { skip: DOCKER_SKIP }, () => {
   const E1 = uniqueId('trash-a'); // e.g. m1abc2def-trash-a  (will be a canonical ts-slug form)
   const E2 = uniqueId('trash-b');
   const E3 = uniqueId('trash-c');

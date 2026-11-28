@@ -12,7 +12,9 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import { uniqueId, reqAuth, initTestAuth } from './helpers.ts';
 
-describe('Project Notes', () => {
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Project Notes', { skip: DOCKER_SKIP }, () => {
   before(async () => { await initTestAuth(); });
 
   const slug = uniqueId('notes-test');

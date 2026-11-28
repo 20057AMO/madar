@@ -93,7 +93,9 @@ async function createProject(body: Record<string, unknown>): Promise<CallResult>
   return last;
 }
 
-describe('Planning suggestions (real Docker container)', () => {
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Planning suggestions (real Docker container)', { skip: DOCKER_SKIP }, () => {
   let slug = '';
   let missingSlug = '';
   let editorId = '';

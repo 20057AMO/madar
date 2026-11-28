@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
 import WebSocket from 'ws';
@@ -47,6 +47,9 @@ async function api(method: string, urlPath: string, body?: unknown): Promise<{ s
   return { status: res.status, json };
 }
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Project canvas (real Docker)', { skip: DOCKER_SKIP }, () => {
 before(async () => {
   await initTestAuth();
 });
@@ -613,4 +616,5 @@ test('canvas presence: roster broadcast + cursor relay between two clients', asy
     for (const s of [wsA, wsB]) { try { s?.close(); } catch { /* already gone */ } }
     try { await reqAuth('DELETE', `/users/${peer.id}`); } catch { /* cleanup best-effort */ }
   }
+});
 });

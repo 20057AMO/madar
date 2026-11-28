@@ -1,8 +1,8 @@
-import { test, before, after } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
 import WebSocket from 'ws';
-import { reqAuth as rawReqAuth, req as rawReq, uniqueId, initTestAuth, JWT_SECRET, signTestToken, API_URL, testIdentity } from './helpers.ts';
+import { reqAuth as rawReqAuth, req as rawReq, uniqueId, initTestAuth, JWT_SECRET, signTestToken, API_URL, WS_URL, testIdentity } from './helpers.ts';
 
 /**
  * Suite-local 429 backoff, the same convention as auth / team-access /
@@ -41,9 +41,7 @@ const req: typeof rawReq = (m, p, b, h) => withBackoff(() => rawReq(m, p, b, h))
  * broadcast to outsiders by design, so they cannot prove the filter).
  */
 const chatBase = '/chat-team';
-const WS_BASE = (process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api')
-  .replace('/api', '')
-  .replace(/^http/, 'ws');
+const WS_BASE = WS_URL;
 
 const createdSlugs: string[] = [];
 const createdUserIds: string[] = [];
@@ -128,6 +126,9 @@ function openChatSocket(token: string, subscribeTo?: string) {
   };
 }
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Team chat bump broadcasts (real Docker)', { skip: DOCKER_SKIP }, () => {
 before(async () => {
   await initTestAuth();
   testAdminId = (jwt.decode(signTestToken()) as any).id;
@@ -381,4 +382,5 @@ test('malformed null frame is rejected without breaking the socket', async (t) =
   const subscribed = await socket.waitFrame((f) => f.type === 'subscribed' && f.channelId === rig.channelId);
   assert.strictEqual(subscribed.channelId, rig.channelId);
   socket.close();
+});
 });

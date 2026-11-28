@@ -18,7 +18,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { uniqueId, reqAuth, req, initTestAuth, JWT_SECRET } from './helpers.ts';
 
-describe('Project activity feed', () => {
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Project activity feed', { skip: DOCKER_SKIP }, () => {
   before(async () => { await initTestAuth(); });
 
   const slug = uniqueId('activity-test');

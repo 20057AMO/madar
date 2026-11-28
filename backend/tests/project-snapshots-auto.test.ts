@@ -51,7 +51,9 @@ async function cfgGet(slug: string, auth: any = authHeaders()) {
   return { status: res.status, json: data };
 }
 
-describe('Project snapshot automation (scheduled server-side backups)', () => {
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Project snapshot automation (scheduled server-side backups)', { skip: DOCKER_SKIP }, () => {
   let slug = '';
 
   before(async () => {
@@ -274,8 +276,9 @@ describe('Project snapshot automation (scheduled server-side backups)', () => {
     // Clean up the temp viewer user.
     try { await reqAuth('DELETE', `/users/${viewerId}`); } catch { /* best effort */ }
   });
+});
 
-  test('pure scheduling: computeDueSnapshots respects enabled / interval / last snapshot', async () => {
+test('pure scheduling: computeDueSnapshots respects enabled / interval / last snapshot', async () => {
     const { computeDueSnapshots } = await import('../src/services/snapshots-schedule.ts');
     const now = Date.now();
     const set = {
@@ -287,4 +290,3 @@ describe('Project snapshot automation (scheduled server-side backups)', () => {
     const due = computeDueSnapshots([set.a, set.b, set.c, set.d], now);
     assert.deepStrictEqual(due.sort(), ['a', 'd'], 'only within-gap enabled projects are due');
   });
-});

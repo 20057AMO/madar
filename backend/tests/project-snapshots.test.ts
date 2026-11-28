@@ -59,7 +59,9 @@ async function restore(gzip: Buffer): Promise<{ status: number; json: any }> {
   return { status: res.status, json: data };
 }
 
-describe('Project snapshots (export / restore)', () => {
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Project snapshots (export / restore)', { skip: DOCKER_SKIP }, () => {
   let srcSlug = '';
 
   before(async () => {

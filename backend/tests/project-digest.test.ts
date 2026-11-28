@@ -70,7 +70,9 @@ async function deleteRobust(path: string, attempts = 12): Promise<boolean> {
 
 const UNKNOWN_ID = 'g-abcdef-abcdef';
 
-describe('Project intelligence digests (real Docker container)', () => {
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Project intelligence digests (real Docker container)', { skip: DOCKER_SKIP }, () => {
   let slug = '';
   let missingSlug = '';
   let editorId = '';

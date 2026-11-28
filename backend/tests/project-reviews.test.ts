@@ -68,7 +68,9 @@ async function deleteRobust(path: string, attempts = 20): Promise<boolean> {
   return false;
 }
 
-describe('Project file reviews (real Docker container)', () => {
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Project file reviews (real Docker container)', { skip: DOCKER_SKIP }, () => {
   before(async () => { await initTestAuth(); });
 
   const slug = uniqueId('rv');

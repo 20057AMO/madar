@@ -1,9 +1,9 @@
-﻿import { test, before, after } from 'node:test';
+﻿import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
 import WebSocket from 'ws';
 import { execFileSync } from 'node:child_process';
-import { reqAuth, req, uniqueId, initTestAuth, JWT_SECRET, signTestToken, testIdentity, API_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
+import { reqAuth, req, uniqueId, initTestAuth, JWT_SECRET, signTestToken, testIdentity, API_URL, WS_URL, liveUser, cleanupLiveUsers } from './helpers.ts';
 
 /**
  * Team chat (real Docker): channel rail (manual + direct + auto project channel
@@ -18,9 +18,7 @@ const createdUserIds: string[] = [];
 const createdChannelIds: string[] = [];
 const chatBase = '/chat-team';
 
-const WS_BASE = (process.env.WSD_TEST_API_URL || 'http://127.0.0.1:3000/api')
-  .replace('/api', '')
-  .replace(/^http/, 'ws');
+const WS_BASE = WS_URL;
 
 let testAdminId: string;
 
@@ -62,6 +60,9 @@ async function sendChannelMessage(channelId: string, text: string, over: Record<
   return json.message;
 }
 
+const DOCKER_SKIP = process.env.WSD_TEST_DOCKER === '1' ? false : 'requires WSD_TEST_DOCKER=1 (real Docker container)';
+
+describe('Team chat API (real Docker)', { skip: DOCKER_SKIP }, () => {
 before(async () => {
   await initTestAuth();
   // The admin (helper) user id comes from the signed test token itself.
@@ -2183,4 +2184,5 @@ test('reactions 404/400: deleted message 404, unknown channel 404, junk emoji st
   const msgs = await api('GET', `${chatBase}/channels/${ch.id}/messages`);
   const row = msgs.json.messages.find((x: any) => x.id === fresh.id);
   assert.strictEqual(row.reactions, undefined);
+});
 });
