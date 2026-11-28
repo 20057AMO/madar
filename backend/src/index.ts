@@ -80,6 +80,7 @@ import { signEmbedToken, verifyEmbedToken, EMBED_TOKEN_TTL_SEC } from './service
 import { probeEmbeddedPort } from './services/embedded-status-probe';
 import { getWorkspaceMount, publicMountInfo, startWorkspaceMountAudit, type WorkspaceMountInfo } from './services/workspaces-mount';
 import { detectIp } from './services/server-info';
+import { resolveServerPort, boundServerPort } from './services/server-port-core';
 import { getChatConfig, updateChatConfig, listModels, type ChatConfig } from './services/chat-config';
 import {
   listProviders,
@@ -241,7 +242,8 @@ for (const warning of [trustedProxyWarning(process.env), trustedProxyExposureWar
   if (warning) console.warn(`[madar] ${warning}`);
 }
 app.disable('x-powered-by');
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = resolveServerPort(process.env.PORT);
+let boundPort = PORT;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Helmet (CSP off — the UI is served from the same origin)
@@ -1101,7 +1103,7 @@ app.get('/api/server/info', async (_req, res) => {
     version: 'BETA',
     lanIp: ips.lanIp,
     tailscaleIp: ips.tailscaleIp,
-    basePort: PORT,
+    basePort: boundPort,
     hostCpu: host.cpu,
     hostMemBytes: host.memBytes,
     uptime: Math.floor(process.uptime()),
@@ -3725,8 +3727,10 @@ attachWebSockets(server);
 const embedProxyServer = startEmbedProxy(EMBED_PROXY_PORT);
 
 server.listen(PORT, HOST, () => {
-  console.log(`[Madar] Dashboard on http://${HOST}:${PORT}`);
-  console.log(`[Madar] WebSocket hub on ws://${HOST}:${PORT}/ws`);
+  boundPort = boundServerPort(server.address(), PORT);
+  console.log(`[Madar] Dashboard on http://${HOST}:${boundPort}`);
+  console.log(`[Madar] WebSocket hub on ws://${HOST}:${boundPort}/ws`);
+  if (PORT === 0) console.log(`[Madar] TEST_API_PORT=${boundPort}`);
   console.log(`[Madar] Workspaces root: ${WORKSPACES_ROOT}`);
   console.log(`[Madar] opencode web (loopback-only) on port ${OPENCODE_INTERNAL_PORT}`);
   console.log(`[Madar] Chat model: ${getChatConfig().model}`);
