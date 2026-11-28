@@ -33,6 +33,7 @@ This report records the final status of P-01…P-19 from `D:\Work\madarProblems\
 ## Known limitations
 
 - The final isolated `cd backend && npm test` exited 0: 1439 tests, 1340 pass, 0 fail, 0 cancelled, 99 skipped (full line in P-11). Docker-dependent suites are opt-in and were not part of that green run.
+- Non-blocking follow-up before enabling Docker-gated suites under the isolated harness: `reservedMadarPorts()` in `backend/src/services/docker-manager.ts` still reserves `3000` when `PORT=0` instead of the actual OS-assigned API port. Default CI is unaffected because Docker suites are opt-in.
 - Gitleaks and ShellCheck are not installed locally. Their CI gates were added but not executed locally.
 - `git diff --check` exited 0 with only a CRLF warning for `AGENTS.md`.
 - The socket-proxy overlay is opt-in: it narrows the Docker socket surface but still grants broad Docker API capabilities, and terminal use requires `EXEC=1`. It is off in base compose and needs maintainer review before enabling.
