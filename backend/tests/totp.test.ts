@@ -93,7 +93,11 @@ describe('TOTP algorithm (RFC vectors)', () => {
 
 // ── Endpoint journey (isolated server only) ───────────────────
 
-describe('TOTP endpoints & login flow', () => {
+describe('TOTP endpoints & login flow', {
+  skip: process.env.WSD_TEST_DOCKER === '1' && (process.env.WSD_TEST_ACCOUNT_PASSWORD || '').trim()
+    ? false
+    : 'requires WSD_TEST_DOCKER=1 + WSD_TEST_ACCOUNT_PASSWORD (isolated server + real login)',
+}, () => {
 
   // ⚠ Budget math: every password-verifying endpoint shares the server's
   // 10/min-per-IP auth limiter. The account SETUP call made before this
@@ -101,7 +105,8 @@ describe('TOTP endpoints & login flow', () => {
   //   setup ×3 · enable ×2 · login ×2 · disable ×2  = 9  ✓ (total 10)
   // Adding another authLimiter'd call WILL cascade 429s into later tests.
 
-  const accountPassword = process.env.WSD_TEST_ACCOUNT_PASSWORD || '';
+  const accountPassword = (process.env.WSD_TEST_ACCOUNT_PASSWORD || '').trim();
+  const accountSkip = 'requires WSD_TEST_ACCOUNT_PASSWORD (live 2FA endpoint journey)';
   let enrolledSecret = '';     // captured from /2fa/setup while enrolling
   let pendingToken = '';       // captured from the gated login response
 
@@ -113,14 +118,14 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('status reports disabled initially', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     const res = await reqAuth('GET', '/auth/2fa/status');
     assert.strictEqual(res.status, 200);
     assert.strictEqual((await res.json()).enabled, false);
   });
 
   test('setup returns a base32 secret and provisioning URI', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     const res = await reqAuth('POST', '/auth/2fa/setup');
     assert.strictEqual(res.status, 200);
     const body = await res.json();
@@ -131,7 +136,7 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('enable rejects an invalid code and stays disabled', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     const res = await reqAuth('POST', '/auth/2fa/enable', { code: '000000' });
     assert.strictEqual(res.status, 400);
     const status = await reqAuth('GET', '/auth/2fa/status');
@@ -139,7 +144,7 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('enable with a live-generated code activates 2FA', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     // Fresh pending secret so this test owns the enrollment end-to-end.
     const setupRes = await reqAuth('POST', '/auth/2fa/setup');
     enrolledSecret = String((await setupRes.json()).secret);
@@ -151,13 +156,13 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('setup refuses while 2FA is enabled', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     const res = await reqAuth('POST', '/auth/2fa/setup');
     assert.strictEqual(res.status, 400);
   });
 
   test('login now demands the second factor (no session leaked)', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     const res = await req('POST', '/auth/login', { username: 'isolated', password: accountPassword });
     assert.strictEqual(res.status, 200);
     const body = await res.json();
@@ -176,7 +181,7 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('verify rejects wrong codes, junk and hostile tokens', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     void t;
 
     const post = (body: unknown): Promise<Response> =>
@@ -209,7 +214,9 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('verify with the live code yields a working session', async (t) => {
-    if (!accountPassword || !enrolledSecret || !pendingToken) return t.skip();
+    if (!accountPassword || !enrolledSecret || !pendingToken) {
+      return t.skip(`${accountSkip}; a completed enrollment + pending challenge is also required`);
+    }
 
     const verify = await fetch(`${API_URL}/auth/login/verify`, {
       method: 'POST',
@@ -230,7 +237,7 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('disable requires the account password', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     const bad = await reqAuth('POST', '/auth/2fa/disable', { accountPassword: 'wrong-password' });
     assert.strictEqual(bad.status, 401);
     const good = await reqAuth('POST', '/auth/2fa/disable', { accountPassword });
@@ -240,7 +247,7 @@ describe('TOTP endpoints & login flow', () => {
   });
 
   test('plain login works again after disabling', async (t) => {
-    if (!accountPassword) return t.skip();
+    if (!accountPassword) return t.skip(accountSkip);
     const ok = await req('POST', '/auth/login', { username: 'isolated', password: accountPassword });
     assert.strictEqual(ok.status, 200);
     assert.ok((await ok.json()).token);

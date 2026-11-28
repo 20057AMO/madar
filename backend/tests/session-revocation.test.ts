@@ -202,8 +202,12 @@ describe('sibling verifiers — same rule, no embedded-identity fallback (offlin
 
 // ── 2 · the same rule over HTTP, against the running container ──
 
-const EMBED_ORIGIN = `http://127.0.0.1:${Number(process.env.WSD_EMBED_PROXY_PORT || 4097)}`;
+const EMBED_PORT = Number(process.env.WSD_EMBED_PROXY_PORT || 0);
+const EMBED_ORIGIN = EMBED_PORT > 0 ? `http://127.0.0.1:${EMBED_PORT}` : '';
 const ADMIN_ROUTES = ['/users', '/webhooks', '/auth/audit'] as const;
+const LIVE_SKIP = process.env.WSD_TEST_DOCKER === '1'
+  ? (EMBED_ORIGIN ? false : 'requires WSD_EMBED_PROXY_PORT (no fixed-port fallback)')
+  : 'requires WSD_TEST_DOCKER=1 (live server + authenticated embed proxy)';
 
 async function embedCookieFor(token: string): Promise<string> {
   const res = await fetch(`${API_URL}/embed/session`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
@@ -214,7 +218,7 @@ async function embedCookieFor(token: string): Promise<string> {
   return `madar_embed=${match[1]}`;
 }
 
-describe('deleted-account sessions (live server)', () => {
+describe('deleted-account sessions (live server)', { skip: LIVE_SKIP }, () => {
   before(async () => { await initTestAuth(); });
   after(async () => { await cleanupLiveUsers(); });
 

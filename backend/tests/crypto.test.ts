@@ -310,9 +310,17 @@ test('startup banner describes v2 and legacy secret-box migration accurately', (
 
 // ── Part 2 · end-to-end through the HTTP API ────────────────────
 
-describe('secret-box · providers.json sealed on disk', () => {
-  const accountPassword = process.env.WSD_TEST_ACCOUNT_PASSWORD || '';
-  const PROVIDERS_FILE = process.env.WSD_TEST_PROVIDERS_FILE || '';
+const dockerEnabled = process.env.WSD_TEST_DOCKER === '1';
+const LIVE_SKIP = 'requires WSD_TEST_DOCKER=1 (live providers API + on-disk assertions)';
+const liveSkip = (why: string) => dockerEnabled ? why : `${LIVE_SKIP} — ${why}`;
+
+describe('secret-box · providers.json sealed on disk', {
+  skip: dockerEnabled ? false : LIVE_SKIP,
+}, () => {
+  const accountPassword = (process.env.WSD_TEST_ACCOUNT_PASSWORD || '').trim();
+  const harnessDataDir = (process.env.WSD_DATA_DIR || '').trim();
+  const PROVIDERS_FILE = (process.env.WSD_TEST_PROVIDERS_FILE || '').trim()
+    || (harnessDataDir ? path.join(harnessDataDir, 'providers.json') : '');
   const KEY = `enc-e2e-${Date.now().toString(36)}-tail88`;
   let id = '';
 
@@ -323,7 +331,7 @@ describe('secret-box · providers.json sealed on disk', () => {
   });
 
   test('created key exists ONLY as ciphertext everywhere', async (t) => {
-    if (!accountPassword) return t.skip('WSD_TEST_ACCOUNT_PASSWORD not set');
+    if (!accountPassword) return t.skip(liveSkip('WSD_TEST_ACCOUNT_PASSWORD not set'));
     const res = await fetch(`${API_URL}/providers`, {
       method: 'POST',
       headers: h(),
@@ -337,7 +345,7 @@ describe('secret-box · providers.json sealed on disk', () => {
     assert.ok(!listJson.includes('enc1:'), 'legacy sealed blobs must not leak through the list');
     assert.ok(!listJson.includes('v2:'), 'current sealed blobs must not leak through the list either');
 
-    if (!PROVIDERS_FILE) return t.skip('WSD_TEST_PROVIDERS_FILE not set — file assertions skipped');
+    if (!PROVIDERS_FILE) return t.skip(liveSkip('no providers.json path (WSD_TEST_PROVIDERS_FILE / harness WSD_DATA_DIR) — file assertions skipped'));
     const raw = fs.readFileSync(PROVIDERS_FILE, 'utf8');
     assert.ok(!raw.includes(KEY), 'plaintext must not be written to disk');
     const entry = JSON.parse(raw)[id];
@@ -348,7 +356,7 @@ describe('secret-box · providers.json sealed on disk', () => {
   });
 
   test('key update re-seals; delete removes the blob', async (t) => {
-    if (!accountPassword) return t.skip('WSD_TEST_ACCOUNT_PASSWORD not set');
+    if (!accountPassword) return t.skip(liveSkip('WSD_TEST_ACCOUNT_PASSWORD not set'));
     const KEY2 = `${KEY}-v2`;
     await fetch(`${API_URL}/providers/${id}`, {
       method: 'PUT',

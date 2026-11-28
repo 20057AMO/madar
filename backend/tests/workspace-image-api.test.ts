@@ -52,7 +52,12 @@ let serverReady = false;
 let liveReady = false;
 let adminReady = false;
 
+const dockerEnabled = process.env.WSD_TEST_DOCKER === '1';
+const LIVE_SKIP = 'requires WSD_TEST_DOCKER=1 (live server + workspace-image APIs)';
+const liveSkip = (why: string) => dockerEnabled ? why : `${LIVE_SKIP} — ${why}`;
+
 before(async () => {
+  if (!dockerEnabled) return;
   try {
     const res = await fetch(`${API_URL}/health`, { signal: AbortSignal.timeout(4000) });
     serverReady = res.ok && (await res.json() as { status?: string })?.status === 'ok';
@@ -264,14 +269,14 @@ describe('workspace-image status rate limit — offline source gate', () => {
 
 describe('workspace-image status — live HTTP gate', () => {
   test('GET without a token is 401 with the exact shape', async (t) => {
-    if (!liveReady) return t.skip('running server does not expose the workspace-image route contract');
+    if (!liveReady) return t.skip(liveSkip('running server does not expose the workspace-image route contract'));
     const res = await callApi('GET', '/workspace-image/status');
     assert.strictEqual(res.status, 401);
     assert.deepStrictEqual(res.body, { error: 'unauthorized', message: 'Authentication required' });
   });
 
   test('GET with a viewer token is 403 and carries no payload', async (t) => {
-    if (!liveReady || !adminReady) return t.skip('no admin identity to create the viewer');
+    if (!liveReady || !adminReady) return t.skip(liveSkip('no admin identity to create the viewer'));
     const viewer = await liveUser('viewer', 'workspace-image-status');
     const res = await callApi('GET', '/workspace-image/status', viewer.token);
     assert.strictEqual(res.status, 403);
@@ -279,7 +284,7 @@ describe('workspace-image status — live HTTP gate', () => {
   });
 
   test('GET with an admin token is 200 with the full contract shape', async (t) => {
-    if (!liveReady || !adminReady) return t.skip('no admin identity available');
+    if (!liveReady || !adminReady) return t.skip(liveSkip('no admin identity available'));
     const res = await callApi('GET', '/workspace-image/status', authHeaders().Authorization!.replace('Bearer ', ''));
     assert.strictEqual(res.status, 200);
     const body = res.body;
@@ -298,7 +303,7 @@ describe('workspace-image status — live HTTP gate', () => {
   });
 
   test('fresh=1 and fresh=true are both accepted', async (t) => {
-    if (!liveReady || !adminReady) return t.skip('no admin identity available');
+    if (!liveReady || !adminReady) return t.skip(liveSkip('no admin identity available'));
     const token = authHeaders().Authorization!.replace('Bearer ', '');
     for (const query of ['?fresh=1', '?fresh=true']) {
       const res = await callApi('GET', `/workspace-image/status${query}`, token);
@@ -308,7 +313,7 @@ describe('workspace-image status — live HTTP gate', () => {
   });
 
   test('a scoped token is refused as a session (401)', async (t) => {
-    if (!liveReady || !adminReady) return t.skip('no real user for the scoped token');
+    if (!liveReady || !adminReady) return t.skip(liveSkip('no real user for the scoped token'));
     const identity = testIdentity()!;
     const scoped = signUserToken(identity, { scope: 'embed' });
     const res = await callApi('GET', '/workspace-image/status', scoped);
@@ -317,14 +322,14 @@ describe('workspace-image status — live HTTP gate', () => {
   });
 
   test('POST refresh without a token is 401, never a build', async (t) => {
-    if (!liveReady) return t.skip('running server does not expose the workspace-image route contract');
+    if (!liveReady) return t.skip(liveSkip('running server does not expose the workspace-image route contract'));
     const res = await callApi('POST', '/workspace-image/refresh');
     assert.strictEqual(res.status, 401);
     assert.deepStrictEqual(res.body, { error: 'unauthorized', message: 'Authentication required' });
   });
 
   test('POST refresh with a viewer token is 403, never a build', async (t) => {
-    if (!liveReady || !adminReady) return t.skip('no admin identity to create the viewer');
+    if (!liveReady || !adminReady) return t.skip(liveSkip('no admin identity to create the viewer'));
     const viewer = await liveUser('viewer', 'workspace-image-refresh');
     const res = await callApi('POST', '/workspace-image/refresh', viewer.token);
     assert.strictEqual(res.status, 403);

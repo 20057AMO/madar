@@ -315,7 +315,11 @@ describe('User profile & avatar (real Docker)', () => {
     assert.strictEqual(selfEdit.status, 200);
   });
 
-  test('project members enrichment carries displayName + avatarExt', async () => {
+  test('project members enrichment carries displayName + avatarExt', {
+    skip: process.env.WSD_TEST_DOCKER === '1'
+      ? false
+      : 'requires WSD_TEST_DOCKER=1 (creates a real project container)',
+  }, async () => {
     const slug = uniqueId('usrprofile');
     const prj = await reqAuth('POST', '/projects', { name: 'Profile Enrichment', slug, description: 'temp' });
     assert.strictEqual(prj.status, 201);

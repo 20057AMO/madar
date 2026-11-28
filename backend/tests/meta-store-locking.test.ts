@@ -55,15 +55,10 @@ const SLUG_STOP = 'meta-race-stop';
 const SLUG_LOCK = 'meta-race-lock';
 const SLUG_LIMITS = 'meta-race-limits';
 
-let dockerUp = false;
-try {
-  const Docker = (await import('dockerode')).default;
-  await new Docker().listContainers({ all: false });
-  dockerUp = true;
-} catch {
-  dockerUp = false;
-}
-const skip = dockerUp ? false : 'docker daemon unreachable — the meta-write race needs real containers';
+const dockerEnabled = process.env.WSD_TEST_DOCKER === '1';
+const dockerSkip = (why: string): string | false => dockerEnabled
+  ? false
+  : `requires WSD_TEST_DOCKER=1 — ${why}`;
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -154,7 +149,9 @@ describe('workspace lifecycle lock — offline contract', () => {
   });
 });
 
-describe('stopProject — an unreadable meta store must not fail the stop', { skip }, () => {
+describe('stopProject — an unreadable meta store must not fail the stop', {
+  skip: dockerSkip('the stop race needs a real container and a live Docker daemon'),
+}, () => {
   test('stop succeeds, the container is stopped, and the corrupt file is untouched', async () => {
     const created = await dm.createProject({ name: 'Meta Race Stop', slug: SLUG_STOP, ports: [await freePort()] });
     const torn = '{"name": "torn';
@@ -174,7 +171,9 @@ describe('stopProject — an unreadable meta store must not fail the stop', { sk
   });
 });
 
-describe('createProject — the create window must not lose a concurrent meta write', { skip }, () => {
+describe('createProject — the create window must not lose a concurrent meta write', {
+  skip: dockerSkip('the create/recreate race needs real containers'),
+}, () => {
   test('a parked async mutator is refused (nothing persisted) and a sync writer survives the recreate', async () => {
     const created = await dm.createProject({ name: 'Meta Race Lock', slug: SLUG_LOCK, ports: [await freePort()] });
     const originalCreatedAt = store.readMeta(SLUG_LOCK).meta?.createdAt;
@@ -233,7 +232,9 @@ describe('createProject — the create window must not lose a concurrent meta wr
   });
 });
 
-describe('updateProjectLimits — the limits write must validate inside a SYNC lock', { skip }, () => {
+describe('updateProjectLimits — the limits write must validate inside a SYNC lock', {
+  skip: dockerSkip('the limits/live-container race needs a real container'),
+}, () => {
   test('it never queues behind an in-flight async meta write, and neither write is lost', async () => {
     await dm.createProject({ name: 'Meta Race Limits', slug: SLUG_LIMITS, ports: [await freePort()] });
 
