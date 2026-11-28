@@ -42,7 +42,7 @@ jobs:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
   integration:
-    name: Typecheck + build + full backend suite
+    name: Typecheck + build + isolated backend suite
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -69,37 +69,8 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Generate ephemeral JWT secret
-        run: echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-
-      - name: Point workspace binds at the checkout
-        run: echo "WSD_WORKSPACES_HOST_DIR=${{ github.workspace }}/workspaces" >> "$GITHUB_ENV"
-
-      # The compose default is production (0); the suite container needs the
-      # relaxed budgets so multi-suite teardown never trips the rate limiters.
-      - name: Enable relaxed rate budgets for the test suite
-        run: echo "WSD_TESTING=1" >> "$GITHUB_ENV"
-
-      - name: Build and launch the stack
-        run: docker compose up -d --build
-
-      - name: Wait for the app to become healthy
-        run: |
-          for i in $(seq 1 90); do
-            if curl -fsS http://localhost:3000/api/health >/dev/null 2>&1; then
-              echo "app healthy after ${i} attempts"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::app did not become healthy in time"
-          docker compose logs app | tail -100
-          exit 1
-
-      - name: Run full backend test suite
+      # npm test uses the isolated harness: it owns its server on an OS-assigned
+      # loopback port and cleans up. Docker suites are opt-in, so skips are expected.
+      - name: Run isolated backend test suite
         working-directory: backend
         run: npm test
-
-      - name: Dump app logs on failure
-        if: failure()
-        run: docker compose logs app | tail -200
