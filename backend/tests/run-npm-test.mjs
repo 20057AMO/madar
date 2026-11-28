@@ -13,6 +13,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const BACKEND_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = path.resolve(BACKEND_DIR, '..');
 const MANAGED_ENV_KEYS = [
   'PORT',
   'HOST',
@@ -25,8 +26,15 @@ const MANAGED_ENV_KEYS = [
   'WSD_DATA_DIR',
   'WSD_PROJECTS_DIR',
   'WSD_EMBED_PROXY_PORT',
+  'OPENCODE_CONFIG_DIR',
   'WSD_TEST_DOCKER',
   'WSD_TEST_DOCKER_HEAVY',
+];
+const OPENCODE_FIXTURES = [
+  ['opencode/agents', 'agents'],
+  ['opencode/skills', 'skills'],
+  ['opencode/command', 'command'],
+  ['opencode.json', 'opencode.json'],
 ];
 const PORT_LINE = /\[Madar\] TEST_API_PORT=(\d+)/;
 const START_TIMEOUT_MS = 45_000;
@@ -48,6 +56,23 @@ function restoreEnv(saved) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function dockerFlag(key) {
+  return process.env[key] === '1' ? '1' : '0';
+}
+
+function seedOpencodeConfig(configDir) {
+  fs.mkdirSync(configDir, { recursive: true });
+  for (const [relativeSource, relativeTarget] of OPENCODE_FIXTURES) {
+    const source = path.join(REPO_ROOT, relativeSource);
+    if (!fs.existsSync(source)) {
+      throw new Error(`Opencode Studio fixture is missing: ${source}`);
+    }
+    const target = path.join(configDir, relativeTarget);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(source, target, { recursive: true });
+  }
 }
 
 function tail(state, chunk) {
@@ -182,6 +207,7 @@ async function main() {
   const dataDir = path.join(tempRoot, 'data');
   const workspacesDir = path.join(tempRoot, 'workspaces');
   const compiledDir = path.join(tempRoot, 'compiled');
+  const opencodeConfigDir = path.join(tempRoot, 'opencode-config');
 
   let serverChild;
   let runnerChild;
@@ -219,6 +245,7 @@ async function main() {
     fs.mkdirSync(dataDir, { recursive: true });
     fs.mkdirSync(workspacesDir, { recursive: true });
     fs.mkdirSync(compiledDir, { recursive: true });
+    seedOpencodeConfig(opencodeConfigDir);
     compileServer(compiledDir);
 
     const compiledEntry = path.join(compiledDir, 'index.js');
@@ -234,8 +261,9 @@ async function main() {
       WSD_DATA_DIR: dataDir,
       WSD_PROJECTS_DIR: workspacesDir,
       WSD_EMBED_PROXY_PORT: String(embedPort),
-      WSD_TEST_DOCKER: '0',
-      WSD_TEST_DOCKER_HEAVY: '0',
+      OPENCODE_CONFIG_DIR: opencodeConfigDir,
+      WSD_TEST_DOCKER: dockerFlag('WSD_TEST_DOCKER'),
+      WSD_TEST_DOCKER_HEAVY: dockerFlag('WSD_TEST_DOCKER_HEAVY'),
     });
 
     let apiPort = 0;
@@ -267,6 +295,7 @@ async function main() {
         PORT: process.env.PORT,
         HOST: process.env.HOST,
         WSD_EMBED_PROXY_PORT: process.env.WSD_EMBED_PROXY_PORT,
+        OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
         WSD_TEST_DOCKER: process.env.WSD_TEST_DOCKER,
         WSD_TEST_DOCKER_HEAVY: process.env.WSD_TEST_DOCKER_HEAVY,
         WSD_DATA_DIR: process.env.WSD_DATA_DIR,
